@@ -1,0 +1,25 @@
+{
+  "name": "route-agent",
+  "version": "1.0.0",
+  "description": "Stealth Egress Node Agent for Route Orchestrator",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test tests/app.test.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "tsup": "^8.1.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.2"
+  }
+}
