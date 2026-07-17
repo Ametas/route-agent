@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "⚙️ Starting Route Agent Installation..."
+echo "⚙️ Starting Modernized gRPC Route Agent Installation..."
 
 # Проверяем, запущен ли скрипт от root
 if [ "$EUID" -ne 0 ]; then
@@ -37,14 +37,7 @@ if [ -f "package.json" ] && [ -d "src" ]; then
 else
   echo "📦 Project files not found locally. Installing git and cloning repository..."
   if ! command -v git &> /dev/null; then
-    if command -v apt-get &> /dev/null; then
-      apt-get update && apt-get install -y git
-    elif command -v yum &> /dev/null; then
-      yum install -y git
-    else
-      echo "❌ Package manager not supported. Please install git manually."
-      exit 1
-    fi
+    apt-get update && apt-get install -y git
   fi
   
   # Клонируем репозиторий
@@ -68,16 +61,18 @@ else
   echo "✅ Node.js $(node -v) is already installed."
 fi
 
-# 2. Установка зависимостей и сборка
-echo "📦 Installing dependencies and compiling agent..."
-if [ -f "package-lock.json" ]; then
-  npm ci
-else
-  npm install
-fi
+# 2. Установка зависимостей и сборка бинарного gRPC-пакета
+echo "📦 Installing gRPC dependencies and compiling agent..."
+npm install
 npm run build
 
-# 3. Генерация .env файла
+# 3. Санити-чек структуры: проверяем, что папка proto скопирована
+if [ ! -d "$AGENT_DIR/proto" ]; then
+  echo "📦 Creating missing proto directory..."
+  mkdir -p "$AGENT_DIR/proto"
+fi
+
+# 4. Генерация актуального .env файла окружения
 echo "📝 Creating environment configuration..."
 cat <<EOT > "$AGENT_DIR/.env"
 PORT=$PORT
@@ -87,12 +82,12 @@ SINGBOX_CONFIG_PATH=/etc/sing-box/config.json
 RELOAD_COMMAND=systemctl reload sing-box
 EOT
 
-# 4. Регистрация демона в systemd
+# 5. Регистрация демона в systemd с root-привилегиями для перезагрузки sing-box и чтения /proc
 echo "🔄 Registering Route Agent as systemd service..."
 
 cat <<EOT > /etc/systemd/system/route-agent.service
 [Unit]
-Description=Route Egress Agent Service
+Description=Route Egress gRPC Agent Service
 After=network.target
 
 [Service]
@@ -112,5 +107,5 @@ systemctl daemon-reload
 systemctl enable route-agent
 systemctl restart route-agent
 
-echo "🎉 Route Agent successfully installed and running on port $PORT!"
-echo "📡 Add this node IP and port $PORT to your Route Orchestrator Control Plane."
+echo "🎉 Route Agent successfully upgraded to gRPC protocol and running on port $PORT!"
+echo "📡 Link this node IP and port $PORT to your Route Orchestrator Control Plane securely."
