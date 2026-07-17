@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package agent;
+
+service EgressAgentService {
+  // Унарный RPC для загрузки и безопасной перезагрузки конфигурации sing-box
+  rpc ApplyConfig (ConfigPayload) returns (ConfigResponse);
+
+  // Серверный стрим RPC для непрерывной передачи телеметрии ноды в реальном времени
+  rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
+}
+
+message ConfigPayload {
+  string config_json = 1;
+}
+
+message ConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message TelemetryRequest {
+  string orchestrator_secret = 1;
+}
+
+message TelemetryResponse {
+  double cpu_usage = 1;
+  double mem_usage = 2;
+  uint32 active_connections = 3;
+  string system_logs = 4;
+  int64 timestamp = 5;
+}
