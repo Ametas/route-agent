@@ -46,7 +46,7 @@ echo "📥 Downloading and provisioning WebRTC components..."
 TMP_DIR=$(mktemp -d)
 echo "📁 Created temporary directory at $TMP_DIR"
 
-# GitHub download URL placeholders
+# URL-плейсхолдеры для релизов
 OLCRTC_MANAGER_URL="https://github.com/placeholder-org/olcrtc-manager/releases/latest/download/olcrtc-manager-linux-amd64.tar.gz"
 OLCRTC_DAEMON_URL="https://github.com/placeholder-org/olcrtc/releases/latest/download/olcrtc-linux-amd64.tar.gz"
 
@@ -63,7 +63,6 @@ echo "📦 Extracting olcrtc daemon..."
 tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
 
 echo "⚙️ Moving WebRTC binaries to /usr/local/bin/..."
-# Robust search and move using find in case of custom subdirectory structure inside archive
 MANAGER_BIN=$(find "$TMP_DIR" -type f -name "olcrtc-manager" | head -n 1)
 if [ -n "$MANAGER_BIN" ]; then
   mv "$MANAGER_BIN" /usr/local/bin/olcrtc-manager
@@ -103,7 +102,6 @@ if [ -f "package.json" ] && [ -d "src" ]; then
   echo "✅ Running inside existing project directory: $AGENT_DIR"
 else
   echo "📦 Project files not found locally. Cloning repository..."
-  # Клонируем репозиторий
   rm -rf /opt/route-agent
   git clone "$REPO" /opt/route-agent
   cd /opt/route-agent
@@ -112,32 +110,40 @@ fi
 
 # 3. Установка Node.js (если не установлен)
 if ! command -v node &> /dev/null; then
-  echo "📦 Node.js not found. Installing Node.js 22 LTS..."
+  echo "📦 Node.js not found. Installing Node.js 22 LTS via FNM..."
   curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+  
+  # Прописываем пути FNM глобально для root пользователя (персистентность)
+  echo 'export PATH="/root/.local/share/fnm:$PATH"' >> /root/.bashrc
+  echo 'eval "`fnm env`"' >> /root/.bashrc
+  
   export PATH="/root/.local/share/fnm:$PATH"
   eval "`fnm env`"
+  
   fnm install 22
   fnm use 22
+  
+  # Создаем глобальные системные симлинки
   ln -sf "$(which node)" /usr/bin/node
   ln -sf "$(which npm)" /usr/bin/npm
 else
   echo "✅ Node.js $(node -v) is already installed."
 fi
 
-# 4. Установка зависимостей и сборка бинарного gRPC-пакета
-echo "📦 Installing gRPC dependencies and compiling agent..."
-npm install
+# 4. Установка зависимостей и сборка проекта
+echo "📦 Installing Node.js dependencies and compiling agent..."
+npm ci
 npm run build
 
-# 5. Санити-чек структуры: проверяем, что папка proto скопирована
+# 5. Проверка структуры директории прототипов
 if [ ! -d "$AGENT_DIR/proto" ]; then
   echo "📦 Creating missing proto directory..."
   mkdir -p "$AGENT_DIR/proto"
 fi
 
-# 6. Генерация актуального .env файла окружения
+# 6. Генерация .env файла окружения
 echo "📝 Creating environment configuration..."
-cat <<EOT > "$AGENT_DIR/.env"
+cat << EOT > "$AGENT_DIR/.env"
 PORT=$PORT
 HOST=0.0.0.0
 EGRESS_CONTROL_SECRET=$SECRET
@@ -148,10 +154,12 @@ OLCRTC_PASS=$OLCRTC_PASS
 OLCRTC_PORT=$OLCRTC_PORT
 EOT
 
-# 7. Регистрация демона в systemd с root-привилегиями для перезагрузки sing-box и чтения /proc
+chmod 600 "$AGENT_DIR/.env"
+
+# 7. Регистрация демона route-agent в systemd
 echo "🔄 Registering Route Agent as systemd service..."
 
-cat <<EOT > /etc/systemd/system/route-agent.service
+cat << EOT > /etc/systemd/system/route-agent.service
 [Unit]
 Description=Route Egress gRPC Agent Service
 After=network.target
@@ -176,7 +184,7 @@ systemctl restart route-agent
 # 8. Регистрация и авто-настройка WebRTC-панели (olcrtc-manager) в systemd
 echo "🔄 Registering olcrtc-manager as systemd service..."
 
-cat <<EOT > /etc/systemd/system/olcrtc-manager.service
+cat << EOT > /etc/systemd/system/olcrtc-manager.service
 [Unit]
 Description=WebRTC Panel Service (olcrtc-manager)
 After=network.target
@@ -196,13 +204,21 @@ echo "⚙️ Enabling and starting olcrtc-manager service..."
 systemctl daemon-reload
 systemctl enable --now olcrtc-manager
 
-# Атомарный авто-сетап API
+# Атомарный авто-сетап API с интеллектуальным циклом ожидания
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
-  echo "⏳ Waiting 3 seconds for olcrtc-manager API to start..."
-  sleep 3
+  echo "⏳ Waiting for local WebRTC REST API socket stabilization..."
+  
+  # Поллинг порта до 10 секунд перед отправкой тяжелого setup-запроса
+  for i in {1..10}; do
+    if curl -s -o /dev/null "http://127.0.0.1:${OLCRTC_PORT}/api/auth/me" || [ $i -eq 10 ]; then
+      break
+    fi
+    sleep 1
+  done
 
   echo "🔑 Auto-configuring WebRTC administrator account via local REST API..."
-  if ! curl -s -f -X POST -H "Content-Type: application/json" \
+  # Используем встроенные механизмы curl для надежности при инициализации SQLite таблиц
+  if ! curl -s -f --retry 3 --retry-delay 2 -X POST -H "Content-Type: application/json" \
     -d "{\"user\":\"$OLCRTC_USER\",\"password\":\"$OLCRTC_PASS\"}" \
     "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup"; then
     echo "❌ Error: Failed to perform auto-setup of WebRTC administrator account."
@@ -215,9 +231,10 @@ if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
   fi
   echo "✅ WebRTC administrator account successfully configured."
 else
-  echo "⚠️ WebRTC administrator credentials not provided (--olcrtc-user / --olcrtc-pass). Skipping API auto-setup."
+  echo "⚠️ WebRTC administrator credentials not provided. Skipping API auto-setup."
 fi
 
+echo "---"
 echo "🎉 Route Agent successfully upgraded to gRPC protocol and running on port $PORT!"
 echo "📡 Link this node IP and port $PORT to your Route Orchestrator Control Plane securely."
 echo "🌐 WebRTC Panel (olcrtc-manager) is running on port $OLCRTC_PORT."
