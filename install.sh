@@ -46,40 +46,108 @@ echo "📦 Updating package lists and installing system utilities..."
 apt-get update
 apt-get install -y iptables iproute2 sqlite3 git curl unzip debian-keyring debian-archive-keyring apt-transport-https
 
-# 2. Provisioning бинарников WebRTC-слоя (olcrtc)
+# 1.5 Автоматическая настройка фаервола UFW
+echo "🛡️ Checking firewall status (UFW)..."
+if ! command -v ufw &> /dev/null; then
+  echo "📦 UFW is not installed. Installing and securing UFW layer..."
+  apt-get install -y ufw
+  
+  echo "🔑 Allowing standard SSH port 22 to prevent lockout..."
+  ufw allow 22/tcp
+  
+  echo "🚀 Enabling UFW daemon..."
+  ufw --force enable
+else
+  echo "✅ UFW firewall is already installed."
+fi
+
+echo "⚙️ Verifying gRPC Route Agent ports in UFW..."
+if ! ufw status | grep -q "$PORT"; then
+  echo "🔓 Opening gRPC port $PORT..."
+  ufw allow "$PORT"
+else
+  echo "✅ gRPC port $PORT is already open."
+fi
+
+if ! ufw status | grep -q "443"; then
+  echo "🔓 Opening default HTTPS port 443 for sing-box transit and Caddy decoy..."
+  ufw allow 443
+else
+  echo "✅ Port 443 is already open."
+fi
+
+# Если это НЕ Зеон нода (переданы WebRTC креды), проверяем и открываем olcrtc порт
+if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
+  echo "⚙️ Verifying WebRTC layer ports (Olcrtc)..."
+  if ! ufw status | grep -q "$OLCRTC_PORT"; then
+    echo "🔓 Opening WebRTC Olcrtc management port $OLCRTC_PORT..."
+    ufw allow "$OLCRTC_PORT"
+  else
+    echo "✅ Olcrtc management port $OLCRTC_PORT is already open."
+  fi
+fi
+
+echo "🔄 Reloading UFW firewall rules..."
+ufw reload
+
+# 2. Установка бинарного ядра sing-box и создание его службы
+if ! command -v sing-box &> /dev/null; then
+  echo "📦 sing-box core not found. Provisioning official sing-box 1.12.0 binary..."
+  TMP_SB=$(mktemp -d)
+  curl -Lo "$TMP_SB/sing-box.tar.gz" https://github.com/SagerNet/sing-box/releases/download/v1.12.0/sing-box-1.12.0-linux-amd64.tar.gz
+  tar -xzf "$TMP_SB/sing-box.tar.gz" -C "$TMP_SB" --strip-components=1
+  mv "$TMP_SB/sing-box" /usr/local/bin/sing-box
+  chmod +x /usr/local/bin/sing-box
+  rm -rf "$TMP_SB"
+  
+  setcap 'cap_net_admin,cap_net_bind_service=+ep' /usr/local/bin/sing-box
+  mkdir -p /etc/sing-box
+  echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
+
+  cat << EOT > /etc/systemd/system/sing-box.service
+[Unit]
+Description=sing-box service
+After=network.target nss-lookup.target
+
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=always
+RestartSec=5
+ExecReload=/usr/local/bin/sing-box check -c /etc/sing-box/config.json && /bin/kill -HUP \$MAINPID
+
+[Install]
+WantedBy=multi-user.target
+EOT
+
+  systemctl daemon-reload
+  systemctl enable --now sing-box
+  echo "✅ sing-box core successfully initialized."
+else
+  echo "✅ sing-box core is already installed."
+fi
+
+# 3. Provisioning оригинального бинарника olcrtc (только для зарубежных нод)
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
   echo "📥 Downloading and provisioning Original olcrtc component..."
   TMP_DIR=$(mktemp -d)
-  echo "📁 Created temporary directory at $TMP_DIR"
-
   OLCRTC_URL="https://github.com/openlibrecommunity/olcrtc/releases/latest/download/olcrtc-linux-amd64.tar.gz"
 
-  echo "⬇️ Downloading olcrtc from $OLCRTC_URL..."
-  if ! curl -L -s -f -o "$TMP_DIR/olcrtc.tar.gz" "$OLCRTC_URL"; then
-    echo "❌ Error: Failed to download olcrtc binary from GitHub Releases."
-    exit 1
+  if curl -L -s -f -o "$TMP_DIR/olcrtc.tar.gz" "$OLCRTC_URL"; then
+    tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
+    REAL_BIN=$(find "$TMP_DIR" -type f -name "olcrtc" | head -n 1)
+    if [ -n "$REAL_BIN" ]; then
+      mv "$REAL_BIN" /usr/local/bin/olcrtc
+      chmod +x /usr/local/bin/olcrtc
+    fi
   fi
-
-  echo "📦 Extracting olcrtc architecture archive..."
-  tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
-
-  echo "⚙️ Moving olcrtc binary to /usr/local/bin/..."
-  REAL_BIN=$(find "$TMP_DIR" -type f -name "olcrtc" | head -n 1)
-  if [ -n "$REAL_BIN" ]; then
-    mv "$REAL_BIN" /usr/local/bin/olcrtc
-    chmod +x /usr/local/bin/olcrtc
-  else
-    echo "❌ Error: 'olcrtc' binary executable not found inside the downloaded archive."
-    exit 1
-  fi
-
-  echo "🧹 Cleaning up temporary directory..."
   rm -rf "$TMP_DIR"
 else
-  echo "⏭️ WebRTC credentials not provided. Skipping olcrtc components layer (Xeon Light mode active)..."
+  echo "⏭️ WebRTC credentials not provided. Skipping olcrtc components layer..."
 fi
 
-# 3. Установка Node.js 22 LTS (Nodesource)
+# 4. Установка Node.js 22 LTS (Nodesource)
 if ! command -v node &> /dev/null; then
   echo "📦 Node.js not found. Installing Node.js 22 LTS via Nodesource..."
   apt-get install -y ca-certificates gnupg
@@ -88,30 +156,25 @@ if ! command -v node &> /dev/null; then
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
   apt-get update
   apt-get install -y nodejs
-  echo "✅ Node.js $(node -v) successfully installed."
 else
   echo "✅ Node.js $(node -v) is already installed."
 fi
 
-# Клонирование репозитория
+# Клонирование репозитория агента
 if [ ! -d "$AGENT_DIR" ]; then
   echo "📥 Cloning route-agent repository into $AGENT_DIR..."
   git clone "$REPO" "$AGENT_DIR"
 fi
 cd "$AGENT_DIR"
 
-# 4. Установка зависимостей и сборка проекта
 echo "📦 Installing Node.js dependencies and compiling agent..."
 npm ci
 npm run build
 
-# 5. Проверка структуры директории прототипов
 if [ ! -d "$AGENT_DIR/proto" ]; then
   mkdir -p "$AGENT_DIR/proto"
 fi
 
-# 6. Генерация .env файла окружения
-echo "📝 Creating environment configuration..."
 cat << EOT > "$AGENT_DIR/.env"
 PORT=$PORT
 HOST=0.0.0.0
@@ -122,11 +185,8 @@ OLCRTC_USER=$OLCRTC_USER
 OLCRTC_PASS=$OLCRTC_PASS
 OLCRTC_PORT=$OLCRTC_PORT
 EOT
-
 chmod 600 "$AGENT_DIR/.env"
 
-# 7. Регистрация демона route-agent в systemd
-echo "🔄 Registering Route Agent as systemd service..."
 cat << EOT > /etc/systemd/system/route-agent.service
 [Unit]
 Description=Route Egress gRPC Agent Service
@@ -149,9 +209,8 @@ systemctl daemon-reload
 systemctl enable route-agent
 systemctl restart route-agent
 
-# 8. Регистрация и авто-настройка WebRTC (olcrtc) в systemd
+# Регистрация и авто-настройка WebRTC в systemd
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
-  echo "🔄 Registering olcrtc daemon engine as systemd service..."
   cat << EOT > /etc/systemd/system/olcrtc.service
 [Unit]
 Description=OpenLibreCommunity WebRTC Tunnel Service
@@ -171,7 +230,6 @@ EOT
   systemctl daemon-reload
   systemctl enable --now olcrtc
 
-  echo "⏳ Waiting for local olcrtc REST API socket stabilization..."
   for i in {1..10}; do
     if curl -s -o /dev/null "http://127.0.0.1:${OLCRTC_PORT}/api/auth/me" || [ $i -eq 10 ]; then
       break
@@ -181,37 +239,25 @@ EOT
 
   curl -s -f --retry 3 --retry-delay 2 -X POST -H "Content-Type: application/json" \
     -d "{\"user\":\"$OLCRTC_USER\",\"password\":\"$OLCRTC_PASS\"}" \
-    "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup"
-  echo "✅ WebRTC administrator account successfully configured."
+    "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup" || true
 fi
 
-# 9. УСТАНОВКА И НАСТРОЙКА CADDY ДЛЯ МАСКИРОВКИ (DECOY)
+# Настройка Caddy маскировки
 if [ -n "$DOMAIN" ]; then
   echo "📥 Domain provided. Installing official Caddy Server package..."
-  
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
   apt-get update
   apt-get install -y caddy
 
-  echo "📁 Setting up target directory for decoy..."
   mkdir -p /var/www/decoy
-
-  # Проверяем наличие папки заглушки в репозитории и копируем её содержимое
   if [ -d "$AGENT_DIR/decoy" ]; then
-    echo "📦 Extracting custom decoy template from repository folder..."
     cp -r "$AGENT_DIR/decoy/"* /var/www/decoy/
-  elif [ -d "$AGENT_DIR/public" ]; then
-    echo "📦 Extracting public assets as backup decoy template..."
-    cp -r "$AGENT_DIR/public/"* /var/www/decoy/
   else
-    echo "⚙️ No template folder found in repository. Creating operational fallback landing page..."
     echo "<html><body style='background:#070913;color:#fff;font-family:sans-serif;text-align:center;padding-top:20%;'><h1>Operations Command Center</h1><p>Status: Nominal</p></body></html>" > /var/www/decoy/index.html
   fi
-
   chown -R caddy:caddy /var/www/decoy
 
-  echo "📝 Generating production Caddyfile configuration block..."
   cat << EOT > /etc/caddy/Caddyfile
 $DOMAIN:$DECOY_PORT {
 	handle {
@@ -221,15 +267,11 @@ $DOMAIN:$DECOY_PORT {
 }
 EOT
 
-  echo "🔄 Activating and starting Caddy proxy..."
   systemctl daemon-reload
   systemctl enable caddy
   systemctl restart caddy
-  echo "✅ Caddy Server successfully configured with automated TLS on port $DECOY_PORT!"
-else
-  echo "⏭️ Domain parameter not provided. Skipping Caddy Server provisioning..."
 fi
 
 echo "---"
-echo "🎉 Installation pass complete. Route Agent running on port $PORT!"
-[ -n "$DOMAIN" ] && echo "🌐 Stealth Deflection active: https://$DOMAIN:$DECOY_PORT mapping to /var/www/decoy"
+echo "🎉 Installation complete. Route Agent running on port $PORT!"
+[ -n "$DOMAIN" ] && echo "🌐 Stealth Deflection active: https://$DOMAIN:$DECOY_PORT"
