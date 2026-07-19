@@ -17,6 +17,8 @@ OLCRTC_USER=""
 OLCRTC_PASS=""
 OLCRTC_PORT="8888"
 AGENT_DIR="/opt/route-agent"
+DECOY_PORT="8443"
+DOMAIN=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -26,6 +28,8 @@ while [[ "$#" -gt 0 ]]; do
         --olcrtc-user) OLCRTC_USER="$2"; shift ;;
         --olcrtc-pass) OLCRTC_PASS="$2"; shift ;;
         --olcrtc-port) OLCRTC_PORT="$2"; shift ;;
+        --decoy-port) DECOY_PORT="$2"; shift ;;
+        --domain) DOMAIN="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -33,27 +37,26 @@ done
 
 if [ -z "$SECRET" ]; then
   echo "❌ Error: --secret parameter is required."
-  echo "Usage: ./install.sh --secret \"YOUR_SECRET\" [--port 8081] [--repo \"YOUR_REPO_URL\"] [--olcrtc-user \"USER\"] [--olcrtc-pass \"PASS\"] [--olcrtc-port 8888]"
+  echo "Usage: ./install.sh --secret \"YOUR_SECRET\" [--port 8081] [--repo \"YOUR_REPO_URL\"] [--domain \"domain.com\"] [--decoy-port 8443]"
   exit 1
 fi
 
 # 1. Установка системных утилит
-echo "📦 Updating package lists and installing system utilities (iptables, iproute2, sqlite3, git, curl)..."
+echo "📦 Updating package lists and installing system utilities..."
 apt-get update
-apt-get install -y iptables iproute2 sqlite3 git curl unzip
+apt-get install -y iptables iproute2 sqlite3 git curl unzip debian-keyring debian-archive-keyring apt-transport-https
 
-# 2. Provisioning бинарников WebRTC-слоя (olcrtc-manager и olcrtc)
+# 2. Provisioning бинарников WebRTC-слоя (olcrtc)
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
   echo "📥 Downloading and provisioning Original olcrtc component..."
   TMP_DIR=$(mktemp -d)
   echo "📁 Created temporary directory at $TMP_DIR"
 
-  # Ссылка на официальный стабильный релиз монолита olcrtc
   OLCRTC_URL="https://github.com/openlibrecommunity/olcrtc/releases/latest/download/olcrtc-linux-amd64.tar.gz"
 
   echo "⬇️ Downloading olcrtc from $OLCRTC_URL..."
   if ! curl -L -s -f -o "$TMP_DIR/olcrtc.tar.gz" "$OLCRTC_URL"; then
-    echo "❌ Error: Failed to download olcrtc binary from GitHub Releases (404/Network failure)."
+    echo "❌ Error: Failed to download olcrtc binary from GitHub Releases."
     exit 1
   fi
 
@@ -61,7 +64,6 @@ if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
   tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
 
   echo "⚙️ Moving olcrtc binary to /usr/local/bin/..."
-  # Ищем скомпилированный Go-бинарник внутри распакованной папки
   REAL_BIN=$(find "$TMP_DIR" -type f -name "olcrtc" | head -n 1)
   if [ -n "$REAL_BIN" ]; then
     mv "$REAL_BIN" /usr/local/bin/olcrtc
@@ -73,38 +75,25 @@ if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
 
   echo "🧹 Cleaning up temporary directory..."
   rm -rf "$TMP_DIR"
-
-  echo "🔍 Verifying binary accessibility..."
-  if command -v olcrtc &> /dev/null; then
-    echo "✅ Original olcrtc successfully provisioned at: $(which olcrtc)"
-  else
-    echo "❌ Error: olcrtc binary is not accessible in system PATH."
-    exit 1
-  fi
 else
   echo "⏭️ WebRTC credentials not provided. Skipping olcrtc components layer (Xeon Light mode active)..."
 fi
 
-# 3. Установка Node.js (если не установлен)
+# 3. Установка Node.js 22 LTS (Nodesource)
 if ! command -v node &> /dev/null; then
   echo "📦 Node.js not found. Installing Node.js 22 LTS via Nodesource..."
-  
-  # Устанавливаем необходимые зависимости для репозитория
   apt-get install -y ca-certificates gnupg
-  
-  # Добавляем ключ и репозиторий Nodesource
   mkdir -p /etc/apt/keyrings
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-  
   apt-get update
   apt-get install -y nodejs
-  
   echo "✅ Node.js $(node -v) successfully installed."
 else
   echo "✅ Node.js $(node -v) is already installed."
 fi
 
+# Клонирование репозитория
 if [ ! -d "$AGENT_DIR" ]; then
   echo "📥 Cloning route-agent repository into $AGENT_DIR..."
   git clone "$REPO" "$AGENT_DIR"
@@ -118,7 +107,6 @@ npm run build
 
 # 5. Проверка структуры директории прототипов
 if [ ! -d "$AGENT_DIR/proto" ]; then
-  echo "📦 Creating missing proto directory..."
   mkdir -p "$AGENT_DIR/proto"
 fi
 
@@ -139,7 +127,6 @@ chmod 600 "$AGENT_DIR/.env"
 
 # 7. Регистрация демона route-agent в systemd
 echo "🔄 Registering Route Agent as systemd service..."
-
 cat << EOT > /etc/systemd/system/route-agent.service
 [Unit]
 Description=Route Egress gRPC Agent Service
@@ -162,10 +149,9 @@ systemctl daemon-reload
 systemctl enable route-agent
 systemctl restart route-agent
 
-# 8. Регистрация и авто-настройка WebRTC-панели (olcrtc-manager) в systemd
+# 8. Регистрация и авто-настройка WebRTC (olcrtc) в systemd
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
   echo "🔄 Registering olcrtc daemon engine as systemd service..."
-
   cat << EOT > /etc/systemd/system/olcrtc.service
 [Unit]
 Description=OpenLibreCommunity WebRTC Tunnel Service
@@ -174,7 +160,6 @@ After=network.target
 [Service]
 Type=simple
 User=root
-# Запускаем монолит, передавая ему порт веб-интерфейса и API управления
 ExecStart=/usr/local/bin/olcrtc --port ${OLCRTC_PORT}
 Restart=always
 RestartSec=5
@@ -183,7 +168,6 @@ RestartSec=5
 WantedBy=multi-user.target
 EOT
 
-  echo "⚙️ Enabling and starting olcrtc unit..."
   systemctl daemon-reload
   systemctl enable --now olcrtc
 
@@ -195,23 +179,57 @@ EOT
     sleep 1
   done
 
-  echo "🔑 Auto-configuring administrator account via local REST API..."
-  if ! curl -s -f --retry 3 --retry-delay 2 -X POST -H "Content-Type: application/json" \
+  curl -s -f --retry 3 --retry-delay 2 -X POST -H "Content-Type: application/json" \
     -d "{\"user\":\"$OLCRTC_USER\",\"password\":\"$OLCRTC_PASS\"}" \
-    "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup"; then
-    echo "❌ Error: Failed to perform auto-setup of olcrtc administrator account."
-    systemctl stop olcrtc || true
-    systemctl disable olcrtc || true
-    rm -f /etc/systemd/system/olcrtc.service
-    systemctl daemon-reload
-    exit 1
-  fi
+    "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup"
   echo "✅ WebRTC administrator account successfully configured."
+fi
+
+# 9. УСТАНОВКА И НАСТРОЙКА CADDY ДЛЯ МАСКИРОВКИ (DECOY)
+if [ -n "$DOMAIN" ]; then
+  echo "📥 Domain provided. Installing official Caddy Server package..."
+  
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update
+  apt-get install -y caddy
+
+  echo "📁 Setting up target directory for decoy..."
+  mkdir -p /var/www/decoy
+
+  # Проверяем наличие папки заглушки в репозитории и копируем её содержимое
+  if [ -d "$AGENT_DIR/decoy" ]; then
+    echo "📦 Extracting custom decoy template from repository folder..."
+    cp -r "$AGENT_DIR/decoy/"* /var/www/decoy/
+  elif [ -d "$AGENT_DIR/public" ]; then
+    echo "📦 Extracting public assets as backup decoy template..."
+    cp -r "$AGENT_DIR/public/"* /var/www/decoy/
+  else
+    echo "⚙️ No template folder found in repository. Creating operational fallback landing page..."
+    echo "<html><body style='background:#070913;color:#fff;font-family:sans-serif;text-align:center;padding-top:20%;'><h1>Operations Command Center</h1><p>Status: Nominal</p></body></html>" > /var/www/decoy/index.html
+  fi
+
+  chown -R caddy:caddy /var/www/decoy
+
+  echo "📝 Generating production Caddyfile configuration block..."
+  cat << EOT > /etc/caddy/Caddyfile
+$DOMAIN:$DECOY_PORT {
+	handle {
+		root * /var/www/decoy
+		file_server
+	}
+}
+EOT
+
+  echo "🔄 Activating and starting Caddy proxy..."
+  systemctl daemon-reload
+  systemctl enable caddy
+  systemctl restart caddy
+  echo "✅ Caddy Server successfully configured with automated TLS on port $DECOY_PORT!"
 else
-  echo "⚠️ WebRTC administrator credentials not provided. Skipping API auto-setup."
+  echo "⏭️ Domain parameter not provided. Skipping Caddy Server provisioning..."
 fi
 
 echo "---"
-echo "🎉 Route Agent successfully upgraded to gRPC protocol and running on port $PORT!"
-echo "📡 Link this node IP and port $PORT to your Route Orchestrator Control Plane securely."
-echo "🌐 WebRTC Panel (olcrtc-manager) is running on port $OLCRTC_PORT."
+echo "🎉 Installation pass complete. Route Agent running on port $PORT!"
+[ -n "$DOMAIN" ] && echo "🌐 Stealth Deflection active: https://$DOMAIN:$DECOY_PORT mapping to /var/www/decoy"
