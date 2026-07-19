@@ -105,21 +105,22 @@ if ! command -v sing-box &> /dev/null; then
   echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
 
   cat << EOT > /etc/systemd/system/sing-box.service
-[Unit]
-Description=sing-box service
-After=network.target nss-lookup.target
+  [Unit]
+  Description=sing-box service
+  After=network.target nss-lookup.target
 
-[Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=always
-RestartSec=5
-ExecReload=/usr/local/bin/sing-box check -c /etc/sing-box/config.json && /bin/kill -HUP \$MAINPID
+  [Service]
+  CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+  AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+  ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+  Restart=always
+  RestartSec=5
+  # Исправленная безопасная строка для релоада через шелл:
+  ExecReload=/bin/sh -c "/usr/local/bin/sing-box check -c /etc/sing-box/config.json && /bin/kill -HUP \$MAINPID"
 
-[Install]
-WantedBy=multi-user.target
-EOT
+  [Install]
+  WantedBy=multi-user.target
+  EOT
 
   systemctl daemon-reload
   systemctl enable --now sing-box
