@@ -13,6 +13,8 @@ import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import path from 'path';
 import pino from 'pino';
+import net from 'net';
+import http from 'http';
 import { config } from './config.js';
 
 const execAsync = promisify(exec);
@@ -86,6 +88,90 @@ async function getConnectionCount(): Promise<number> {
   }
 }
 
+/**
+ * Выполняет локальный HTTP GET-запрос и возвращает распарсенный JSON
+ */
+function getJson(url: string, timeoutMs = 3000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        reject(new Error(`Status Code: ${res.statusCode}`));
+        return;
+      }
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error('Timeout'));
+    });
+  });
+}
+
+/**
+ * Получает текущий статус WebRTC-слоя на основе опроса olcrtc-manager API
+ */
+async function getWebRtcStatus(): Promise<string> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_WEBRTC_CHECK !== 'true') {
+    return 'nominal';
+  }
+
+  const port = process.env.OLCRTC_PORT ? parseInt(process.env.OLCRTC_PORT, 10) : 8888;
+  const url = `http://127.0.0.1:${port}/api/state`;
+
+  try {
+    const data = await getJson(url, 3000);
+    
+    // Парсим running_count
+    const runningCount = (data && typeof data.running_count === 'number') ? data.running_count : null;
+    
+    if (runningCount === 0) {
+      // Ищем количество активных пользователей в ответе (поддерживаем разные варианты ключей)
+      let activeUsers = 0;
+      if (data) {
+        if (typeof data.active_users === 'number') {
+          activeUsers = data.active_users;
+        } else if (typeof data.users_count === 'number') {
+          activeUsers = data.users_count;
+        } else if (typeof data.user_count === 'number') {
+          activeUsers = data.user_count;
+        } else if (typeof data.online_users === 'number') {
+          activeUsers = data.online_users;
+        } else if (typeof data.active_connections === 'number') {
+          activeUsers = data.active_connections;
+        } else if (typeof data.users === 'number') {
+          activeUsers = data.users;
+        } else if (Array.isArray(data.users)) {
+          activeUsers = data.users.length;
+        }
+      }
+      
+      if (activeUsers > 0) {
+        return 'no_active_tunnels';
+      }
+    }
+    
+    return 'nominal';
+  } catch (err) {
+    // Если ответа нет или произошла ошибка запроса/парсинга -> панель упала
+    return 'panel_dead';
+  }
+}
+
 
 /**
  * Вспомогательный метод локальной валидации синтаксиса sing-box перед его применением
@@ -148,6 +234,7 @@ interface TelemetryResponse {
   activeConnections: number;
   systemLogs: string;
   timestamp: number;
+  webrtcStatus: string;
 }
 
 /**
@@ -206,19 +293,30 @@ async function streamTelemetryHandler(
   let logBuffer = '';
 
   const journalProcess = spawn('journalctl', ['-u', 'sing-box', '-n', '10', '-f', '--output', 'cat']);
-  journalProcess.stdout.on('data', (chunk: Buffer) => {
-    logBuffer += chunk.toString();
+  journalProcess.on('error', (err: any) => {
+    logger.warn({ err: err.message }, 'Failed to spawn journalctl process');
   });
+  if (journalProcess.stdout) {
+    journalProcess.stdout.on('data', (chunk: Buffer) => {
+      logBuffer += chunk.toString();
+    });
+  }
 
   const telemetryInterval = setInterval(async () => {
-    const [cpu, mem, conns] = await Promise.all([getCpuUsage(), getMemoryUsage(), getConnectionCount()]);
+    const [cpu, mem, conns, webrtc] = await Promise.all([
+      getCpuUsage(),
+      getMemoryUsage(),
+      getConnectionCount(),
+      getWebRtcStatus()
+    ]);
     
     call.write({
       cpuUsage: cpu,
       memUsage: mem,
       activeConnections: conns,
       systemLogs: logBuffer,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      webrtcStatus: webrtc
     });
     
     logBuffer = ''; 

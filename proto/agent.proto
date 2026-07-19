@@ -29,4 +29,6 @@ message TelemetryResponse {
   uint32 active_connections = 3;
   string system_logs = 4;
   int64 timestamp = 5;
+  string webrtc_status = 6; // 🔥 НОВОЕ ПОЛЕ: "nominal" | "panel_dead" | "no_active_tunnels"
 }
+
