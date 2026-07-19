@@ -90,6 +90,14 @@ fi
 echo "🔄 Reloading UFW firewall rules..."
 ufw reload
 
+# Разрешаем gRPC Route Agent'у беспарольно вызывать ufw через sudo,
+# чтобы он мог динамически открывать/закрывать порты Hy2/TUIC без интерактивного запроса пароля.
+echo "🔐 Configuring passwordless sudoers rule for UFW management (route-agent-ufw)..."
+cat > /etc/sudoers.d/route-agent-ufw <<'EOF'
+ALL ALL=(ALL) NOPASSWD: /usr/sbin/ufw
+EOF
+chmod 0440 /etc/sudoers.d/route-agent-ufw
+
 # 2. Установка бинарного ядра sing-box и создание его службы
 if ! command -v sing-box &> /dev/null; then
   echo "📦 sing-box core not found. Provisioning official sing-box 1.12.0 binary..."
