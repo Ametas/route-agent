@@ -84,24 +84,23 @@ if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
 else
   echo "⏭️ WebRTC credentials not provided. Skipping olcrtc components layer (Xeon Light mode active)..."
 fi
+
 # 3. Установка Node.js (если не установлен)
 if ! command -v node &> /dev/null; then
-  echo "📦 Node.js not found. Installing Node.js 22 LTS via FNM..."
-  curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+  echo "📦 Node.js not found. Installing Node.js 22 LTS via Nodesource..."
   
-  # Прописываем пути FNM глобально для root пользователя (персистентность)
-  echo 'export PATH="/root/.local/share/fnm:$PATH"' >> /root/.bashrc
-  echo 'eval "`fnm env`"' >> /root/.bashrc
+  # Устанавливаем необходимые зависимости для репозитория
+  apt-get install -y ca-certificates gnupg
   
-  export PATH="/root/.local/share/fnm:$PATH"
-  eval "`fnm env`"
+  # Добавляем ключ и репозиторий Nodesource
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
   
-  fnm install 22
-  fnm use 22
+  apt-get update
+  apt-get install -y nodejs
   
-  # Создаем глобальные системные симлинки
-  ln -sf "$(which node)" /usr/bin/node
-  ln -sf "$(which npm)" /usr/bin/npm
+  echo "✅ Node.js $(node -v) successfully installed."
 else
   echo "✅ Node.js $(node -v) is already installed."
 fi
