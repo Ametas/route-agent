@@ -40,7 +40,7 @@ fi
 # 1. Установка системных утилит
 echo "📦 Updating package lists and installing system utilities (iptables, iproute2, sqlite3, git, curl)..."
 apt-get update
-apt-get install -y iptables iproute2 sqlite3 git curl
+apt-get install -y iptables iproute2 sqlite3 git curl unzip
 
 # 2. Provisioning бинарников WebRTC-слоя (olcrtc-manager и olcrtc)
 if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
