@@ -12,10 +12,11 @@ fi
 # Парсим аргументы
 SECRET=""
 PORT="8081"
-REPO="https://github.com/YOUR_GITHUB_USERNAME/route-agent.git"
+REPO="https://github.com/Ametas/route-agent.git"
 OLCRTC_USER=""
 OLCRTC_PASS=""
 OLCRTC_PORT="8888"
+AGENT_DIR="/opt/route-agent"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -42,72 +43,47 @@ apt-get update
 apt-get install -y iptables iproute2 sqlite3 git curl
 
 # 2. Provisioning бинарников WebRTC-слоя (olcrtc-manager и olcrtc)
-echo "📥 Downloading and provisioning WebRTC components..."
-TMP_DIR=$(mktemp -d)
-echo "📁 Created temporary directory at $TMP_DIR"
+if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
+  echo "📥 Downloading and provisioning Original olcrtc component..."
+  TMP_DIR=$(mktemp -d)
+  echo "📁 Created temporary directory at $TMP_DIR"
 
-# URL-плейсхолдеры для релизов
-OLCRTC_MANAGER_URL="https://github.com/placeholder-org/olcrtc-manager/releases/latest/download/olcrtc-manager-linux-amd64.tar.gz"
-OLCRTC_DAEMON_URL="https://github.com/placeholder-org/olcrtc/releases/latest/download/olcrtc-linux-amd64.tar.gz"
+  # Ссылка на официальный стабильный релиз монолита olcrtc
+  OLCRTC_URL="https://github.com/openlibrecommunity/olcrtc/releases/latest/download/olcrtc-linux-amd64.tar.gz"
 
-echo "⬇️ Downloading olcrtc-manager from $OLCRTC_MANAGER_URL..."
-curl -L -s -o "$TMP_DIR/olcrtc-manager.tar.gz" "$OLCRTC_MANAGER_URL"
+  echo "⬇️ Downloading olcrtc from $OLCRTC_URL..."
+  if ! curl -L -s -f -o "$TMP_DIR/olcrtc.tar.gz" "$OLCRTC_URL"; then
+    echo "❌ Error: Failed to download olcrtc binary from GitHub Releases (404/Network failure)."
+    exit 1
+  fi
 
-echo "⬇️ Downloading olcrtc daemon from $OLCRTC_DAEMON_URL..."
-curl -L -s -o "$TMP_DIR/olcrtc.tar.gz" "$OLCRTC_DAEMON_URL"
+  echo "📦 Extracting olcrtc architecture archive..."
+  tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
 
-echo "📦 Extracting olcrtc-manager..."
-tar -xzf "$TMP_DIR/olcrtc-manager.tar.gz" -C "$TMP_DIR"
+  echo "⚙️ Moving olcrtc binary to /usr/local/bin/..."
+  # Ищем скомпилированный Go-бинарник внутри распакованной папки
+  REAL_BIN=$(find "$TMP_DIR" -type f -name "olcrtc" | head -n 1)
+  if [ -n "$REAL_BIN" ]; then
+    mv "$REAL_BIN" /usr/local/bin/olcrtc
+    chmod +x /usr/local/bin/olcrtc
+  else
+    echo "❌ Error: 'olcrtc' binary executable not found inside the downloaded archive."
+    exit 1
+  fi
 
-echo "📦 Extracting olcrtc daemon..."
-tar -xzf "$TMP_DIR/olcrtc.tar.gz" -C "$TMP_DIR"
+  echo "🧹 Cleaning up temporary directory..."
+  rm -rf "$TMP_DIR"
 
-echo "⚙️ Moving WebRTC binaries to /usr/local/bin/..."
-MANAGER_BIN=$(find "$TMP_DIR" -type f -name "olcrtc-manager" | head -n 1)
-if [ -n "$MANAGER_BIN" ]; then
-  mv "$MANAGER_BIN" /usr/local/bin/olcrtc-manager
+  echo "🔍 Verifying binary accessibility..."
+  if command -v olcrtc &> /dev/null; then
+    echo "✅ Original olcrtc successfully provisioned at: $(which olcrtc)"
+  else
+    echo "❌ Error: olcrtc binary is not accessible in system PATH."
+    exit 1
+  fi
 else
-  echo "❌ Error: olcrtc-manager binary not found in the archive"
-  exit 1
+  echo "⏭️ WebRTC credentials not provided. Skipping olcrtc components layer (Xeon Light mode active)..."
 fi
-
-DAEMON_BIN=$(find "$TMP_DIR" -type f -name "olcrtc" | head -n 1)
-if [ -n "$DAEMON_BIN" ]; then
-  mv "$DAEMON_BIN" /usr/local/bin/olcrtc
-else
-  echo "❌ Error: olcrtc binary not found in the archive"
-  exit 1
-fi
-
-echo "🔑 Setting executable permissions..."
-chmod +x /usr/local/bin/olcrtc-manager
-chmod +x /usr/local/bin/olcrtc
-
-echo "🧹 Cleaning up temporary directory..."
-rm -rf "$TMP_DIR"
-
-echo "🔍 Verifying binaries accessibility..."
-if command -v olcrtc-manager &> /dev/null && command -v olcrtc &> /dev/null; then
-  echo "✅ WebRTC binaries successfully installed and verified in system PATH:"
-  echo "   - olcrtc-manager: $(which olcrtc-manager)"
-  echo "   - olcrtc: $(which olcrtc)"
-else
-  echo "❌ Error: Installed binaries are not accessible in the system PATH"
-  exit 1
-fi
-
-# Определение рабочей директории
-if [ -f "package.json" ] && [ -d "src" ]; then
-  AGENT_DIR=$(pwd)
-  echo "✅ Running inside existing project directory: $AGENT_DIR"
-else
-  echo "📦 Project files not found locally. Cloning repository..."
-  rm -rf /opt/route-agent
-  git clone "$REPO" /opt/route-agent
-  cd /opt/route-agent
-  AGENT_DIR="/opt/route-agent"
-fi
-
 # 3. Установка Node.js (если не установлен)
 if ! command -v node &> /dev/null; then
   echo "📦 Node.js not found. Installing Node.js 22 LTS via FNM..."
@@ -129,6 +105,12 @@ if ! command -v node &> /dev/null; then
 else
   echo "✅ Node.js $(node -v) is already installed."
 fi
+
+if [ ! -d "$AGENT_DIR" ]; then
+  echo "📥 Cloning route-agent repository into $AGENT_DIR..."
+  git clone "$REPO" "$AGENT_DIR"
+fi
+cd "$AGENT_DIR"
 
 # 4. Установка зависимостей и сборка проекта
 echo "📦 Installing Node.js dependencies and compiling agent..."
@@ -182,17 +164,19 @@ systemctl enable route-agent
 systemctl restart route-agent
 
 # 8. Регистрация и авто-настройка WebRTC-панели (olcrtc-manager) в systemd
-echo "🔄 Registering olcrtc-manager as systemd service..."
+if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
+  echo "🔄 Registering olcrtc daemon engine as systemd service..."
 
-cat << EOT > /etc/systemd/system/olcrtc-manager.service
+  cat << EOT > /etc/systemd/system/olcrtc.service
 [Unit]
-Description=WebRTC Panel Service (olcrtc-manager)
+Description=OpenLibreCommunity WebRTC Tunnel Service
 After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/olcrtc-manager --port ${OLCRTC_PORT}
+# Запускаем монолит, передавая ему порт веб-интерфейса и API управления
+ExecStart=/usr/local/bin/olcrtc --port ${OLCRTC_PORT}
 Restart=always
 RestartSec=5
 
@@ -200,15 +184,11 @@ RestartSec=5
 WantedBy=multi-user.target
 EOT
 
-echo "⚙️ Enabling and starting olcrtc-manager service..."
-systemctl daemon-reload
-systemctl enable --now olcrtc-manager
+  echo "⚙️ Enabling and starting olcrtc unit..."
+  systemctl daemon-reload
+  systemctl enable --now olcrtc
 
-# Атомарный авто-сетап API с интеллектуальным циклом ожидания
-if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
-  echo "⏳ Waiting for local WebRTC REST API socket stabilization..."
-  
-  # Поллинг порта до 10 секунд перед отправкой тяжелого setup-запроса
+  echo "⏳ Waiting for local olcrtc REST API socket stabilization..."
   for i in {1..10}; do
     if curl -s -o /dev/null "http://127.0.0.1:${OLCRTC_PORT}/api/auth/me" || [ $i -eq 10 ]; then
       break
@@ -216,16 +196,14 @@ if [ -n "$OLCRTC_USER" ] && [ -n "$OLCRTC_PASS" ]; then
     sleep 1
   done
 
-  echo "🔑 Auto-configuring WebRTC administrator account via local REST API..."
-  # Используем встроенные механизмы curl для надежности при инициализации SQLite таблиц
+  echo "🔑 Auto-configuring administrator account via local REST API..."
   if ! curl -s -f --retry 3 --retry-delay 2 -X POST -H "Content-Type: application/json" \
     -d "{\"user\":\"$OLCRTC_USER\",\"password\":\"$OLCRTC_PASS\"}" \
     "http://127.0.0.1:${OLCRTC_PORT}/api/auth/setup"; then
-    echo "❌ Error: Failed to perform auto-setup of WebRTC administrator account."
-    echo "🧹 Rolling back olcrtc-manager service to prevent undefined state..."
-    systemctl stop olcrtc-manager || true
-    systemctl disable olcrtc-manager || true
-    rm -f /etc/systemd/system/olcrtc-manager.service
+    echo "❌ Error: Failed to perform auto-setup of olcrtc administrator account."
+    systemctl stop olcrtc || true
+    systemctl disable olcrtc || true
+    rm -f /etc/systemd/system/olcrtc.service
     systemctl daemon-reload
     exit 1
   fi
