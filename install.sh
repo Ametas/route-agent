@@ -28,10 +28,18 @@ if [ -z "$SECRET" ]; then
   exit 1
 fi
 
-# 1. Установка системных зависимостей
-echo "📦 Installing system packages..."
+# 1. Установка системных зависимостей и подключение репозитория Caddy
+echo "📦 Installing system packages and Caddy repository..."
 apt-get update
-apt-get install -y iptables iproute2 ufw git curl unzip debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg caddy || true
+apt-get install -y iptables iproute2 ufw git curl unzip debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
+
+if ! command -v caddy &> /dev/null; then
+  echo "📥 Adding Caddy official apt repository..."
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update
+  apt-get install -y caddy
+fi
 
 # 2. Настройка UFW
 ufw allow 22/tcp || true
