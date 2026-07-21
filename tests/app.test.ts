@@ -13,15 +13,19 @@ const tempDir = path.join(__dirname, 'temp');
 const tempConfigPath = path.join(tempDir, 'sing-box-config.json');
 const tempBinaryPath = path.join(tempDir, 'sing-box');
 const tempCaddyfilePath = path.join(tempDir, 'Caddyfile');
+const tempOlcrtcPath = path.join(tempDir, 'olcrtc');
+const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
 
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
-process.env.PORT = '8085';
+process.env.PORT = '8087';
 process.env.HOST = '127.0.0.1';
 process.env.EGRESS_CONTROL_SECRET = 'test-secret-123';
 process.env.SINGBOX_CONFIG_PATH = tempConfigPath;
 process.env.SINGBOX_BINARY_PATH = tempBinaryPath;
 process.env.CADDYFILE_PATH = tempCaddyfilePath;
+process.env.OLCRTC_BINARY_PATH = tempOlcrtcPath;
+process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -41,7 +45,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
   // Создаем нативный клиент для тестов
   const client = new EgressAgentService(
-    '127.0.0.1:8085',
+    '127.0.0.1:8087',
     grpc.credentials.createInsecure()
   );
 
@@ -127,6 +131,19 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     call.end();
   });
 
+  await t.test('UploadOlcrtcBinary should upload olcrtc / olcrtc-manager binaries', (t, done) => {
+    const call = client.uploadOlcrtcBinary(async (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      assert.ok(response.message.includes('olcrtc-manager'));
+      const exists = await fs.stat(tempOlcrtcManagerPath).then(() => true).catch(() => false);
+      assert.strictEqual(exists, true);
+      done();
+    });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('olcrtc_mgr_chunk'), version: '1.0.0', targetBinary: 'olcrtc-manager', isFinal: true });
+    call.end();
+  });
+
   await t.test('ConfigureCaddy should block unauthorized requests', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');
@@ -147,6 +164,28 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(response.success, true);
       const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
       assert.ok(caddyContent.includes('decoy.example.com:8443'));
+      done();
+    });
+  });
+
+  await t.test('ConfigureOlcrtc should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.configureOlcrtc({ enabled: true, user: 'admin', password: 'pass', port: 8888 }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      done();
+    });
+  });
+
+  await t.test('ConfigureOlcrtc should configure Olcrtc service when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.configureOlcrtc({ enabled: true, user: 'admin', password: 'pass', port: 8888 }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
       done();
     });
   });

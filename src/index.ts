@@ -387,6 +387,7 @@ interface BinaryChunk {
   chunk?: Buffer | Uint8Array;
   version?: string;
   isFinal?: boolean;
+  targetBinary?: string;
 }
 
 interface UpgradeResponse {
@@ -401,6 +402,18 @@ interface CaddyConfigPayload {
 }
 
 interface CaddyConfigResponse {
+  success: boolean;
+  message: string;
+}
+
+interface OlcrtcConfigPayload {
+  enabled: boolean;
+  user: string;
+  password: string;
+  port: number;
+}
+
+interface OlcrtcConfigResponse {
   success: boolean;
   message: string;
 }
@@ -608,6 +621,94 @@ async function uploadSingboxBinaryHandler(
 }
 
 /**
+ * RPC Обработчик UploadOlcrtcBinary (клиентский стрим RPC для olcrtc / olcrtc-manager)
+ */
+async function uploadOlcrtcBinaryHandler(
+  call: ServerReadableStream<BinaryChunk, UpgradeResponse>,
+  callback: sendUnaryData<UpgradeResponse>
+): Promise<void> {
+  const chunks: Buffer[] = [];
+  let secretVerified = false;
+  let targetVersion = 'unknown';
+  let targetBinary = 'olcrtc-manager';
+
+  const metadataSecret = extractSecretFromMetadata(call);
+  if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
+    secretVerified = true;
+  }
+
+  call.on('data', (data: BinaryChunk) => {
+    if (!secretVerified) {
+      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET) {
+        secretVerified = true;
+      }
+    }
+    if (data.version) {
+      targetVersion = data.version;
+    }
+    if (data.targetBinary) {
+      targetBinary = data.targetBinary;
+    }
+    if (data.chunk && data.chunk.length > 0) {
+      chunks.push(Buffer.from(data.chunk));
+    }
+  });
+
+  call.on('end', async () => {
+    if (!secretVerified) {
+      logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
+      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+    }
+
+    if (chunks.length === 0) {
+      return callback(null, { success: false, message: 'No binary data received.' });
+    }
+
+    try {
+      const fullBuffer = Buffer.concat(chunks);
+      const tempPath = `/tmp/${targetBinary}.download`;
+      let targetPath = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
+      if (targetBinary === 'olcrtc') {
+        targetPath = config.OLCRTC_BINARY_PATH || '/usr/local/bin/olcrtc';
+      }
+
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.writeFile(tempPath, fullBuffer);
+      await fs.chmod(tempPath, 0o755);
+
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.rename(tempPath, targetPath).catch(async () => {
+        await fs.copyFile(tempPath, targetPath);
+        await fs.unlink(tempPath).catch(() => {});
+      });
+
+      logger.info({ path: targetPath, binary: targetBinary, version: targetVersion }, 'Atomically updated olcrtc component binary');
+
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          await execAsync(`systemctl restart olcrtc || true`);
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to restart olcrtc service after binary upload');
+        }
+      }
+
+      return callback(null, {
+        success: true,
+        message: `${targetBinary} binary successfully updated to version ${targetVersion}`
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err: msg }, 'Failed to apply uploaded olcrtc binary');
+      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    }
+  });
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadOlcrtcBinary stream');
+  });
+}
+
+/**
  * RPC Обработчик ConfigureCaddy
  */
 async function configureCaddyHandler(
@@ -657,6 +758,107 @@ async function configureCaddyHandler(
     const msg = err instanceof Error ? err.message : 'Unknown error';
     logger.error({ err: msg }, 'Failed to configure Caddy');
     return callback(null, { success: false, message: `Caddy configuration error: ${msg}` });
+  }
+}
+
+/**
+ * RPC Обработчик ConfigureOlcrtc (настройка и управление службой olcrtc-manager)
+ */
+async function configureOlcrtcHandler(
+  call: ServerUnaryCall<OlcrtcConfigPayload, OlcrtcConfigResponse>,
+  callback: sendUnaryData<OlcrtcConfigResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized ConfigureOlcrtc request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const { enabled, user, password, port } = call.request;
+
+  try {
+    if (!enabled) {
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          await execAsync('systemctl disable --now olcrtc || true');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Error disabling olcrtc service');
+        }
+      }
+      return callback(null, {
+        success: true,
+        message: 'olcrtc service successfully disabled and stopped.'
+      });
+    }
+
+    const servicePort = port || 8888;
+    const managerBin = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
+
+    const serviceContent = `[Unit]
+Description=OpenLibreCommunity WebRTC Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=${managerBin} --port ${servicePort}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+    const servicePath = '/etc/systemd/system/olcrtc.service';
+    await fs.mkdir(path.dirname(servicePath), { recursive: true }).catch(() => {});
+    await fs.writeFile(servicePath, serviceContent, 'utf-8');
+
+    if (process.env.NODE_ENV !== 'test') {
+      await execAsync('systemctl daemon-reload');
+      await execAsync('systemctl enable --now olcrtc');
+
+      if (user && password) {
+        const setupUrl = `http://127.0.0.1:${servicePort}/api/auth/setup`;
+        for (let i = 0; i < 5; i++) {
+          try {
+            await getJson(`http://127.0.0.1:${servicePort}/api/state`, 1000);
+            break;
+          } catch {
+            await new Promise((res) => setTimeout(res, 500));
+          }
+        }
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const reqData = JSON.stringify({ user, password });
+            const req = http.request(setupUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(reqData)
+              }
+            }, (res) => {
+              res.resume();
+              resolve();
+            });
+            req.on('error', reject);
+            req.write(reqData);
+            req.end();
+          });
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to POST auth setup to olcrtc-manager');
+        }
+      }
+    }
+
+    return callback(null, {
+      success: true,
+      message: `olcrtc service configured and enabled on port ${servicePort}.`
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.error({ err: msg }, 'Failed to configure Olcrtc service');
+    return callback(null, { success: false, message: `Olcrtc configuration error: ${msg}` });
   }
 }
 
@@ -731,7 +933,9 @@ export function startServer(): Promise<Server> {
       applyConfig: applyConfigHandler,
       streamTelemetry: streamTelemetryHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
+      uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       configureCaddy: configureCaddyHandler,
+      configureOlcrtc: configureOlcrtcHandler,
       manageFirewall: manageFirewallHandler
     };
     

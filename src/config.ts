@@ -12,6 +12,8 @@ const configSchema = z.object({
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy'),
+  OLCRTC_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc'),
+  OLCRTC_MANAGER_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-manager'),
 });
 
 const parsed = configSchema.safeParse(process.env);

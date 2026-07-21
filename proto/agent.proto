@@ -9,11 +9,17 @@ service EgressAgentService {
   // Серверный стрим RPC для передачи телеметрии ноды в реальном времени
   rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
 
-  // Приём бинарного файла sing-box напрямую от оркестратора и атомарная замена
+  // Приём бинарного файла sing-box напрямую от оркестратора
   rpc UploadSingboxBinary (stream BinaryChunk) returns (UpgradeResponse);
+
+  // Приём бинарных файлов olcrtc / olcrtc-manager напрямую от оркестратора
+  rpc UploadOlcrtcBinary (stream BinaryChunk) returns (UpgradeResponse);
 
   // Дистанционная настройка Caddy (Caddyfile + HTML-заглушка)
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
+
+  // Дистанционная установка и управление службой olcrtc-manager (WebRTC)
+  rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
 
   // Дистанционное управление правилами UFW фаервола
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
@@ -47,6 +53,7 @@ message BinaryChunk {
   bytes chunk = 2;
   string version = 3;
   bool is_final = 4;
+  string target_binary = 5; // "sing-box" | "olcrtc" | "olcrtc-manager"
 }
 
 message UpgradeResponse {
@@ -61,6 +68,18 @@ message CaddyConfigPayload {
 }
 
 message CaddyConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message OlcrtcConfigPayload {
+  bool enabled = 1;
+  string user = 2;
+  string password = 3;
+  uint32 port = 4;
+}
+
+message OlcrtcConfigResponse {
   bool success = 1;
   string message = 2;
 }
