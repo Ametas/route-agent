@@ -3,11 +3,20 @@ syntax = "proto3";
 package agent;
 
 service EgressAgentService {
-  // Унарный RPC для загрузки и безопасной перезагрузки конфигурации sing-box
+  // Загрузка и безопасная перезагрузка конфигурации sing-box
   rpc ApplyConfig (ConfigPayload) returns (ConfigResponse);
 
-  // Серверный стрим RPC для непрерывной передачи телеметрии ноды в реальном времени
+  // Серверный стрим RPC для передачи телеметрии ноды в реальном времени
   rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
+
+  // Приём бинарного файла sing-box напрямую от оркестратора и атомарная замена
+  rpc UploadSingboxBinary (stream BinaryChunk) returns (UpgradeResponse);
+
+  // Дистанционная настройка Caddy (Caddyfile + HTML-заглушка)
+  rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
+
+  // Дистанционное управление правилами UFW фаервола
+  rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
 }
 
 message ConfigPayload {
@@ -29,6 +38,39 @@ message TelemetryResponse {
   uint32 active_connections = 3;
   string system_logs = 4;
   int64 timestamp = 5;
-  string webrtc_status = 6; // 🔥 НОВОЕ ПОЛЕ: "nominal" | "panel_dead" | "no_active_tunnels"
+  string webrtc_status = 6;
+  string singbox_version = 7;
 }
 
+message BinaryChunk {
+  string orchestrator_secret = 1;
+  bytes chunk = 2;
+  string version = 3;
+  bool is_final = 4;
+}
+
+message UpgradeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CaddyConfigPayload {
+  string domain = 1;
+  uint32 decoy_port = 2;
+  string html_content = 3;
+}
+
+message CaddyConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message FirewallPayload {
+  repeated uint32 open_udp_ports = 1;
+  repeated uint32 open_tcp_ports = 2;
+}
+
+message FirewallResponse {
+  bool success = 1;
+  string message = 2;
+}

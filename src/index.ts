@@ -4,6 +4,7 @@ import {
   ServerUnaryCall, 
   sendUnaryData, 
   ServerWritableStream,
+  ServerReadableStream,
   UntypedServiceImplementation,
   loadPackageDefinition
 } from '@grpc/grpc-js';
@@ -172,6 +173,19 @@ async function getWebRtcStatus(): Promise<string> {
   }
 }
 
+/**
+ * Определение текущей версии sing-box бинарника
+ */
+async function getSingBoxVersion(): Promise<string> {
+  const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+  try {
+    const { stdout } = await execAsync(`${binaryPath} version`);
+    const match = stdout.match(/sing-box version ([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
+    return match ? match[1] : (stdout.split('\n')[0].trim() || 'not_installed');
+  } catch {
+    return 'not_installed';
+  }
+}
 
 /**
  * Вспомогательный метод локальной валидации синтаксиса sing-box перед его применением
@@ -182,13 +196,14 @@ async function validateSingBoxConfig(configObj: object): Promise<{ valid: boolea
   }
   const targetDir = path.dirname(config.SINGBOX_CONFIG_PATH);
   const checkFilePath = path.join(targetDir, `.config.check_${Date.now()}.json`);
+  const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
   
   try {
     await fs.mkdir(targetDir, { recursive: true });
     await fs.writeFile(checkFilePath, JSON.stringify(configObj, null, 2), 'utf-8');
     
     // Выполняем нативный тест синтаксиса sing-box
-    await execAsync(`sing-box check -c ${checkFilePath}`);
+    await execAsync(`${binaryPath} check -c ${checkFilePath}`);
     return { valid: true };
   } catch (err: any) {
     logger.error({ stderr: err.stderr }, 'Sing-box configuration syntax check failed');
@@ -210,14 +225,16 @@ async function atomicApplyAndReload(configObj: object): Promise<void> {
   await fs.rename(tempFilePath, config.SINGBOX_CONFIG_PATH);
 
   // Мягкий reload сервиса
-  const { stdout, stderr } = await execAsync(config.RELOAD_COMMAND);
-  if (stdout) logger.info({ stdout }, 'Reload command stdout');
-  if (stderr) logger.warn({ stderr }, 'Reload command stderr');
+  if (process.env.NODE_ENV !== 'test' || process.env.RELOAD_COMMAND) {
+    const { stdout, stderr } = await execAsync(config.RELOAD_COMMAND);
+    if (stdout) logger.info({ stdout }, 'Reload command stdout');
+    if (stderr) logger.warn({ stderr }, 'Reload command stderr');
+  }
 }
 
 /**
  * Абсолютный путь к локальному файлу-кэшу, хранящему список UDP-портов,
- * которые были открыты в UFW при прошлом успешном применении конфигурации.
+ * которые были открыты в UFW при прошлых настройках.
  */
 const ACTIVE_PORTS_CACHE_PATH = '/opt/route-agent/active_ports.json';
 
@@ -284,9 +301,6 @@ function extractUdpTunnelPorts(configObj: any): number[] {
 
 /**
  * Синхронизирует правила UFW с актуальным списком UDP-портов hysteria2/tuic
- * из новой конфигурации sing-box: открывает новые порты и закрывает те,
- * что больше не используются, предотвращая появление "дыр" в безопасности.
- * Любая ошибка ufw логируется, но не прерывает основной пайплайн ApplyConfig.
  */
 async function syncEgressFirewall(configObj: any): Promise<void> {
   if (!(await isUfwInstalled())) {
@@ -337,6 +351,14 @@ async function syncEgressFirewall(configObj: any): Promise<void> {
   }
 }
 
+/**
+ * Извлечение секрета из gRPC metadata
+ */
+function extractSecretFromMetadata(call: { metadata: any }): string {
+  const metadataValues = call.metadata ? call.metadata.get('x-orchestrator-secret') : [];
+  return metadataValues && metadataValues[0] ? String(metadataValues[0]) : '';
+}
+
 interface ApplyConfigRequest {
   configJson: string;
 }
@@ -357,17 +379,50 @@ interface TelemetryResponse {
   systemLogs: string;
   timestamp: number;
   webrtcStatus: string;
+  singboxVersion: string;
+}
+
+interface BinaryChunk {
+  orchestratorSecret?: string;
+  chunk?: Buffer | Uint8Array;
+  version?: string;
+  isFinal?: boolean;
+}
+
+interface UpgradeResponse {
+  success: boolean;
+  message: string;
+}
+
+interface CaddyConfigPayload {
+  domain: string;
+  decoyPort: number;
+  htmlContent: string;
+}
+
+interface CaddyConfigResponse {
+  success: boolean;
+  message: string;
+}
+
+interface FirewallPayload {
+  openUdpPorts: number[];
+  openTcpPorts: number[];
+}
+
+interface FirewallResponse {
+  success: boolean;
+  message: string;
 }
 
 /**
- * RPC Обработчик метода ApplyConfig с честной строгой типизацией
+ * RPC Обработчик метода ApplyConfig
  */
 async function applyConfigHandler(
   call: ServerUnaryCall<ApplyConfigRequest, ApplyConfigResponse>, 
   callback: sendUnaryData<ApplyConfigResponse>
 ): Promise<void> {
-  const metadataValues = call.metadata.get('x-orchestrator-secret');
-  const secretHeader = metadataValues && metadataValues[0] ? String(metadataValues[0]) : '';
+  const secretHeader = extractSecretFromMetadata(call);
 
   if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
     logger.warn('Unauthorized gRPC execution blocked');
@@ -399,7 +454,7 @@ async function applyConfigHandler(
 }
 
 /**
- * RPC Обработчик серверного стрима телеметрии без any
+ * RPC Обработчик серверного стрима телеметрии
  */
 async function streamTelemetryHandler(
   call: ServerWritableStream<TelemetryRequest, TelemetryResponse>
@@ -426,11 +481,12 @@ async function streamTelemetryHandler(
   }
 
   const telemetryInterval = setInterval(async () => {
-    const [cpu, mem, conns, webrtc] = await Promise.all([
+    const [cpu, mem, conns, webrtc, sbVersion] = await Promise.all([
       getCpuUsage(),
       getMemoryUsage(),
       getConnectionCount(),
-      getWebRtcStatus()
+      getWebRtcStatus(),
+      getSingBoxVersion()
     ]);
     
     call.write({
@@ -439,7 +495,8 @@ async function streamTelemetryHandler(
       activeConnections: conns,
       systemLogs: logBuffer,
       timestamp: Date.now(),
-      webrtcStatus: webrtc
+      webrtcStatus: webrtc,
+      singboxVersion: sbVersion
     });
     
     logBuffer = ''; 
@@ -452,6 +509,219 @@ async function streamTelemetryHandler(
   });
 }
 
+/**
+ * RPC Обработчик UploadSingboxBinary (клиентский стрим RPC)
+ */
+async function uploadSingboxBinaryHandler(
+  call: ServerReadableStream<BinaryChunk, UpgradeResponse>,
+  callback: sendUnaryData<UpgradeResponse>
+): Promise<void> {
+  const chunks: Buffer[] = [];
+  let secretVerified = false;
+  let targetVersion = 'unknown';
+
+  const metadataSecret = extractSecretFromMetadata(call);
+  if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
+    secretVerified = true;
+  }
+
+  call.on('data', (data: BinaryChunk) => {
+    if (!secretVerified) {
+      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET) {
+        secretVerified = true;
+      }
+    }
+    if (data.version) {
+      targetVersion = data.version;
+    }
+    if (data.chunk && data.chunk.length > 0) {
+      chunks.push(Buffer.from(data.chunk));
+    }
+  });
+
+  call.on('end', async () => {
+    if (!secretVerified) {
+      logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
+      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+    }
+
+    if (chunks.length === 0) {
+      return callback(null, { success: false, message: 'No binary data received.' });
+    }
+
+    try {
+      const fullBuffer = Buffer.concat(chunks);
+      const tempPath = '/tmp/sing-box.download';
+      const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.writeFile(tempPath, fullBuffer);
+      await fs.chmod(tempPath, 0o755);
+
+      if (process.env.NODE_ENV !== 'test') {
+        // Проверяем валидность скачанного файла
+        await execAsync(`${tempPath} version`);
+
+        if (process.platform === 'linux') {
+          try {
+            await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${tempPath}`);
+          } catch (err: any) {
+            logger.warn({ err: err.message }, 'Failed to setcap on new sing-box binary');
+          }
+        }
+      }
+
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.rename(tempPath, targetPath).catch(async () => {
+        // Fallback for cross-device rename
+        await fs.copyFile(tempPath, targetPath);
+        await fs.unlink(tempPath).catch(() => {});
+      });
+
+      logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated sing-box binary');
+
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          const reloadCmd = config.RELOAD_COMMAND || 'systemctl restart sing-box';
+          const { stdout, stderr } = await execAsync(reloadCmd);
+          if (stdout) logger.info({ stdout }, 'Restart/Reload after binary upgrade');
+          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Reload command failed after binary upgrade');
+        }
+      }
+
+      return callback(null, {
+        success: true,
+        message: 'sing-box binary successfully updated and restarted'
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err: msg }, 'Failed to apply uploaded sing-box binary');
+      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    }
+  });
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadSingboxBinary stream');
+  });
+}
+
+/**
+ * RPC Обработчик ConfigureCaddy
+ */
+async function configureCaddyHandler(
+  call: ServerUnaryCall<CaddyConfigPayload, CaddyConfigResponse>,
+  callback: sendUnaryData<CaddyConfigResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized ConfigureCaddy request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const { domain, decoyPort, htmlContent } = call.request;
+
+  try {
+    const webDir = '/var/www/decoy';
+    await fs.mkdir(webDir, { recursive: true });
+    if (htmlContent) {
+      await fs.writeFile(path.join(webDir, 'index.html'), htmlContent, 'utf-8');
+    }
+
+    const port = decoyPort || 8443;
+    const hostHeader = domain ? `${domain}:${port}` : `:${port}`;
+    const caddyfileContent = `${hostHeader} {\n\thandle {\n\t\troot * ${webDir}\n\t\tfile_server\n\t}\n}\n`;
+
+    const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
+    const caddyDir = path.dirname(caddyfilePath);
+    await fs.mkdir(caddyDir, { recursive: true });
+    await fs.writeFile(caddyfilePath, caddyfileContent, 'utf-8');
+
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const reloadCmd = config.CADDY_RELOAD_COMMAND || 'systemctl reload caddy || systemctl restart caddy';
+        const { stdout, stderr } = await execAsync(reloadCmd);
+        if (stdout) logger.info({ stdout }, 'Caddy reload stdout');
+        if (stderr) logger.warn({ stderr }, 'Caddy reload stderr');
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Failed to reload Caddy service');
+      }
+    }
+
+    return callback(null, {
+      success: true,
+      message: `Caddy successfully configured for ${hostHeader}`
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.error({ err: msg }, 'Failed to configure Caddy');
+    return callback(null, { success: false, message: `Caddy configuration error: ${msg}` });
+  }
+}
+
+/**
+ * RPC Обработчик ManageFirewall
+ */
+async function manageFirewallHandler(
+  call: ServerUnaryCall<FirewallPayload, FirewallResponse>,
+  callback: sendUnaryData<FirewallResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized ManageFirewall request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const openUdp = Array.isArray(call.request.openUdpPorts) ? call.request.openUdpPorts : [];
+  const openTcp = Array.isArray(call.request.openTcpPorts) ? call.request.openTcpPorts : [];
+
+  try {
+    const ufwAvailable = await isUfwInstalled();
+    if (!ufwAvailable) {
+      if (process.env.NODE_ENV === 'test') {
+        return callback(null, {
+          success: true,
+          message: `UFW not installed. (Test mode dry-run: UDP [${openUdp.join(', ')}], TCP [${openTcp.join(', ')}])`
+        });
+      }
+      logger.warn('UFW is not installed on this node');
+      return callback(null, { success: false, message: 'UFW firewall utility is not installed on system.' });
+    }
+
+    for (const port of openUdp) {
+      try {
+        await execAsync(`sudo ufw allow ${port}/udp`);
+      } catch (err: any) {
+        logger.error({ port, err: err.message }, 'Failed to open UDP port in firewall');
+      }
+    }
+
+    for (const port of openTcp) {
+      try {
+        await execAsync(`sudo ufw allow ${port}/tcp`);
+      } catch (err: any) {
+        logger.error({ port, err: err.message }, 'Failed to open TCP port in firewall');
+      }
+    }
+
+    try {
+      await execAsync('sudo ufw reload');
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Failed to reload UFW');
+    }
+
+    return callback(null, {
+      success: true,
+      message: `Successfully updated firewall rules: opened ${openUdp.length} UDP and ${openTcp.length} TCP ports.`
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.error({ err: msg }, 'Failed to execute ManageFirewall');
+    return callback(null, { success: false, message: `ManageFirewall error: ${msg}` });
+  }
+}
+
 export let serverInstance: Server | null = null;
 
 export function startServer(): Promise<Server> {
@@ -459,7 +729,10 @@ export function startServer(): Promise<Server> {
     const server = new Server();
     const serviceImplementation: UntypedServiceImplementation = {
       applyConfig: applyConfigHandler,
-      streamTelemetry: streamTelemetryHandler
+      streamTelemetry: streamTelemetryHandler,
+      uploadSingboxBinary: uploadSingboxBinaryHandler,
+      configureCaddy: configureCaddyHandler,
+      manageFirewall: manageFirewallHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

@@ -8,7 +8,10 @@ const configSchema = z.object({
   HOST: z.string().default('0.0.0.0'),
   EGRESS_CONTROL_SECRET: z.string(),     // Уникальный токен ноды (верифицируется через gRPC Metadata)
   SINGBOX_CONFIG_PATH: z.string().default('/etc/sing-box/config.json'),
+  SINGBOX_BINARY_PATH: z.string().default('/usr/local/bin/sing-box'),
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
+  CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
+  CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy'),
 });
 
 const parsed = configSchema.safeParse(process.env);

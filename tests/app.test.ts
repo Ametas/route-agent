@@ -9,16 +9,21 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const tempConfigDir = path.join(__dirname, 'temp');
-const tempConfigPath = path.join(tempConfigDir, 'sing-box-config.json');
+const tempDir = path.join(__dirname, 'temp');
+const tempConfigPath = path.join(tempDir, 'sing-box-config.json');
+const tempBinaryPath = path.join(tempDir, 'sing-box');
+const tempCaddyfilePath = path.join(tempDir, 'Caddyfile');
 
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
-process.env.PORT = '8082';
+process.env.PORT = '8085';
 process.env.HOST = '127.0.0.1';
 process.env.EGRESS_CONTROL_SECRET = 'test-secret-123';
 process.env.SINGBOX_CONFIG_PATH = tempConfigPath;
+process.env.SINGBOX_BINARY_PATH = tempBinaryPath;
+process.env.CADDYFILE_PATH = tempCaddyfilePath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
+process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
 // Импортируем наш скомпилированный gRPC сервер для инициализации биндинга
 const { startServer } = await import('../src/index.js');
@@ -29,21 +34,21 @@ const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
 const EgressAgentService = protoDescriptor.agent.EgressAgentService;
 
 test('Route Agent gRPC Pipeline Testing', async (t) => {
-  await fs.rm(tempConfigDir, { recursive: true, force: true }).catch(() => {});
-  await fs.mkdir(tempConfigDir, { recursive: true });
+  await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  await fs.mkdir(tempDir, { recursive: true });
 
   const server = await startServer();
 
   // Создаем нативный клиент для тестов
   const client = new EgressAgentService(
-    '127.0.0.1:8082',
+    '127.0.0.1:8085',
     grpc.credentials.createInsecure()
   );
 
   t.after(async () => {
     client.close();
     server.forceShutdown();
-    await fs.rm(tempConfigDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   });
 
   await t.test('ApplyConfig should block requests with invalid metadata tokens', (t, done) => {
@@ -62,7 +67,6 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     const validMetadata = new grpc.Metadata();
     validMetadata.add('x-orchestrator-secret', 'test-secret-123');
 
-    // Передаем валидный JSON объект конфигурации
     const payload = { log: { level: 'info' } };
 
     client.applyConfig({ configJson: JSON.stringify(payload) }, validMetadata, (err: any, response: any) => {
@@ -72,13 +76,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  await t.test('StreamTelemetry should stream telemetry containing webrtcStatus', (t, done) => {
+  await t.test('StreamTelemetry should stream telemetry containing webrtcStatus and singboxVersion', (t, done) => {
     const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
     
     stream.on('data', (data: any) => {
       try {
         assert.ok(data.hasOwnProperty('webrtcStatus'));
+        assert.ok(data.hasOwnProperty('singboxVersion'));
         assert.strictEqual(data.webrtcStatus, 'nominal');
+        assert.strictEqual(typeof data.singboxVersion, 'string');
         assert.strictEqual(typeof data.cpuUsage, 'number');
         assert.strictEqual(typeof data.memUsage, 'number');
         assert.strictEqual(typeof data.activeConnections, 'number');
@@ -93,6 +99,77 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     stream.on('error', (err: any) => {
       // Ignored if stream is already destroyed
+    });
+  });
+
+  await t.test('UploadSingboxBinary should block stream with invalid secret', (t, done) => {
+    const call = client.uploadSingboxBinary((err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+    call.write({ orchestratorSecret: 'invalid_secret', chunk: Buffer.from('test data'), version: '1.12.0', isFinal: true });
+    call.end();
+  });
+
+  await t.test('UploadSingboxBinary should upload binary chunks and update target binary file', (t, done) => {
+    const call = client.uploadSingboxBinary(async (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      assert.ok(response.message.includes('1.12.0'));
+      const exists = await fs.stat(tempBinaryPath).then(() => true).catch(() => false);
+      assert.strictEqual(exists, true);
+      done();
+    });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('binary_chunk_1\n'), version: '1.12.0', isFinal: false });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('binary_chunk_2\n'), version: '1.12.0', isFinal: true });
+    call.end();
+  });
+
+  await t.test('ConfigureCaddy should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.configureCaddy({ domain: 'example.com', decoyPort: 8443, htmlContent: '<h1>Hello</h1>' }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      done();
+    });
+  });
+
+  await t.test('ConfigureCaddy should write Caddyfile and HTML content when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.configureCaddy({ domain: 'decoy.example.com', decoyPort: 8443, htmlContent: '<h1>Decoy Site</h1>' }, validMetadata, async (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
+      assert.ok(caddyContent.includes('decoy.example.com:8443'));
+      done();
+    });
+  });
+
+  await t.test('ManageFirewall should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.manageFirewall({ openUdpPorts: [443], openTcpPorts: [80] }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      done();
+    });
+  });
+
+  await t.test('ManageFirewall should process ports when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.manageFirewall({ openUdpPorts: [443, 8443], openTcpPorts: [80, 443] }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      done();
     });
   });
 
