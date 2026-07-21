@@ -621,7 +621,7 @@ async function uploadSingboxBinaryHandler(
 }
 
 /**
- * RPC Обработчик UploadOlcrtcBinary (клиентский стрим RPC для olcrtc / olcrtc-manager)
+ * RPC Обработчик UploadOlcrtcBinary (универсальный клиентский стрим RPC для olcrtc / olcrtc-manager)
  */
 async function uploadOlcrtcBinaryHandler(
   call: ServerReadableStream<BinaryChunk, UpgradeResponse>,
@@ -667,10 +667,9 @@ async function uploadOlcrtcBinaryHandler(
     try {
       const fullBuffer = Buffer.concat(chunks);
       const tempPath = `/tmp/${targetBinary}.download`;
-      let targetPath = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
-      if (targetBinary === 'olcrtc') {
-        targetPath = config.OLCRTC_BINARY_PATH || '/usr/local/bin/olcrtc';
-      }
+      let targetPath = (targetBinary === 'olcrtc') 
+        ? (config.OLCRTC_BINARY_PATH || '/usr/local/bin/olcrtc')
+        : (config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager');
 
       await fs.mkdir(path.dirname(tempPath), { recursive: true });
       await fs.writeFile(tempPath, fullBuffer);
@@ -686,7 +685,7 @@ async function uploadOlcrtcBinaryHandler(
 
       if (process.env.NODE_ENV !== 'test') {
         try {
-          await execAsync(`systemctl restart olcrtc || true`);
+          await execAsync('systemctl restart olcrtc || true');
         } catch (err: any) {
           logger.warn({ err: err.message }, 'Failed to restart olcrtc service after binary upload');
         }
@@ -780,9 +779,10 @@ async function configureOlcrtcHandler(
     if (!enabled) {
       if (process.env.NODE_ENV !== 'test') {
         try {
-          await execAsync('systemctl disable --now olcrtc || true');
+          await execAsync('systemctl stop olcrtc || true');
+          await execAsync('systemctl disable olcrtc || true');
         } catch (err: any) {
-          logger.warn({ err: err.message }, 'Error disabling olcrtc service');
+          logger.warn({ err: err.message }, 'Error stopping/disabling olcrtc service');
         }
       }
       return callback(null, {
@@ -794,8 +794,15 @@ async function configureOlcrtcHandler(
     const servicePort = port || 8888;
     const managerBin = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
 
+    if (process.env.NODE_ENV !== 'test') {
+      const managerExists = await fs.stat(managerBin).then(() => true).catch(() => false);
+      if (!managerExists) {
+        logger.warn({ path: managerBin }, 'olcrtc-manager binary is missing when configuring service');
+      }
+    }
+
     const serviceContent = `[Unit]
-Description=OpenLibreCommunity WebRTC Service
+Description=OpenLibreCommunity WebRTC Manager Service
 After=network.target
 
 [Service]
@@ -817,11 +824,24 @@ WantedBy=multi-user.target
       await execAsync('systemctl daemon-reload');
       await execAsync('systemctl enable --now olcrtc');
 
+      // Открываем порт в UFW
+      if (await isUfwInstalled()) {
+        try {
+          await execAsync(`sudo ufw allow ${servicePort}`);
+          await execAsync('sudo ufw reload');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to configure UFW port for olcrtc service');
+        }
+      }
+
       if (user && password) {
+        // Поллинг готовности API
+        const authMeUrl = `http://127.0.0.1:${servicePort}/api/auth/me`;
         const setupUrl = `http://127.0.0.1:${servicePort}/api/auth/setup`;
-        for (let i = 0; i < 5; i++) {
+
+        for (let i = 0; i < 10; i++) {
           try {
-            await getJson(`http://127.0.0.1:${servicePort}/api/state`, 1000);
+            await getJson(authMeUrl, 1000);
             break;
           } catch {
             await new Promise((res) => setTimeout(res, 500));

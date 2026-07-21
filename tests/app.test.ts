@@ -18,7 +18,7 @@ const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
 
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
-process.env.PORT = '8087';
+process.env.PORT = '8088';
 process.env.HOST = '127.0.0.1';
 process.env.EGRESS_CONTROL_SECRET = 'test-secret-123';
 process.env.SINGBOX_CONFIG_PATH = tempConfigPath;
@@ -45,7 +45,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
   // Создаем нативный клиент для тестов
   const client = new EgressAgentService(
-    '127.0.0.1:8087',
+    '127.0.0.1:8088',
     grpc.credentials.createInsecure()
   );
 
