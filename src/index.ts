@@ -443,6 +443,13 @@ interface FirewallResponse {
   message: string;
 }
 
+interface SelfUpdatePayload {}
+
+interface SelfUpdateResponse {
+  success: boolean;
+  message: string;
+}
+
 /**
  * RPC Обработчик метода ApplyConfig
  */
@@ -961,6 +968,37 @@ async function manageFirewallHandler(
   }
 }
 
+/**
+ * RPC Обработчик SelfUpdate
+ */
+async function selfUpdateHandler(
+  call: ServerUnaryCall<SelfUpdatePayload, SelfUpdateResponse>,
+  callback: sendUnaryData<SelfUpdateResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized SelfUpdate request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  // 1. Отправляем успешный ответ клиенту до перезапуска службы
+  callback(null, {
+    success: true,
+    message: 'Self-update sequence initiated. Agent will pull code and restart in 1 second.'
+  });
+
+  // 2. Асинхронно запускаем процесс обновления с задержкой в 1 секунду
+  setTimeout(async () => {
+    try {
+      logger.info('Starting agent self-update sequence...');
+      const updateCmd = 'cd /opt/route-agent && git pull && npm ci && npm run build && systemctl restart route-agent';
+      await execAsync(updateCmd);
+    } catch (err: any) {
+      logger.error({ err: err.stderr || err.message }, 'Failed to execute self-update sequence');
+    }
+  }, 1000);
+}
+
 export let serverInstance: Server | null = null;
 
 export function startServer(): Promise<Server> {
@@ -973,7 +1011,8 @@ export function startServer(): Promise<Server> {
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       configureCaddy: configureCaddyHandler,
       configureOlcrtc: configureOlcrtcHandler,
-      manageFirewall: manageFirewallHandler
+      manageFirewall: manageFirewallHandler,
+      selfUpdate: selfUpdateHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

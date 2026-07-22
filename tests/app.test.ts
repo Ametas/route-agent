@@ -224,6 +224,30 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  await t.test('SelfUpdate should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.selfUpdate({}, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('SelfUpdate should initiate self-update sequence when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.selfUpdate({}, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      assert.ok(response.message.includes('Self-update sequence initiated'));
+      done();
+    });
+  });
+
   await t.test('WebRTC status check logic (mocking olcrtc-manager API)', async (t) => {
     const http = await import('http');
     

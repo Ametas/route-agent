@@ -23,6 +23,9 @@ service EgressAgentService {
 
   // Дистанционное управление правилами UFW фаервола
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
+
+  // Дистанционное самообновление кода агента из Git
+  rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
 }
 
 message ConfigPayload {
@@ -90,6 +93,13 @@ message FirewallPayload {
 }
 
 message FirewallResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message SelfUpdatePayload {}
+
+message SelfUpdateResponse {
   bool success = 1;
   string message = 2;
 }
