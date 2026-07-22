@@ -22,10 +22,13 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# 1. Остановка и отключение служб из автозагрузки
+# 1. Остановка и отключение всех управляемых служб из автозагрузки
 echo "🛑 Stopping and disabling systemd services..."
 systemctl stop route-agent || true
 systemctl disable route-agent || true
+
+systemctl stop sing-box || true
+systemctl disable sing-box || true
 
 systemctl stop olcrtc || true
 systemctl disable olcrtc || true
@@ -33,7 +36,7 @@ systemctl disable olcrtc || true
 systemctl stop caddy || true
 systemctl disable caddy || true
 
-# 2. Очистка правил фаервола UFW (Пакет UFW не удаляется)
+# 2. Очистка правил фаервола UFW и файла sudoers
 if command -v ufw &> /dev/null; then
   echo "🛡️ Cleaning up UFW firewall rules..."
   
@@ -47,25 +50,33 @@ if command -v ufw &> /dev/null; then
   ufw delete allow "$OLCRTC_PORT"/tcp || true
   ufw delete allow "$OLCRTC_PORT"/udp || true
 
-  echo "🔄 Reloading UFW rules (Ports 22 and 443 are left untouched)..."
-  ufw reload
+  echo "🔄 Reloading UFW rules..."
+  ufw reload || true
 else
   echo "⏭️ UFW is not active or installed. Skipping firewall rules cleanup..."
 fi
 
+rm -f /etc/sudoers.d/route-agent-ufw
+
 # 3. Удаление конфигурационных файлов systemd
 echo "📂 Purging systemd unit configurations..."
 rm -f /etc/systemd/system/route-agent.service
+rm -f /etc/systemd/system/sing-box.service
 rm -f /etc/systemd/system/olcrtc.service
 
 # Перезагружаем менеджер systemd, чтобы применить удаление юнитов
 systemctl daemon-reload
 
-# 4. Полная очистка рабочих папок и бинарников
-echo "🧹 Erasing binaries, repositories, and static decoy paths..."
+# 4. Полная очистка рабочих папок, бинарников и конфигураций
+echo "🧹 Erasing binaries, repositories, config files, and static decoy paths..."
 rm -rf /opt/route-agent
-rm -f /usr/local/bin/olcrtc
+rm -rf /etc/sing-box
+rm -rf /etc/caddy
 rm -rf /var/www/decoy
+rm -f /usr/local/bin/sing-box
+rm -f /usr/local/bin/olcrtc
+rm -f /usr/local/bin/olcrtc-manager
+rm -f /tmp/sing-box.download /tmp/olcrtc.download /tmp/olcrtc-manager.download
 
 # 5. Удаление Caddy и его ключей (если Caddy был установлен)
 if command -v caddy &> /dev/null; then
@@ -77,5 +88,4 @@ if command -v caddy &> /dev/null; then
 fi
 
 echo "---"
-echo "🎉 Uninstallation complete! Your VPS is clean of Route Agent, Caddy Decoy, and WebRTC layers."
-echo "🛡️ UFW ports $PORT and $OLCRTC_PORT are successfully closed. Infrastructure ports 22 and 443 remain open."
+echo "🎉 Uninstallation complete! Your VPS is clean of Route Agent, sing-box, Caddy, and Olcrtc WebRTC components."

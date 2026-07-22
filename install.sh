@@ -53,7 +53,8 @@ EOF
 chmod 0440 /etc/sudoers.d/route-agent-ufw
 
 # 3. Базовая заготовка для службы sing-box (без бинарника, бинарник зальет оркестратор)
-mkdir -p /etc/sing-box /var/www/decoy
+mkdir -p /etc/sing-box /var/www/decoy /var/lib/caddy
+chmod 755 /var/lib/caddy || true
 echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
 
 cat << EOT > /etc/systemd/system/sing-box.service

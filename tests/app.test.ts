@@ -119,12 +119,16 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
   await t.test('UploadSingboxBinary should upload binary chunks and update target binary file', (t, done) => {
     const call = client.uploadSingboxBinary(async (err: any, response: any) => {
-      assert.ifError(err);
-      assert.strictEqual(response.success, true);
-      assert.ok(response.message.includes('1.12.0'));
-      const exists = await fs.stat(tempBinaryPath).then(() => true).catch(() => false);
-      assert.strictEqual(exists, true);
-      done();
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('1.12.0'));
+        const exists = await fs.stat(tempBinaryPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, true);
+        done();
+      } catch (e) {
+        done(e);
+      }
     });
     call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('binary_chunk_1\n'), version: '1.12.0', isFinal: false });
     call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('binary_chunk_2\n'), version: '1.12.0', isFinal: true });
@@ -133,12 +137,16 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
   await t.test('UploadOlcrtcBinary should upload olcrtc / olcrtc-manager binaries', (t, done) => {
     const call = client.uploadOlcrtcBinary(async (err: any, response: any) => {
-      assert.ifError(err);
-      assert.strictEqual(response.success, true);
-      assert.ok(response.message.includes('olcrtc-manager'));
-      const exists = await fs.stat(tempOlcrtcManagerPath).then(() => true).catch(() => false);
-      assert.strictEqual(exists, true);
-      done();
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('olcrtc-manager'));
+        const exists = await fs.stat(tempOlcrtcManagerPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, true);
+        done();
+      } catch (e) {
+        done(e);
+      }
     });
     call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('olcrtc_mgr_chunk'), version: '1.0.0', targetBinary: 'olcrtc-manager', isFinal: true });
     call.end();
@@ -160,11 +168,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     validMetadata.add('x-orchestrator-secret', 'test-secret-123');
 
     client.configureCaddy({ domain: 'decoy.example.com', decoyPort: 8443, htmlContent: '<h1>Decoy Site</h1>' }, validMetadata, async (err: any, response: any) => {
-      assert.ifError(err);
-      assert.strictEqual(response.success, true);
-      const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
-      assert.ok(caddyContent.includes('decoy.example.com:8443'));
-      done();
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
+        assert.ok(caddyContent.includes('decoy.example.com:8443'));
+        done();
+      } catch (e) {
+        done(e);
+      }
     });
   });
 

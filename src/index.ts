@@ -188,12 +188,27 @@ async function getSingBoxVersion(): Promise<string> {
 }
 
 /**
+ * Гарантирует права на чтение сертификатов Caddy для ядра sing-box
+ */
+async function fixCaddyPermissions(): Promise<void> {
+  try {
+    const caddyDirExists = await fs.stat('/var/lib/caddy').then(() => true).catch(() => false);
+    if (caddyDirExists) {
+      await execAsync('chmod -R 755 /var/lib/caddy || true');
+    }
+  } catch (err: any) {
+    logger.warn({ err: err.message }, 'Failed to adjust Caddy certificates permissions');
+  }
+}
+
+/**
  * Вспомогательный метод локальной валидации синтаксиса sing-box перед его применением
  */
 async function validateSingBoxConfig(configObj: object): Promise<{ valid: boolean; error?: string }> {
   if (process.env.NODE_ENV === 'test') {
     return { valid: true };
   }
+  await fixCaddyPermissions();
   const targetDir = path.dirname(config.SINGBOX_CONFIG_PATH);
   const checkFilePath = path.join(targetDir, `.config.check_${Date.now()}.json`);
   const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
@@ -606,7 +621,7 @@ async function uploadSingboxBinaryHandler(
 
       return callback(null, {
         success: true,
-        message: 'sing-box binary successfully updated and restarted'
+        message: `sing-box binary version ${targetVersion} successfully updated and restarted`
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -737,6 +752,8 @@ async function configureCaddyHandler(
     const caddyDir = path.dirname(caddyfilePath);
     await fs.mkdir(caddyDir, { recursive: true });
     await fs.writeFile(caddyfilePath, caddyfileContent, 'utf-8');
+
+    await fixCaddyPermissions();
 
     if (process.env.NODE_ENV !== 'test') {
       try {
