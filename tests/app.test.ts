@@ -410,4 +410,74 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       stream.on('error', () => {});
     });
   });
+
+  await t.test('mTLS Server & Client Verification', async (t) => {
+    const { config } = await import('../src/config.js');
+
+    const originalCa = config.CA_CERT_PATH;
+    const originalCert = config.AGENT_CERT_PATH;
+    const originalKey = config.AGENT_KEY_PATH;
+    const originalPort = config.PORT;
+
+    const certsDir = path.join(__dirname, 'fixtures', 'certs');
+    (config as any).CA_CERT_PATH = path.join(certsDir, 'ca.crt');
+    (config as any).AGENT_CERT_PATH = path.join(certsDir, 'agent.crt');
+    (config as any).AGENT_KEY_PATH = path.join(certsDir, 'agent.key');
+    (config as any).PORT = 8083;
+
+    const mtlsServer = await startServer();
+
+    const caCert = await fs.readFile(path.join(certsDir, 'ca.crt'));
+    const clientCert = await fs.readFile(path.join(certsDir, 'client.crt'));
+    const clientKey = await fs.readFile(path.join(certsDir, 'client.key'));
+    const untrustedCert = await fs.readFile(path.join(certsDir, 'untrusted.crt'));
+    const untrustedKey = await fs.readFile(path.join(certsDir, 'untrusted.key'));
+
+    t.after(() => {
+      mtlsServer.forceShutdown();
+      (config as any).CA_CERT_PATH = originalCa;
+      (config as any).AGENT_CERT_PATH = originalCert;
+      (config as any).AGENT_KEY_PATH = originalKey;
+      (config as any).PORT = originalPort;
+    });
+
+    await t.test('Valid client mTLS certificate should successfully communicate with agent', (t, done) => {
+      const sslCreds = grpc.credentials.createSsl(caCert, clientKey, clientCert);
+      const mtlsClient = new EgressAgentService('127.0.0.1:8083', sslCreds);
+
+      const validMetadata = new grpc.Metadata();
+      validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+      mtlsClient.applyConfig({ configJson: JSON.stringify({ log: { level: 'info' } }) }, validMetadata, (err: any, response: any) => {
+        try {
+          assert.ifError(err);
+          assert.strictEqual(response.success, true);
+          mtlsClient.close();
+          done();
+        } catch (e) {
+          mtlsClient.close();
+          done(e);
+        }
+      });
+    });
+
+    await t.test('Untrusted client mTLS certificate should be rejected during TLS handshake', (t, done) => {
+      const badSslCreds = grpc.credentials.createSsl(caCert, untrustedKey, untrustedCert);
+      const badMtlsClient = new EgressAgentService('127.0.0.1:8083', badSslCreds);
+
+      const validMetadata = new grpc.Metadata();
+      validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+      badMtlsClient.applyConfig({ configJson: '{}' }, validMetadata, (err: any) => {
+        try {
+          assert.ok(err, 'Expected gRPC call to fail with TLS handshake error');
+          badMtlsClient.close();
+          done();
+        } catch (e) {
+          badMtlsClient.close();
+          done(e);
+        }
+      });
+    });
+  });
 });

@@ -77,6 +77,7 @@ systemctl daemon-reload
 # 4. Полная очистка рабочих папок, бинарников и конфигураций
 echo "🧹 Erasing binaries, repositories, config files, and static decoy paths..."
 rm -rf /opt/route-agent
+rm -rf /etc/route-agent
 rm -rf /etc/sing-box
 rm -rf /etc/caddy
 rm -rf /etc/amnezia/amneziawg

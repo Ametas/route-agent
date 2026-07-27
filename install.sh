@@ -96,12 +96,46 @@ cd "$AGENT_DIR"
 npm ci
 npm run build
 
+# Распаковка сертификатов mTLS (если передана зашифрованная строка в Base64)
+CERTS_DIR="/etc/route-agent/certs"
+mkdir -p "$CERTS_DIR"
+
+IS_MTLS_PACKAGE=0
+if command -v node &> /dev/null; then
+  node -e '
+    try {
+      const raw = process.argv[1];
+      const decoded = Buffer.from(raw, "base64").toString("utf-8");
+      const json = JSON.parse(decoded);
+      if (json && json.secret && json.ca && json.cert && json.key) {
+        const fs = require("fs");
+        fs.writeFileSync("/etc/route-agent/certs/ca.crt", json.ca);
+        fs.writeFileSync("/etc/route-agent/certs/agent.crt", json.cert);
+        fs.writeFileSync("/etc/route-agent/certs/agent.key", json.key);
+        fs.chmodSync("/etc/route-agent/certs/agent.key", 0o600);
+        process.stdout.write(json.secret);
+        process.exit(0);
+      }
+    } catch {}
+    process.exit(1);
+  ' "$SECRET" > /tmp/route-agent-secret.tmp 2>/dev/null && IS_MTLS_PACKAGE=1 || true
+
+  if [ "$IS_MTLS_PACKAGE" -eq 1 ]; then
+    echo "🔒 Unpacked mTLS certificates and secret into /etc/route-agent/certs/"
+    SECRET=$(cat /tmp/route-agent-secret.tmp)
+    rm -f /tmp/route-agent-secret.tmp
+  fi
+fi
+
 cat << EOT > "$AGENT_DIR/.env"
 PORT=$PORT
 HOST=0.0.0.0
 EGRESS_CONTROL_SECRET=$SECRET
 SINGBOX_CONFIG_PATH=/etc/sing-box/config.json
 RELOAD_COMMAND=systemctl reload sing-box
+CA_CERT_PATH=/etc/route-agent/certs/ca.crt
+AGENT_CERT_PATH=/etc/route-agent/certs/agent.crt
+AGENT_KEY_PATH=/etc/route-agent/certs/agent.key
 EOT
 chmod 600 "$AGENT_DIR/.env"
 
