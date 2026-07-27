@@ -36,10 +36,17 @@ systemctl disable olcrtc || true
 systemctl stop caddy || true
 systemctl disable caddy || true
 
+systemctl stop awg-quick@awg0 || true
+systemctl disable awg-quick@awg0 || true
+
 # 2. Очистка правил фаервола UFW и файла sudoers
 if command -v ufw &> /dev/null; then
   echo "🛡️ Cleaning up UFW firewall rules..."
   
+  echo "🔒 Closing 443 tcp/udp..."
+  ufw delete allow 443/tcp || true
+  ufw delete allow 443/udp || true
+
   echo "🔒 Closing gRPC Agent port $PORT..."
   ufw delete allow "$PORT" || true
   ufw delete allow "$PORT"/tcp || true
@@ -72,6 +79,7 @@ echo "🧹 Erasing binaries, repositories, config files, and static decoy paths.
 rm -rf /opt/route-agent
 rm -rf /etc/sing-box
 rm -rf /etc/caddy
+rm -rf /etc/amnezia/amneziawg
 rm -rf /var/www/decoy
 rm -f /usr/local/bin/sing-box
 rm -f /usr/local/bin/olcrtc

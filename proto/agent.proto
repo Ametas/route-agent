@@ -21,6 +21,9 @@ service EgressAgentService {
   // Дистанционная установка и управление службой olcrtc-manager (WebRTC)
   rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
 
+  // Дистанционная настройка L3-интерфейса AmneziaWG 3.0 (AWG3)
+  rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
+
   // Дистанционное управление правилами UFW фаервола
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
 
@@ -49,6 +52,7 @@ message TelemetryResponse {
   int64 timestamp = 5;
   string webrtc_status = 6;
   string singbox_version = 7;
+  uint32 awg_active_peers = 8;
 }
 
 message BinaryChunk {
@@ -83,6 +87,43 @@ message OlcrtcConfigPayload {
 }
 
 message OlcrtcConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message AwgPeer {
+  string public_key = 1;
+  string preshared_key = 2;
+  string allowed_ips = 3;
+}
+
+message AwgConfigPayload {
+  bool enabled = 1;
+  uint32 port = 2;
+  string server_private_key = 3;
+  string server_public_key = 4;
+  string address_v4 = 5;
+  string address_v6 = 6;
+
+  // AWG3 параметры обфускации
+  uint32 jc = 7;
+  uint32 jmin = 8;
+  uint32 jmax = 9;
+  uint32 s1 = 10;
+  uint32 s2 = 11;
+  uint32 s3 = 12;
+  uint32 s4 = 13;
+  uint32 h1 = 14;
+  uint32 h2 = 15;
+  uint32 h3 = 16;
+  uint32 h4 = 17;
+  string header_protection_key = 18;
+
+  repeated AwgPeer peers = 19;
+  string ipv6_mode = 20; // "dual-stack" | "ipv4-only" | "trap-ipv6"
+}
+
+message AwgConfigResponse {
   bool success = 1;
   string message = 2;
 }

@@ -188,6 +188,44 @@ async function getSingBoxVersion(): Promise<string> {
 }
 
 /**
+ * Опрос состояния L3-интерфейса awg0 и подсчёт числа активных пиров (хэндшейк < 3 мин назад)
+ */
+async function getAwgActivePeersCount(): Promise<number> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_PEERS === undefined) {
+    return 0;
+  }
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_PEERS !== undefined) {
+    return parseInt(process.env.TEST_AWG_PEERS, 10) || 0;
+  }
+
+  try {
+    const { stdout } = await execAsync('awg show awg0 dump');
+    const lines = stdout.trim().split('\n');
+    if (lines.length <= 1) return 0;
+
+    const now = Math.floor(Date.now() / 1000);
+    let activePeers = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length >= 5) {
+        const latestHandshake = parseInt(parts[4], 10);
+        if (!isNaN(latestHandshake) && latestHandshake > 0 && (now - latestHandshake) <= 180) {
+          activePeers++;
+        }
+      }
+    }
+    return activePeers;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.debug({ err: msg }, 'Failed to query awg0 peer status or interface not active');
+    return 0;
+  }
+}
+
+/**
  * Гарантирует права на чтение сертификатов Caddy для ядра sing-box
  */
 async function fixCaddyPermissions(): Promise<void> {
@@ -395,6 +433,7 @@ interface TelemetryResponse {
   timestamp: number;
   webrtcStatus: string;
   singboxVersion: string;
+  awgActivePeers: number;
 }
 
 interface BinaryChunk {
@@ -429,6 +468,43 @@ interface OlcrtcConfigPayload {
 }
 
 interface OlcrtcConfigResponse {
+  success: boolean;
+  message: string;
+}
+
+interface AwgPeer {
+  publicKey: string;
+  presharedKey?: string;
+  allowedIps: string;
+}
+
+interface AwgConfigPayload {
+  enabled: boolean;
+  port: number;
+  serverPrivateKey: string;
+  serverPublicKey: string;
+  addressV4: string;
+  addressV6: string;
+
+  // AWG3 параметры обфускации
+  jc: number;
+  jmin: number;
+  jmax: number;
+  s1: number;
+  s2: number;
+  s3: number;
+  s4: number;
+  h1: number;
+  h2: number;
+  h3: number;
+  h4: number;
+  headerProtectionKey: string;
+
+  peers: AwgPeer[];
+  ipv6Mode: string;
+}
+
+interface AwgConfigResponse {
   success: boolean;
   message: string;
 }
@@ -516,14 +592,17 @@ async function streamTelemetryHandler(
   }
 
   const telemetryInterval = setInterval(async () => {
-    const [cpu, mem, conns, webrtc, sbVersion] = await Promise.all([
+    const [cpu, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
       getCpuUsage(),
       getMemoryUsage(),
       getConnectionCount(),
       getWebRtcStatus(),
-      getSingBoxVersion()
+      getSingBoxVersion(),
+      getAwgActivePeersCount()
     ]);
     
+    logger.info({ awgActivePeers: awgPeers }, 'AWG active peers telemetry fetched');
+
     call.write({
       cpuUsage: cpu,
       memUsage: mem,
@@ -531,7 +610,8 @@ async function streamTelemetryHandler(
       systemLogs: logBuffer,
       timestamp: Date.now(),
       webrtcStatus: webrtc,
-      singboxVersion: sbVersion
+      singboxVersion: sbVersion,
+      awgActivePeers: awgPeers
     });
     
     logBuffer = ''; 
@@ -907,6 +987,177 @@ WantedBy=multi-user.target
 }
 
 /**
+ * RPC Обработчик ConfigureAwg (дистанционная настройка и управление L3-интерфейсом AmneziaWG 3.0)
+ */
+async function configureAwgHandler(
+  call: ServerUnaryCall<AwgConfigPayload, AwgConfigResponse>,
+  callback: sendUnaryData<AwgConfigResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized ConfigureAwg request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const {
+    enabled,
+    port,
+    serverPrivateKey,
+    serverPublicKey,
+    addressV4,
+    addressV6,
+    jc,
+    jmin,
+    jmax,
+    s1,
+    s2,
+    s3,
+    s4,
+    h1,
+    h2,
+    h3,
+    h4,
+    headerProtectionKey,
+    peers,
+    ipv6Mode
+  } = call.request;
+
+  try {
+    const awgConfigPath = config.AWG_CONFIG_PATH || '/etc/amnezia/amneziawg/awg0.conf';
+
+    if (!enabled) {
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          await execAsync('awg-quick down awg0 || systemctl stop awg-quick@awg0 || true');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Error stopping AmneziaWG interface');
+        }
+
+        if (port && (await isUfwInstalled())) {
+          try {
+            await execAsync(`sudo ufw delete allow ${port}/udp || true`);
+            await execAsync('sudo ufw reload || true');
+          } catch (err: any) {
+            logger.warn({ err: err.message }, 'Error closing UFW port for AmneziaWG');
+          }
+        }
+      }
+
+      return callback(null, {
+        success: true,
+        message: 'AmneziaWG (AWG3) service successfully disabled and stopped.'
+      });
+    }
+
+    // 1. Системные настройки (Sysctl)
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await execAsync('sysctl -w net.ipv4.ip_forward=1');
+        if (ipv6Mode === 'dual-stack' || ipv6Mode === 'trap-ipv6') {
+          await execAsync('sysctl -w net.ipv6.conf.all.forwarding=1');
+        }
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Failed to set sysctl packet forwarding');
+      }
+    }
+
+    // 2. Генерация конфигурации /etc/amnezia/amneziawg/awg0.conf
+    const addresses: string[] = [];
+    if (addressV4) addresses.push(addressV4);
+    if (addressV6 && ipv6Mode !== 'ipv4-only') addresses.push(addressV6);
+
+    let configContent = '[Interface]\n';
+    if (serverPrivateKey) configContent += `PrivateKey = ${serverPrivateKey}\n`;
+    if (port) configContent += `ListenPort = ${port}\n`;
+    if (addresses.length > 0) configContent += `Address = ${addresses.join(', ')}\n`;
+
+    if (jc !== undefined && jc !== null) configContent += `Jc = ${jc}\n`;
+    if (jmin !== undefined && jmin !== null) configContent += `Jmin = ${jmin}\n`;
+    if (jmax !== undefined && jmax !== null) configContent += `Jmax = ${jmax}\n`;
+    if (s1 !== undefined && s1 !== null) configContent += `S1 = ${s1}\n`;
+    if (s2 !== undefined && s2 !== null) configContent += `S2 = ${s2}\n`;
+    if (s3 !== undefined && s3 !== null) configContent += `S3 = ${s3}\n`;
+    if (s4 !== undefined && s4 !== null) configContent += `S4 = ${s4}\n`;
+    if (h1 !== undefined && h1 !== null) configContent += `H1 = ${h1}\n`;
+    if (h2 !== undefined && h2 !== null) configContent += `H2 = ${h2}\n`;
+    if (h3 !== undefined && h3 !== null) configContent += `H3 = ${h3}\n`;
+    if (h4 !== undefined && h4 !== null) configContent += `H4 = ${h4}\n`;
+    if (headerProtectionKey) configContent += `HeaderProtectionKey = ${headerProtectionKey}\n`;
+
+    if (Array.isArray(peers)) {
+      for (const peer of peers) {
+        if (!peer || !peer.publicKey) continue;
+        configContent += '\n[Peer]\n';
+        configContent += `PublicKey = ${peer.publicKey}\n`;
+        if (peer.presharedKey) configContent += `PresharedKey = ${peer.presharedKey}\n`;
+        if (peer.allowedIps) configContent += `AllowedIPs = ${peer.allowedIps}\n`;
+      }
+    }
+
+    await fs.mkdir(path.dirname(awgConfigPath), { recursive: true });
+    await fs.writeFile(awgConfigPath, configContent, 'utf-8');
+
+    if (process.env.NODE_ENV !== 'test') {
+      // 3. Применение без разрыва сессий (Hot Reload)
+      let interfaceExists = false;
+      try {
+        await execAsync('ip link show awg0');
+        interfaceExists = true;
+      } catch {
+        interfaceExists = false;
+      }
+
+      if (interfaceExists) {
+        try {
+          await execAsync(`bash -c "awg syncconf awg0 <(awg-quick strip ${awgConfigPath})"` );
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed hot reload via awg syncconf, attempting awg-quick restart');
+          await execAsync(`awg-quick down awg0 || true && awg-quick up ${awgConfigPath}`);
+        }
+      } else {
+        await execAsync(`awg-quick up ${awgConfigPath}`);
+      }
+
+      // 4. Настройка NAT и Маршрутизации (iptables)
+      try {
+        await execAsync('iptables -C FORWARD -i awg0 -j ACCEPT || iptables -A FORWARD -i awg0 -j ACCEPT');
+        await execAsync("iptables -t nat -C POSTROUTING -o $(ip route show default | awk '/default/ {print $5}') -j MASQUERADE || iptables -t nat -A POSTROUTING -o $(ip route show default | awk '/default/ {print $5}') -j MASQUERADE");
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Failed to configure iptables NAT rules for awg0');
+      }
+
+      // 5. Защита от утечек IPv6 (trap-ipv6)
+      if (ipv6Mode === 'trap-ipv6') {
+        try {
+          await execAsync('ip6tables -C FORWARD -i awg0 -j REJECT --reject-with icmp6-adm-prohibited || ip6tables -A FORWARD -i awg0 -j REJECT --reject-with icmp6-adm-prohibited');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to configure ip6tables trap-ipv6 rules for awg0');
+        }
+      }
+
+      // 6. Открытие фаервола
+      if (port && (await isUfwInstalled())) {
+        try {
+          await execAsync(`sudo ufw allow ${port}/udp`);
+          await execAsync('sudo ufw reload');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to configure UFW port for AmneziaWG service');
+        }
+      }
+    }
+
+    return callback(null, {
+      success: true,
+      message: `AmneziaWG (AWG3) service configured and enabled on port ${port || 51820}.`
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.error({ err: msg }, 'Failed to configure AmneziaWG service');
+    return callback(null, { success: false, message: `AmneziaWG configuration error: ${msg}` });
+  }
+}
+
+/**
  * RPC Обработчик ManageFirewall
  */
 async function manageFirewallHandler(
@@ -1011,6 +1262,7 @@ export function startServer(): Promise<Server> {
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       configureCaddy: configureCaddyHandler,
       configureOlcrtc: configureOlcrtcHandler,
+      configureAwg: configureAwgHandler,
       manageFirewall: manageFirewallHandler,
       selfUpdate: selfUpdateHandler
     };

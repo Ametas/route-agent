@@ -14,6 +14,8 @@ const configSchema = z.object({
   CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy'),
   OLCRTC_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc'),
   OLCRTC_MANAGER_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-manager'),
+  AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awg0.conf'),
+  AWG_RELOAD_COMMAND: z.string().default('systemctl restart awg-quick@awg0'),
 });
 
 const parsed = configSchema.safeParse(process.env);

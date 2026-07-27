@@ -32,6 +32,7 @@ fi
 echo "📦 Installing system packages and Caddy repository..."
 apt-get update
 apt-get install -y iptables iproute2 ufw git curl unzip debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
+apt-get install -y amneziawg amneziawg-tools wireguard-tools || true
 
 if ! command -v caddy &> /dev/null; then
   echo "📥 Adding Caddy official apt repository..."
@@ -43,8 +44,9 @@ fi
 
 # 2. Настройка UFW
 ufw allow 22/tcp || true
-ufw allow 443 || true
-ufw allow "$PORT" || true
+ufw allow 443/tcp || true
+ufw allow 443/udp || true
+ufw allow "$PORT"/tcp || true
 ufw --force enable || true
 
 cat > /etc/sudoers.d/route-agent-ufw <<'EOF'
@@ -52,8 +54,8 @@ ALL ALL=(ALL) NOPASSWD: /usr/sbin/ufw
 EOF
 chmod 0440 /etc/sudoers.d/route-agent-ufw
 
-# 3. Базовая заготовка для службы sing-box (без бинарника, бинарник зальет оркестратор)
-mkdir -p /etc/sing-box /var/www/decoy /var/lib/caddy
+# 3. Базовая заготовка для службы sing-box и AmneziaWG
+mkdir -p /etc/sing-box /var/www/decoy /var/lib/caddy /etc/amnezia/amneziawg
 chmod 755 /var/lib/caddy || true
 echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
 

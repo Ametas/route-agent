@@ -15,6 +15,7 @@ const tempBinaryPath = path.join(tempDir, 'sing-box');
 const tempCaddyfilePath = path.join(tempDir, 'Caddyfile');
 const tempOlcrtcPath = path.join(tempDir, 'olcrtc');
 const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
+const tempAwgPath = path.join(tempDir, 'awg0.conf');
 
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
@@ -26,6 +27,7 @@ process.env.SINGBOX_BINARY_PATH = tempBinaryPath;
 process.env.CADDYFILE_PATH = tempCaddyfilePath;
 process.env.OLCRTC_BINARY_PATH = tempOlcrtcPath;
 process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
+process.env.AWG_CONFIG_PATH = tempAwgPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -87,8 +89,10 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       try {
         assert.ok(data.hasOwnProperty('webrtcStatus'));
         assert.ok(data.hasOwnProperty('singboxVersion'));
+        assert.ok(data.hasOwnProperty('awgActivePeers'));
         assert.strictEqual(data.webrtcStatus, 'nominal');
         assert.strictEqual(typeof data.singboxVersion, 'string');
+        assert.strictEqual(typeof data.awgActivePeers, 'number');
         assert.strictEqual(typeof data.cpuUsage, 'number');
         assert.strictEqual(typeof data.memUsage, 'number');
         assert.strictEqual(typeof data.activeConnections, 'number');
@@ -198,6 +202,87 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     client.configureOlcrtc({ enabled: true, user: 'admin', password: 'pass', port: 8888 }, validMetadata, (err: any, response: any) => {
       assert.ifError(err);
       assert.strictEqual(response.success, true);
+      done();
+    });
+  });
+
+  await t.test('ConfigureAwg should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.configureAwg({ enabled: true, port: 51820 }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('ConfigureAwg should write AWG3 config and return success when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const payload = {
+      enabled: true,
+      port: 51820,
+      serverPrivateKey: 'privkey123',
+      serverPublicKey: 'pubkey123',
+      addressV4: '10.66.66.1/24',
+      addressV6: 'fd42:42:42::1/64',
+      jc: 4,
+      jmin: 40,
+      jmax: 70,
+      s1: 15,
+      s2: 25,
+      s3: 35,
+      s4: 45,
+      h1: 101,
+      h2: 202,
+      h3: 303,
+      h4: 404,
+      headerProtectionKey: 'protkey999',
+      peers: [
+        {
+          publicKey: 'peerpubkey1',
+          presharedKey: 'psk1',
+          allowedIps: '10.66.66.2/32'
+        }
+      ],
+      ipv6Mode: 'dual-stack'
+    };
+
+    client.configureAwg(payload, validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        const awgContent = await fs.readFile(tempAwgPath, 'utf-8');
+        assert.ok(awgContent.includes('PrivateKey = privkey123'));
+        assert.ok(awgContent.includes('ListenPort = 51820'));
+        assert.ok(awgContent.includes('Address = 10.66.66.1/24, fd42:42:42::1/64'));
+        assert.ok(awgContent.includes('Jc = 4'));
+        assert.ok(awgContent.includes('Jmin = 40'));
+        assert.ok(awgContent.includes('Jmax = 70'));
+        assert.ok(awgContent.includes('S1 = 15'));
+        assert.ok(awgContent.includes('H1 = 101'));
+        assert.ok(awgContent.includes('HeaderProtectionKey = protkey999'));
+        assert.ok(awgContent.includes('PublicKey = peerpubkey1'));
+        assert.ok(awgContent.includes('PresharedKey = psk1'));
+        assert.ok(awgContent.includes('AllowedIPs = 10.66.66.2/32'));
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('ConfigureAwg should return success when disabling service', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.configureAwg({ enabled: false, port: 51820 }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      assert.ok(response.message.includes('disabled and stopped'));
       done();
     });
   });
