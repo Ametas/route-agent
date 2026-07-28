@@ -1,4 +1,4 @@
-import { ServerWritableStream } from '@grpc/grpc-js';
+import { ServerWritableStream, ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import { spawn } from 'child_process';
 import pino from 'pino';
 import { authenticateCall } from '../middleware/auth.js';
@@ -117,4 +117,62 @@ export async function streamTelemetryHandler(
   // Immediate initial push, then stream every 2s
   await sendTelemetryTick();
   telemetryInterval = setInterval(sendTelemetryTick, 2000);
+}
+
+/**
+ * RPC Обработчик Unary метода GetTelemetry
+ */
+export async function getTelemetryHandler(
+  call: ServerUnaryCall<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  if (!authenticateCall(call)) {
+    logger.warn('Unauthorized GetTelemetry Unary request blocked');
+    return callback(null, {
+      cpuUsage: 0,
+      memUsage: 0,
+      activeConnections: 0,
+      systemLogs: 'Error: Unauthorized secret token mismatch',
+      timestamp: Date.now(),
+      webrtcStatus: 'unauthorized',
+      singboxVersion: 'unknown',
+      awgActivePeers: 0
+    });
+  }
+
+  try {
+    let streamCpuStats: CpuStats = { idle: 0, total: 0 };
+    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
+      getCpuUsage(streamCpuStats),
+      getMemoryUsage(),
+      getConnectionCount(),
+      getWebRtcStatus(),
+      getSingBoxVersionCached(),
+      getAwgActivePeersCount()
+    ]);
+
+    return callback(null, {
+      cpuUsage,
+      memUsage: mem,
+      activeConnections: conns,
+      systemLogs: 'OK',
+      timestamp: Date.now(),
+      webrtcStatus: webrtc,
+      singboxVersion: sbVersion,
+      awgActivePeers: awgPeers
+    });
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg }, 'Failed to process GetTelemetry Unary request');
+    return callback(null, {
+      cpuUsage: 0,
+      memUsage: 0,
+      activeConnections: 0,
+      systemLogs: `Internal Error: ${msg}`,
+      timestamp: Date.now(),
+      webrtcStatus: 'error',
+      singboxVersion: 'error',
+      awgActivePeers: 0
+    });
+  }
 }

@@ -113,6 +113,22 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  await t.test('GetTelemetry should return instant telemetry frame via Unary RPC', (t, done) => {
+    client.getTelemetry({ orchestratorSecret: 'test-secret-123' }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.ok(response.hasOwnProperty('webrtcStatus'));
+      assert.ok(response.hasOwnProperty('singboxVersion'));
+      assert.ok(response.hasOwnProperty('awgActivePeers'));
+      assert.strictEqual(typeof response.singboxVersion, 'string');
+      assert.strictEqual(typeof response.awgActivePeers, 'number');
+      assert.strictEqual(typeof response.cpuUsage, 'number');
+      assert.strictEqual(typeof response.memUsage, 'number');
+      assert.strictEqual(typeof response.activeConnections, 'number');
+      assert.strictEqual(typeof response.systemLogs, 'string');
+      done();
+    });
+  });
+
   await t.test('UploadSingboxBinary should block stream with invalid secret', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'invalid_secret');

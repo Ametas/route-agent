@@ -11,7 +11,7 @@ import pino from 'pino';
 import { config } from './config.js';
 import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configureOlcrtcHandler } from './services/config.service.js';
 import { uploadSingboxBinaryHandler, uploadOlcrtcBinaryHandler, upgradeSingboxHandler } from './services/binary.service.js';
-import { streamTelemetryHandler } from './services/telemetry.service.js';
+import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
 import { selfUpdateHandler } from './services/system.service.js';
 
@@ -79,6 +79,7 @@ export async function startServer(): Promise<Server> {
     const serviceImplementation: UntypedServiceImplementation = {
       applyConfig: applyConfigHandler,
       streamTelemetry: streamTelemetryHandler,
+      getTelemetry: getTelemetryHandler,
       upgradeSingbox: upgradeSingboxHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,

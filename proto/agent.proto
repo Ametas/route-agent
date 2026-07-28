@@ -5,6 +5,7 @@ package agent;
 service EgressAgentService {
   rpc ApplyConfig (ConfigPayload) returns (ConfigResponse);
   rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
+  rpc GetTelemetry (TelemetryRequest) returns (TelemetryResponse);
   rpc UpgradeSingbox (UpgradePayload) returns (UpgradeResponse);
   rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
