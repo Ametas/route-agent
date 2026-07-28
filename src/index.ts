@@ -291,16 +291,30 @@ async function validateSingBoxConfig(configObj: object): Promise<{ valid: boolea
 async function atomicApplyAndReload(configObj: object): Promise<void> {
   const targetDir = path.dirname(config.SINGBOX_CONFIG_PATH);
   const tempFilePath = path.join(targetDir, `.config.${Date.now()}.tmp`);
+  const backupFilePath = `${config.SINGBOX_CONFIG_PATH}.bak`;
 
-  // Атомарная подмена через временный файл
+  // 1. Сохраняем бэкап текущей конфигурации при её наличии
+  const configExists = await fs.stat(config.SINGBOX_CONFIG_PATH).then(() => true).catch(() => false);
+  if (configExists) {
+    await fs.copyFile(config.SINGBOX_CONFIG_PATH, backupFilePath).catch(() => {});
+  }
+
+  // 2. Атомарная подмена через временный файл
   await fs.writeFile(tempFilePath, JSON.stringify(configObj, null, 2), 'utf-8');
   await fs.rename(tempFilePath, config.SINGBOX_CONFIG_PATH);
 
-  // Мягкий reload сервиса
+  // 3. Мягкий reload сервиса с откатом при ошибке
   if (process.env.NODE_ENV !== 'test' || process.env.RELOAD_COMMAND) {
-    const { stdout, stderr } = await execAsync(config.RELOAD_COMMAND);
-    if (stdout) logger.info({ stdout }, 'Reload command stdout');
-    if (stderr) logger.warn({ stderr }, 'Reload command stderr');
+    try {
+      const { stdout, stderr } = await execAsync(config.RELOAD_COMMAND);
+      if (stdout) logger.info({ stdout }, 'Reload command stdout');
+      if (stderr) logger.warn({ stderr }, 'Reload command stderr');
+    } catch (err) {
+      if (configExists) {
+        await fs.copyFile(backupFilePath, config.SINGBOX_CONFIG_PATH).catch(() => {});
+      }
+      throw err;
+    }
   }
 }
 
@@ -1112,8 +1126,15 @@ async function configureCaddyHandler(
     }
 
     const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
+    const caddyBackupPath = `${caddyfilePath}.bak`;
     const caddyDir = path.dirname(caddyfilePath);
     await fs.mkdir(caddyDir, { recursive: true });
+
+    const caddyfileExists = await fs.stat(caddyfilePath).then(() => true).catch(() => false);
+    if (caddyfileExists) {
+      await fs.copyFile(caddyfilePath, caddyBackupPath).catch(() => {});
+    }
+
     await fs.writeFile(caddyfilePath, caddyfileContent, 'utf-8');
 
     await fixCaddyPermissions();
@@ -1125,8 +1146,12 @@ async function configureCaddyHandler(
         if (stdout) logger.info({ stdout }, 'Caddy reload stdout');
         if (stderr) logger.warn({ stderr }, 'Caddy reload stderr');
       } catch (err: unknown) {
+        if (caddyfileExists) {
+          await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
+        }
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err: msg }, 'Failed to reload Caddy service');
+        logger.warn({ err: msg }, 'Failed to reload Caddy service, rolled back to previous Caddyfile');
+        throw err;
       }
     }
 
@@ -1330,11 +1355,16 @@ async function configureAwgHandler(
     if (process.env.NODE_ENV !== 'test') {
       try {
         await execAsync('sysctl -w net.ipv4.ip_forward=1');
-        if (ipv6Mode === 'dual-stack' || ipv6Mode === 'trap-ipv6') {
-          await execAsync('sysctl -w net.ipv6.conf.all.forwarding=1');
-        }
       } catch (err: any) {
-        logger.warn({ err: err.message }, 'Failed to set sysctl packet forwarding');
+        logger.warn({ err: err.message }, 'Failed to set sysctl net.ipv4.ip_forward=1');
+      }
+
+      if (ipv6Mode === 'dual-stack' || ipv6Mode === 'trap-ipv6') {
+        try {
+          await execAsync('sysctl -w net.ipv6.conf.all.forwarding=1');
+        } catch (err: any) {
+          logger.debug({ err: err.message }, 'IPv6 disabled in kernel; skipping net.ipv6.conf.all.forwarding sysctl setting');
+        }
       }
     }
 
@@ -1408,7 +1438,7 @@ async function configureAwgHandler(
         try {
           await execAsync('ip6tables -C FORWARD -i awg0 -j REJECT --reject-with icmp6-adm-prohibited || ip6tables -A FORWARD -i awg0 -j REJECT --reject-with icmp6-adm-prohibited');
         } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed to configure ip6tables trap-ipv6 rules for awg0');
+          logger.debug({ err: err.message }, 'IPv6/ip6tables disabled in kernel or not available; skipping trap-ipv6 rules');
         }
       }
 
@@ -1519,7 +1549,7 @@ async function selfUpdateHandler(
   setTimeout(async () => {
     try {
       logger.info('Starting agent self-update sequence...');
-      const updateCmd = 'cd /opt/route-agent && git fetch --all && git reset --hard origin/main && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
+      const updateCmd = 'cd /opt/route-agent && git fetch --all && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
       await execAsync(updateCmd);
     } catch (err: any) {
       logger.error({ err: err.stderr || err.message }, 'Failed to execute self-update sequence');
