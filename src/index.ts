@@ -135,7 +135,7 @@ async function getWebRtcStatus(): Promise<string> {
   const url = `http://127.0.0.1:${port}/api/state`;
 
   try {
-    const data = await getJson(url, 3000);
+    const data = await getJson(url, 1000);
     
     // Парсим running_count
     const runningCount = (data && typeof data.running_count === 'number') ? data.running_count : null;
@@ -185,6 +185,19 @@ async function getSingBoxVersion(): Promise<string> {
   } catch {
     return 'not_installed';
   }
+}
+
+let cachedSingboxVersion = '';
+let lastSingboxCheckTime = 0;
+
+async function getSingBoxVersionCached(): Promise<string> {
+  const now = Date.now();
+  if (cachedSingboxVersion && (now - lastSingboxCheckTime < 60000)) {
+    return cachedSingboxVersion;
+  }
+  cachedSingboxVersion = await getSingBoxVersion();
+  lastSingboxCheckTime = now;
+  return cachedSingboxVersion;
 }
 
 /**
@@ -617,37 +630,62 @@ async function streamTelemetryHandler(
     });
   }
 
-  const telemetryInterval = setInterval(async () => {
-    const [cpu, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
-      getCpuUsage(),
-      getMemoryUsage(),
-      getConnectionCount(),
-      getWebRtcStatus(),
-      getSingBoxVersion(),
-      getAwgActivePeersCount()
-    ]);
-    
-    logger.debug({ awgActivePeers: awgPeers }, 'AWG active peers telemetry fetched');
+  let telemetryInterval: NodeJS.Timeout | null = null;
+  let isCleanedUp = false;
 
-    call.write({
-      cpuUsage: cpu,
-      memUsage: mem,
-      activeConnections: conns,
-      systemLogs: logBuffer,
-      timestamp: Date.now(),
-      webrtcStatus: webrtc,
-      singboxVersion: sbVersion,
-      awgActivePeers: awgPeers
-    });
-    
-    logBuffer = ''; 
-  }, 2000);
+  // Единая функция очистки всех ресурсов стрима
+  const cleanup = () => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
 
-  call.on('cancelled', () => {
-    clearInterval(telemetryInterval);
-    journalProcess.kill();
+    if (telemetryInterval) {
+      clearInterval(telemetryInterval);
+      telemetryInterval = null;
+    }
+    try {
+      journalProcess.kill();
+    } catch {}
     logger.info('Telemetry binary stream closed and resources safely released');
-  });
+  };
+
+  // Навешиваем очистку на ВСЕ события закрытия сокета/стрима
+  call.on('cancelled', cleanup);
+  call.on('close', cleanup);
+  call.on('finish', cleanup);
+  call.on('error', cleanup);
+
+  telemetryInterval = setInterval(async () => {
+    if (isCleanedUp) return;
+
+    try {
+      const [cpu, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
+        getCpuUsage(),
+        getMemoryUsage(),
+        getConnectionCount(),
+        getWebRtcStatus(),
+        getSingBoxVersionCached(),
+        getAwgActivePeersCount()
+      ]);
+
+      if (isCleanedUp) return;
+
+      call.write({
+        cpuUsage: cpu,
+        memUsage: mem,
+        activeConnections: conns,
+        systemLogs: logBuffer,
+        timestamp: Date.now(),
+        webrtcStatus: webrtc,
+        singboxVersion: sbVersion,
+        awgActivePeers: awgPeers
+      });
+
+      logBuffer = ''; 
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.debug({ err: msg }, 'Error inside telemetry streaming interval tick');
+    }
+  }, 2000);
 }
 
 /**
@@ -720,6 +758,7 @@ async function uploadSingboxBinaryHandler(
       });
 
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated sing-box binary');
+      cachedSingboxVersion = '';
 
       if (process.env.NODE_ENV !== 'test') {
         try {
