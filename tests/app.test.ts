@@ -156,6 +156,30 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     call.end();
   });
 
+  await t.test('UpgradeSingbox should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.upgradeSingbox({ version: '1.12.0', downloadUrl: 'http://example.com/binary' }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('UpgradeSingbox should reject missing download_url', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    client.upgradeSingbox({ version: '1.12.0', downloadUrl: '' }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Missing download_url in request payload.');
+      done();
+    });
+  });
+
   await t.test('ConfigureCaddy should block unauthorized requests', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');

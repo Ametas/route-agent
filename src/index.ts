@@ -456,17 +456,28 @@ interface TelemetryResponse {
   awgActivePeers: number;
 }
 
-interface BinaryChunk {
+interface BinaryChunkPayload {
   orchestratorSecret?: string;
   chunk?: Buffer | Uint8Array;
   version?: string;
   isFinal?: boolean;
   targetBinary?: string;
+  orchestrator_secret?: string;
+  is_final?: boolean;
+  target_binary?: string;
 }
+type BinaryChunk = BinaryChunkPayload;
 
-interface UpgradeResponse {
+interface UploadBinaryResponse {
   success: boolean;
   message: string;
+}
+type UpgradeResponse = UploadBinaryResponse;
+
+interface UpgradePayload {
+  version?: string;
+  downloadUrl?: string;
+  download_url?: string;
 }
 
 interface CaddyConfigPayload {
@@ -627,6 +638,9 @@ async function streamTelemetryHandler(
   if (journalProcess.stdout) {
     journalProcess.stdout.on('data', (chunk: Buffer) => {
       logBuffer += chunk.toString();
+      if (logBuffer.length > 8192) {
+        logBuffer = logBuffer.slice(-8192); // Ограничиваем буфер последними 8 Кб
+      }
     });
   }
 
@@ -704,9 +718,9 @@ async function uploadSingboxBinaryHandler(
     secretVerified = true;
   }
 
-  call.on('data', (data: BinaryChunk) => {
+  call.on('data', (data: BinaryChunkPayload) => {
     if (!secretVerified) {
-      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET) {
+      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET || data.orchestrator_secret === config.EGRESS_CONTROL_SECRET) {
         secretVerified = true;
       }
     }
@@ -875,6 +889,75 @@ async function uploadOlcrtcBinaryHandler(
 }
 
 /**
+ * RPC Обработчик UpgradeSingbox
+ */
+async function upgradeSingboxHandler(
+  call: ServerUnaryCall<UpgradePayload, UploadBinaryResponse>,
+  callback: sendUnaryData<UploadBinaryResponse>
+): Promise<void> {
+  const secretHeader = extractSecretFromMetadata(call);
+  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+    logger.warn('Unauthorized UpgradeSingbox request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const { version, downloadUrl, download_url } = call.request;
+  const url = downloadUrl || download_url;
+  const targetVersion = version || 'latest';
+
+  if (!url) {
+    return callback(null, { success: false, message: 'Missing download_url in request payload.' });
+  }
+
+  try {
+    logger.info({ version: targetVersion, url }, 'Initiating sing-box binary upgrade via download URL...');
+    const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+    const tempPath = '/tmp/sing-box.download';
+
+    await execAsync(`curl -fsSL "${url}" -o "${tempPath}"`);
+    await fs.chmod(tempPath, 0o755);
+
+    if (process.env.NODE_ENV !== 'test') {
+      await execAsync(`${tempPath} version`);
+      if (process.platform === 'linux') {
+        try {
+          await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${tempPath}`);
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to setcap on downloaded sing-box binary');
+        }
+      }
+    }
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.rename(tempPath, targetPath).catch(async () => {
+      await fs.copyFile(tempPath, targetPath);
+      await fs.unlink(tempPath).catch(() => {});
+    });
+
+    cachedSingboxVersion = '';
+    logger.info({ path: targetPath, version: targetVersion }, 'Successfully upgraded sing-box binary via URL');
+
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const reloadCmd = config.RELOAD_COMMAND || 'systemctl restart sing-box';
+        await execAsync(reloadCmd);
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Reload command failed after sing-box upgrade');
+      }
+    }
+
+    return callback(null, {
+      success: true,
+      message: `sing-box binary version ${targetVersion} successfully upgraded from ${url}`
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg }, 'Failed to upgrade sing-box binary via URL');
+    return callback(null, { success: false, message: `Upgrade failed: ${msg}` });
+  }
+}
+
+/**
  * RPC Обработчик ConfigureCaddy
  */
 async function configureCaddyHandler(
@@ -941,12 +1024,12 @@ async function configureCaddyHandler(
     const rawXhttpRegexp = (xhttpRegexp || xhttp_regexp || '').trim();
     const finalXhttpRegexp = rawXhttpRegexp || '^/xhttp-path.*$';
     const finalXhttpRewrite = xhttpRewrite || xhttp_rewrite;
-    const finalXhttpSocket = xhttpSocket || xhttp_socket;
+    const finalXhttpSocket = xhttpSocket || xhttp_socket || 'unix//dev/shm/vless-xhttp.sock';
 
     const rawGrpcRegexp = (grpcRegexp || grpc_regexp || '').trim();
     const finalGrpcRegexp = rawGrpcRegexp || '^/grpc-path.*$';
     const finalGrpcRewrite = grpcRewrite || grpc_rewrite;
-    const finalGrpcSocket = grpcSocket || grpc_socket;
+    const finalGrpcSocket = grpcSocket || grpc_socket || 'unix+h2c//dev/shm/vless-grpc.sock';
 
     let caddyfileContent = '# Auto-generated by Route Agent\n\n';
 
@@ -1400,7 +1483,7 @@ async function selfUpdateHandler(
   setTimeout(async () => {
     try {
       logger.info('Starting agent self-update sequence...');
-      const updateCmd = 'cd /opt/route-agent && git pull && npm ci && npm run build && systemctl restart route-agent';
+      const updateCmd = 'cd /opt/route-agent && git fetch --all && git reset --hard origin/main && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
       await execAsync(updateCmd);
     } catch (err: any) {
       logger.error({ err: err.stderr || err.message }, 'Failed to execute self-update sequence');
@@ -1454,6 +1537,7 @@ export async function startServer(): Promise<Server> {
     const serviceImplementation: UntypedServiceImplementation = {
       applyConfig: applyConfigHandler,
       streamTelemetry: streamTelemetryHandler,
+      upgradeSingbox: upgradeSingboxHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       configureCaddy: configureCaddyHandler,

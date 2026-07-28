@@ -3,32 +3,16 @@ syntax = "proto3";
 package agent;
 
 service EgressAgentService {
-  // Загрузка и безопасная перезагрузка конфигурации sing-box
   rpc ApplyConfig (ConfigPayload) returns (ConfigResponse);
-
-  // Серверный стрим RPC для передачи телеметрии ноды в реальном времени
   rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
-
-  // Приём бинарного файла sing-box напрямую от оркестратора
-  rpc UploadSingboxBinary (stream BinaryChunk) returns (UpgradeResponse);
-
-  // Приём бинарных файлов olcrtc / olcrtc-manager напрямую от оркестратора
-  rpc UploadOlcrtcBinary (stream BinaryChunk) returns (UpgradeResponse);
-
-  // Дистанционная настройка Caddy (Caddyfile + HTML-заглушка)
-  rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
-
-  // Дистанционная установка и управление службой olcrtc-manager (WebRTC)
+  rpc UpgradeSingbox (UpgradePayload) returns (UpgradeResponse);
   rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
-
-  // Дистанционная настройка L3-интерфейса AmneziaWG 3.0 (AWG3)
-  rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
-
-  // Дистанционное управление правилами UFW фаервола
-  rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
-
-  // Дистанционное самообновление кода агента из Git
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
+  rpc UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
+  rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
+  rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
 }
 
 message ConfigPayload {
@@ -55,15 +39,25 @@ message TelemetryResponse {
   uint32 awg_active_peers = 8;
 }
 
-message BinaryChunk {
+message UpgradePayload {
+  string version = 1;
+  string download_url = 2;
+}
+
+message UpgradeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message BinaryChunkPayload {
   string orchestrator_secret = 1;
   bytes chunk = 2;
   string version = 3;
   bool is_final = 4;
-  string target_binary = 5; // "sing-box" | "olcrtc" | "olcrtc-manager"
+  string target_binary = 5;
 }
 
-message UpgradeResponse {
+message UploadBinaryResponse {
   bool success = 1;
   string message = 2;
 }
