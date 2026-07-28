@@ -2,15 +2,17 @@
 
 Stealth Egress Node Agent for Route Orchestrator. 
 
-This agent runs as a systemd service on a VPS, listens for sing-box configuration updates from the orchestrator, writes them to `/etc/sing-box/config.json`, and triggers a service reload.
+This agent runs as a systemd service on a VPS, receives commands and streams telemetry from the orchestrator over gRPC (HTTP/2) with Mutual TLS (mTLS), manages sing-box, Caddy, AmneziaWG 3.0, olcrtc-manager, and firewall rules.
 
 ## Features
 
-- **Fastify Web Server**: High-performance, low-overhead HTTP server.
-- **Secure by Design**: Checks authorization using the `x-orchestrator-secret` header.
-- **Robust Configuration Validation**: Parses and validates incoming configurations before saving.
-- **Auto-Reload**: Automatically triggers `systemctl reload sing-box` upon configuration updates.
-- **TypeScript ESM**: Built with modern TypeScript strict rules and ESM exports.
+- **gRPC (HTTP/2) Server**: High-performance bi-directional and server-side streaming RPC interface.
+- **Mutual TLS (mTLS) Security**: Strict client certificate verification using Root CA and secret authorization headers (`x-orchestrator-secret`).
+- **Robust Configuration Validation & Rollback**: Validates incoming sing-box/Caddy configs with automatic rollback on reload failures.
+- **Stream Uploads**: Efficient chunked streaming of binary updates (`sing-box`, `olcrtc`) to disk without RAM spikes.
+- **Dynamic Telemetry**: Live stream of CPU, RAM, active connections, sing-box journal logs, WebRTC status, and AWG active peer count.
+- **L3 & L7 Traffic Obfuscation**: Remote configuration of Caddy reverse proxy (VLESS XHTTP / gRPC) and AmneziaWG 3.0.
+- **TypeScript ESM**: Built with modern TypeScript strict rules, ESM exports, and zero external shell injection vulnerabilities.
 
 ## Prerequisites
 
@@ -25,7 +27,7 @@ This agent runs as a systemd service on a VPS, listens for sing-box configuratio
 Run the following command on a clean Ubuntu/Debian VPS to install Node.js, clone the repository, build the agent, and register it as a systemd service:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/route-agent/main/install.sh | sudo bash -s -- --secret "YOUR_SECRET_TOKEN" [--port 8081] [--repo "YOUR_REPO_URL"]
+curl -fsSL https://raw.githubusercontent.com/Ametas/route-agent/main/install.sh | sudo bash -s -- --secret "YOUR_SECRET_TOKEN" [--port 8083] [--repo "YOUR_REPO_URL"]
 ```
 
 ### Local Manual Installation
@@ -34,7 +36,7 @@ If you have already cloned the repository on your VPS:
 
 1. Run the install script directly:
    ```bash
-   sudo ./install.sh --secret "YOUR_SECRET_TOKEN" [--port 8081]
+   sudo ./install.sh --secret "YOUR_SECRET_TOKEN" [--port 8083]
    ```
 
 ### 2. Configuration
@@ -48,7 +50,7 @@ cp .env.example .env
 Edit the `.env` file with your settings:
 
 ```ini
-PORT=8081
+PORT=8083
 HOST=0.0.0.0
 EGRESS_CONTROL_SECRET=your_super_secure_secret_token
 SINGBOX_CONFIG_PATH=/etc/sing-box/config.json
@@ -117,49 +119,40 @@ systemctl enable route-agent
 systemctl start route-agent
 ```
 
-## API Specification
+## API Specification & gRPC Architecture
 
-### Health Check (Ping)
+Route Agent exposes a gRPC service defined in `proto/agent.proto` under the package `agent` (`EgressAgentService`).
 
-- **URL**: `/agent/ping`
-- **Method**: `GET`
-- **Response**:
-  ```json
-  {
-    "status": "online",
-    "timestamp": "2026-07-14T15:45:00.000Z"
-  }
-  ```
+All communication uses **gRPC over HTTP/2** with mandatory **mTLS** (Mutual TLS with Root CA verification) and secret header verification (`x-orchestrator-secret`).
 
-### Update Configuration
+### RPC Methods (`EgressAgentService`)
 
-- **URL**: `/agent/config`
-- **Method**: `POST`
-- **Headers**:
-  - `x-orchestrator-secret`: `<your_super_secure_secret_token>`
-  - `Content-Type`: `application/json`
-- **Request Body**:
-  - A valid JSON object matching the sing-box configuration schema.
-- **Response (Success 200)**:
-  ```json
-  {
-    "success": true,
-    "message": "Configuration successfully updated and sing-box reloaded."
-  }
-  ```
-- **Response (Unauthorized 401)**:
-  ```json
-  {
-    "success": false,
-    "error": "Unauthorized",
-    "message": "Invalid orchestrator secret token."
-  }
-  ```
-- **Response (Bad Request 400)**:
-  ```json
-  {
-    "success": false,
-    "error": "BadRequest",
-    "message": "Payload body must be a valid JSON object."
-  }
-  ```
+1. **`ApplyConfig (ConfigPayload) returns (ConfigResponse)`**
+   - Applies and validates incoming JSON configuration for `sing-box`. Performs syntax check and atomic swap with fallback rollback on reload error.
+
+2. **`StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse)`**
+   - Server-writable streaming RPC delivering real-time telemetry ticks (CPU usage, RAM usage, active connections, system journal logs, sing-box version, AWG active peers count, and WebRTC status).
+
+3. **`UpgradeSingbox (UpgradePayload) returns (UpgradeResponse)`**
+   - Downloads sing-box binary from specified URL via safe `execFile` curl invocation, verifies syntax, and atomic-swaps the binary.
+
+4. **`UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse)`**
+   - Client streaming RPC for uploading a new `sing-box` binary in chunks. Chunks are streamed directly to disk to minimize RAM usage.
+
+5. **`UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse)`**
+   - Client streaming RPC for uploading `olcrtc` / `olcrtc-manager` component binaries in chunks.
+
+6. **`ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse)`**
+   - Configures Caddy reverse proxy for VLESS XHTTP & gRPC transport, sets up camouflage HTML web pages, and reloads Caddy with config rollback.
+
+7. **`ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse)`**
+   - Configures and manages systemd service for `olcrtc-manager` WebRTC service.
+
+8. **`ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse)`**
+   - Remote L3 interface configuration for AmneziaWG 3.0 (keys, obfuscation parameters `jc`, `jmin`, `jmax`, `s1-s4`, `h1-h4`, header protection, peers, and IPv6 isolation).
+
+9. **`ManageFirewall (FirewallPayload) returns (FirewallResponse)`**
+   - Dynamic firewall rule management for UFW and iptables (TCP/UDP open ports).
+
+10. **`SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse)`**
+    - Triggers self-update sequence (`git fetch --all`, `git reset --hard @{u}`, `git clean -fd`, `npm ci`, `npm run build`, and `systemctl restart route-agent`).
