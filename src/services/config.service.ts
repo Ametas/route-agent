@@ -520,18 +520,14 @@ export async function configureAwgHandler(
       try {
         await execAsync('iptables -C FORWARD -i awg0 -j ACCEPT || iptables -A FORWARD -i awg0 -j ACCEPT');
 
-        let defaultIface = '';
         try {
-          const { stdout: routeOut } = await execAsync('ip route show default');
-          const match = routeOut.match(/dev\s+([^\s]+)/);
-          if (match && match[1]) {
-            defaultIface = match[1];
+          const { stdout } = await execAsync('ip route show default');
+          const match = stdout.match(/dev\s+([^\s]+)/);
+          const defaultIface = match ? match[1] : null;
+          if (defaultIface) {
+            await execAsync(`iptables -t nat -C POSTROUTING -o ${defaultIface} -j MASQUERADE || iptables -t nat -A POSTROUTING -o ${defaultIface} -j MASQUERADE`);
           }
         } catch {}
-
-        if (defaultIface) {
-          await execAsync(`iptables -t nat -C POSTROUTING -o ${defaultIface} -j MASQUERADE || iptables -t nat -A POSTROUTING -o ${defaultIface} -j MASQUERADE`);
-        }
       } catch (err: any) {
         logger.warn({ err: err.message }, 'Failed to configure iptables NAT rules for awg0');
       }
