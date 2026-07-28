@@ -22,7 +22,9 @@ export async function streamTelemetryHandler(
 ): Promise<void> {
   if (!authenticateCall(call)) {
     logger.warn('Unauthorized gRPC telemetry stream requested');
-    call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+    const err = new Error('UNAUTHENTICATED: Invalid orchestrator secret token.') as any;
+    err.code = 16; // grpc.status.UNAUTHENTICATED
+    call.emit('error', err);
     return;
   }
 
@@ -89,16 +91,21 @@ export async function streamTelemetryHandler(
 
       if (isCleanedUp || call.destroyed) return;
 
-      call.write({
-        cpuUsage,
-        memUsage: mem,
-        activeConnections: conns,
-        systemLogs: logBuffer,
-        timestamp: Date.now(),
-        webrtcStatus: webrtc,
-        singboxVersion: sbVersion,
-        awgActivePeers: awgPeers
-      });
+      try {
+        call.write({
+          cpuUsage,
+          memUsage: mem,
+          activeConnections: conns,
+          systemLogs: logBuffer,
+          timestamp: Date.now(),
+          webrtcStatus: webrtc,
+          singboxVersion: sbVersion,
+          awgActivePeers: awgPeers
+        });
+      } catch {
+        cleanup();
+        return;
+      }
 
       logBuffer = '';
     } catch (err: unknown) {

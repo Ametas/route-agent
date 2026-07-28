@@ -68,7 +68,14 @@ async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredenti
 export async function startServer(): Promise<Server> {
   const { credentials, isMtls } = await getGrpcServerCredentials();
   return new Promise((resolve, reject) => {
-    const server = new Server();
+    const serverOptions = {
+      'grpc.keepalive_time_ms': 10000,
+      'grpc.keepalive_timeout_ms': 5000,
+      'grpc.keepalive_permit_without_calls': 1,
+      'grpc.http2.min_ping_interval_without_data_ms': 5000,
+      'grpc.http2.max_pings_without_data': 0,
+    };
+    const server = new Server(serverOptions);
     const serviceImplementation: UntypedServiceImplementation = {
       applyConfig: applyConfigHandler,
       streamTelemetry: streamTelemetryHandler,
