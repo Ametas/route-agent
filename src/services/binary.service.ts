@@ -68,9 +68,14 @@ export async function uploadSingboxBinaryHandler(
     }
 
     if (!secretVerified) {
+      isAborted = true;
       await fs.unlink(tempPath).catch(() => {});
       logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
-      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
     }
 
     if (bytesWritten === 0) {
@@ -207,9 +212,14 @@ export async function uploadOlcrtcBinaryHandler(
     }
 
     if (!secretVerified) {
+      isAborted = true;
       if (tempPath) await fs.unlink(tempPath).catch(() => {});
       logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
-      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
     }
 
     if (bytesWritten === 0) {
