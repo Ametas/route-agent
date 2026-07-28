@@ -64,15 +64,9 @@ message UploadBinaryResponse {
 }
 
 message CaddyConfigPayload {
-  repeated string domains = 1;
-  string xhttp_regexp = 2;
-  string xhttp_rewrite = 3;
-  string xhttp_socket = 4;
-  string grpc_regexp = 5;
-  string grpc_rewrite = 6;
-  string grpc_socket = 7;
-  string camouflage_path = 8;
-  string camouflage_html = 9;
+  string caddyfile_content = 1;
+  string camouflage_path = 2;
+  string camouflage_html = 3;
 }
 
 message CaddyConfigResponse {
