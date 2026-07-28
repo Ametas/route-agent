@@ -21,6 +21,9 @@ import { config } from './config.js';
 import { execAsync, execFileAsync } from './utils/exec.js';
 import { verifySecret, extractSecretFromMetadata } from './middleware/auth.js';
 import { validateSafeCamouflagePath } from './utils/caddy.js';
+import { validateSingBoxConfig as validateSingBoxConfigUtil, atomicApplyAndReload as atomicApplyAndReloadUtil } from './utils/singbox.js';
+import { syncEgressFirewall as syncEgressFirewallUtil, isUfwInstalled as isUfwInstalledUtil } from './utils/firewall.js';
+import { getCpuUsage as getCpuUsageUtil, getMemoryUsage as getMemoryUsageUtil, getConnectionCount as getConnectionCountUtil, getWebRtcStatus as getWebRtcStatusUtil, getSingBoxVersionCached as getSingBoxVersionCachedUtil, getAwgActivePeersCount as getAwgActivePeersCountUtil, invalidateSingboxVersionCache } from './utils/telemetry.js';
 
 const logger = pino({ level: 'info' });
 
@@ -811,7 +814,7 @@ async function uploadSingboxBinaryHandler(
       });
 
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated sing-box binary');
-      cachedSingboxVersion = '';
+      invalidateSingboxVersionCache();
 
       if (process.env.NODE_ENV !== 'test') {
         try {
@@ -1008,7 +1011,7 @@ async function upgradeSingboxHandler(
       throw err;
     }
 
-    cachedSingboxVersion = '';
+    invalidateSingboxVersionCache();
     logger.info({ path: targetPath, version: targetVersion }, 'Successfully upgraded sing-box binary via URL');
 
     if (process.env.NODE_ENV !== 'test') {
