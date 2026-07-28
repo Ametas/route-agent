@@ -15,6 +15,7 @@ import * as fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import path from 'path';
 import pino from 'pino';
+import crypto from 'crypto';
 import net from 'net';
 import http from 'http';
 import { config } from './config.js';
@@ -728,10 +729,11 @@ async function streamTelemetryHandler(
  * RPC Обработчик UploadSingboxBinary (клиентский стрим RPC)
  */
 async function uploadSingboxBinaryHandler(
-  call: ServerReadableStream<BinaryChunkPayload, UpgradeResponse>,
-  callback: sendUnaryData<UpgradeResponse>
+  call: ServerReadableStream<BinaryChunkPayload, UploadBinaryResponse>,
+  callback: sendUnaryData<UploadBinaryResponse>
 ): Promise<void> {
-  const tempPath = '/tmp/sing-box.download';
+  const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
   let secretVerified = false;
   let targetVersion = 'unknown';
   let bytesWritten = 0;
@@ -747,6 +749,9 @@ async function uploadSingboxBinaryHandler(
       if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET || data.orchestrator_secret === config.EGRESS_CONTROL_SECRET) {
         secretVerified = true;
       }
+    }
+    if (!secretVerified) {
+      return;
     }
     if (data.version) {
       targetVersion = data.version;
@@ -829,10 +834,17 @@ async function uploadSingboxBinaryHandler(
     }
   });
 
-  call.on('error', (err) => {
-    logger.error({ err: err.message }, 'Error in UploadSingboxBinary stream');
+  const cleanup = () => {
     if (fileStream) fileStream.end();
     fs.unlink(tempPath).catch(() => {});
+  };
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadSingboxBinary stream');
+    cleanup();
+  });
+  call.on('cancelled', () => {
+    cleanup();
   });
 }
 
@@ -863,6 +875,9 @@ async function uploadOlcrtcBinaryHandler(
         secretVerified = true;
       }
     }
+    if (!secretVerified) {
+      return;
+    }
     if (data.version) {
       targetVersion = data.version;
     }
@@ -872,7 +887,8 @@ async function uploadOlcrtcBinaryHandler(
     if (data.chunk && data.chunk.length > 0) {
       if (!fileStream) {
         const safeTargetBinary = ALLOWED_BINARIES.has(targetBinary) ? targetBinary : 'olcrtc-manager';
-        tempPath = `/tmp/${safeTargetBinary}.download`;
+        const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+        tempPath = `/tmp/${safeTargetBinary}_${uniqueId}.tmp`;
         fileStream = createWriteStream(tempPath);
       }
       const buf = Buffer.from(data.chunk);
@@ -962,27 +978,33 @@ async function upgradeSingboxHandler(
   try {
     logger.info({ version: targetVersion, url }, 'Initiating sing-box binary upgrade via download URL...');
     const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
-    const tempPath = '/tmp/sing-box.download';
+    const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
 
-    await execFileAsync('curl', ['-fsSL', url, '-o', tempPath]);
-    await fs.chmod(tempPath, 0o755);
+    try {
+      await execFileAsync('curl', ['-fsSL', url, '-o', tempPath]);
+      await fs.chmod(tempPath, 0o755);
 
-    if (process.env.NODE_ENV !== 'test') {
-      await execAsync(`${tempPath} version`);
-      if (process.platform === 'linux') {
-        try {
-          await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${tempPath}`);
-        } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed to setcap on downloaded sing-box binary');
+      if (process.env.NODE_ENV !== 'test') {
+        await execAsync(`${tempPath} version`);
+        if (process.platform === 'linux') {
+          try {
+            await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${tempPath}`);
+          } catch (err: any) {
+            logger.warn({ err: err.message }, 'Failed to setcap on downloaded sing-box binary');
+          }
         }
       }
-    }
 
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.rename(tempPath, targetPath).catch(async () => {
-      await fs.copyFile(tempPath, targetPath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.rename(tempPath, targetPath).catch(async () => {
+        await fs.copyFile(tempPath, targetPath);
+        await fs.unlink(tempPath).catch(() => {});
+      });
+    } catch (err) {
       await fs.unlink(tempPath).catch(() => {});
-    });
+      throw err;
+    }
 
     cachedSingboxVersion = '';
     logger.info({ path: targetPath, version: targetVersion }, 'Successfully upgraded sing-box binary via URL');
