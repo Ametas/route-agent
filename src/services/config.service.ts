@@ -137,29 +137,35 @@ export async function configureCaddyHandler(
     await fixCaddyPermissions();
 
     if (process.env.NODE_ENV !== 'test') {
+      // 1. Предварительная валидация конфига самим бинарником Caddy
       try {
-        await execAsync(`caddy validate --config ${caddyfilePath}`);
-      } catch (err: unknown) {
+        await execAsync(`caddy validate --config "${caddyfilePath}"`);
+      } catch (valErr: any) {
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
         }
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err: msg }, 'Caddyfile validation failed, rolled back to previous Caddyfile');
-        return callback(null, { success: false, message: `Caddyfile syntax validation failed: ${msg}` });
+        const valMsg = (valErr.stderr || valErr.stdout || valErr.message || 'Ошибка синтаксиса Caddyfile').trim();
+        logger.error({ err: valMsg }, 'Caddyfile validation failed');
+        return callback(null, {
+          success: false,
+          message: `Ошибка синтаксиса Caddyfile:\n${valMsg}`
+        });
       }
 
+      // 2. Мягкая перезагрузка службы после успешной валидации
       try {
         const reloadCmd = config.CADDY_RELOAD_COMMAND || 'systemctl reload caddy || systemctl restart caddy';
-        const { stdout, stderr } = await execAsync(reloadCmd);
-        if (stdout) logger.info({ stdout }, 'Caddy reload stdout');
-        if (stderr) logger.warn({ stderr }, 'Caddy reload stderr');
+        await execAsync(reloadCmd);
       } catch (err: unknown) {
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
         }
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ err: msg }, 'Failed to reload Caddy service, rolled back to previous Caddyfile');
-        return callback(null, { success: false, message: `Caddy reload failed: ${msg}` });
+        return callback(null, {
+          success: false,
+          message: `Сбой службы Caddy при reload:\n${msg}`
+        });
       }
     }
 
