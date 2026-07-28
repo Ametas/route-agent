@@ -19,11 +19,7 @@ export async function uploadSingboxBinaryHandler(
   callback: sendUnaryData<any>
 ): Promise<void> {
   const metadataSecret = extractSecretFromMetadata(call);
-  if (!verifySecret(metadataSecret)) {
-    logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
-    call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
-    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
-  }
+  let secretVerified = verifySecret(metadataSecret);
 
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
@@ -32,6 +28,21 @@ export async function uploadSingboxBinaryHandler(
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
   call.on('data', (data: any) => {
+    if (!secretVerified) {
+      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
+        secretVerified = true;
+      }
+    }
+
+    if (!secretVerified) {
+      logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
+    }
+
     if (data.version) {
       targetVersion = data.version;
     }
@@ -48,6 +59,12 @@ export async function uploadSingboxBinaryHandler(
   call.on('end', async () => {
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
+    if (!secretVerified) {
+      await fs.unlink(tempPath).catch(() => {});
+      logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
+      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
     if (bytesWritten === 0) {
@@ -127,11 +144,7 @@ export async function uploadOlcrtcBinaryHandler(
   callback: sendUnaryData<any>
 ): Promise<void> {
   const metadataSecret = extractSecretFromMetadata(call);
-  if (!verifySecret(metadataSecret)) {
-    logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
-    call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
-    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
-  }
+  let secretVerified = verifySecret(metadataSecret);
 
   let targetVersion = 'unknown';
   let targetBinary = 'olcrtc-manager';
@@ -142,6 +155,21 @@ export async function uploadOlcrtcBinaryHandler(
   let tempPath = '';
 
   call.on('data', (data: any) => {
+    if (!secretVerified) {
+      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
+        secretVerified = true;
+      }
+    }
+
+    if (!secretVerified) {
+      logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
+    }
+
     if (data.version) {
       targetVersion = data.version;
     }
@@ -164,6 +192,12 @@ export async function uploadOlcrtcBinaryHandler(
   call.on('end', async () => {
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
+    if (!secretVerified) {
+      if (tempPath) await fs.unlink(tempPath).catch(() => {});
+      logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
+      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
     if (bytesWritten === 0) {

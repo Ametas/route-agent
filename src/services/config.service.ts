@@ -172,13 +172,13 @@ export async function configureCaddyHandler(
       caddyfileContent += `    log {\n        output stdout\n        format console\n        level DEBUG\n    }\n\n`;
 
       if (finalXhttpRegexp && finalXhttpSocket) {
-        caddyfileContent += `    @vless-xhttp path_regexp xhttp ${finalXhttpRegexp}\n    
+        caddyfileContent += `    @vless-xhttp path_regexp xhttp "${finalXhttpRegexp}"\n    
     handle @vless-xhttp {\n`;
         if (finalXhttpRewrite) {
           caddyfileContent += `        rewrite * ${finalXhttpRewrite}\n`;
         }
         caddyfileContent += `        
-        reverse_proxy ${finalXhttpSocket} {\n`;
+        reverse_proxy "${finalXhttpSocket}" {\n`;
         caddyfileContent += `            flush_interval -1\n`;
         caddyfileContent += `            transport http {\n`;
         caddyfileContent += `                versions h2c 2\n`;
@@ -190,14 +190,14 @@ export async function configureCaddyHandler(
       if (finalGrpcRegexp && finalGrpcSocket) {
         caddyfileContent += `    @vless-grpc {\n`;
         caddyfileContent += `        protocol grpc\n`;
-        caddyfileContent += `        path_regexp grpc ${finalGrpcRegexp}\n`;
+        caddyfileContent += `        path_regexp grpc "${finalGrpcRegexp}"\n`;
         caddyfileContent += `    }\n    
     handle @vless-grpc {\n`;
         if (finalGrpcRewrite) {
           caddyfileContent += `        rewrite * ${finalGrpcRewrite}\n`;
         }
         caddyfileContent += `        
-        reverse_proxy ${finalGrpcSocket} {\n`;
+        reverse_proxy "${finalGrpcSocket}" {\n`;
         caddyfileContent += `            flush_interval -1\n`;
         caddyfileContent += `        }\n`;
         caddyfileContent += `    }\n\n`;

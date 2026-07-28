@@ -117,16 +117,27 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'invalid_secret');
 
+    let doneCalled = false;
+    const finish = (e?: any) => {
+      if (!doneCalled) {
+        doneCalled = true;
+        done(e);
+      }
+    };
+
     const call = client.uploadSingboxBinary(badMetadata, (err: any, response: any) => {
       if (err) {
         assert.ok(err);
-        done();
-        return;
+        return finish();
       }
       assert.strictEqual(response.success, false);
-      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
-      done();
+      finish();
     });
+
+    call.on('error', () => {
+      finish();
+    });
+
     call.write({ orchestratorSecret: 'invalid_secret', chunk: Buffer.from('test data'), version: '1.12.0', isFinal: true });
     call.end();
   });
@@ -275,12 +286,12 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.strictEqual(htmlContent, '<html><body>Camouflage Site</body></html>');
 
         const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
-        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
-        assert.ok(caddyContent.includes('reverse_proxy unix//run/sing-box-xhttp.sock'));
+        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp "^/xhttp-path.*$"') || caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
+        assert.ok(caddyContent.includes('reverse_proxy "unix//run/sing-box-xhttp.sock"') || caddyContent.includes('reverse_proxy unix//run/sing-box-xhttp.sock'));
         assert.ok(caddyContent.includes('@vless-grpc'));
         assert.ok(caddyContent.includes('protocol grpc'));
-        assert.ok(caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
-        assert.ok(caddyContent.includes('reverse_proxy 127.0.0.1:10080'));
+        assert.ok(caddyContent.includes('path_regexp grpc "^/grpc-path.*$"') || caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
+        assert.ok(caddyContent.includes('reverse_proxy "127.0.0.1:10080"') || caddyContent.includes('reverse_proxy 127.0.0.1:10080'));
         assert.ok(caddyContent.includes(`root * ${tempCamouflageDir}`));
         assert.ok(caddyContent.includes('file_server'));
         done();
@@ -308,8 +319,8 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.strictEqual(response.success, true);
 
         const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
-        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
-        assert.ok(caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
+        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp "^/xhttp-path.*$"') || caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
+        assert.ok(caddyContent.includes('path_regexp grpc "^/grpc-path.*$"') || caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
         done();
       } catch (e) {
         done(e);

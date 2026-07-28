@@ -35,7 +35,11 @@ export async function streamTelemetryHandler(
   journalProcess.on('error', (err: any) => {
     logger.warn({ err: err.message }, 'Failed to spawn journalctl process');
   });
+
   if (journalProcess.stdout) {
+    journalProcess.stdout.on('error', (err: any) => {
+      logger.debug({ err: err.message }, 'Journalctl stdout stream error ignored');
+    });
     journalProcess.stdout.on('data', (chunk: Buffer) => {
       logBuffer += chunk.toString();
       if (logBuffer.length > 8192) {
@@ -57,9 +61,11 @@ export async function streamTelemetryHandler(
       clearInterval(telemetryInterval);
       telemetryInterval = null;
     }
-    try {
-      journalProcess.kill();
-    } catch {}
+    if (journalProcess && !journalProcess.killed && journalProcess.pid) {
+      try {
+        journalProcess.kill('SIGTERM');
+      } catch {}
+    }
     logger.info('Telemetry binary stream closed and resources safely released');
   };
 
