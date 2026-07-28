@@ -9,8 +9,7 @@ import {
   loadPackageDefinition
 } from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { exec, execFile, spawn } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import path from 'path';
@@ -19,9 +18,10 @@ import crypto from 'crypto';
 import net from 'net';
 import http from 'http';
 import { config } from './config.js';
+import { execAsync, execFileAsync } from './utils/exec.js';
+import { verifySecret, extractSecretFromMetadata } from './middleware/auth.js';
+import { validateSafeCamouflagePath } from './utils/caddy.js';
 
-const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
 const logger = pino({ level: 'info' });
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
@@ -453,13 +453,7 @@ async function syncEgressFirewall(configObj: Record<string, unknown>): Promise<v
   }
 }
 
-/**
- * Извлечение секрета из gRPC metadata
- */
-function extractSecretFromMetadata(call: { metadata?: { get(key: string): unknown[] } }): string {
-  const metadataValues = call.metadata ? call.metadata.get('x-orchestrator-secret') : [];
-  return metadataValues && metadataValues[0] ? String(metadataValues[0]) : '';
-}
+
 
 interface ApplyConfigRequest {
   configJson: string;
@@ -614,7 +608,7 @@ async function applyConfigHandler(
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
 
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized gRPC execution blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -651,7 +645,7 @@ async function streamTelemetryHandler(
 ): Promise<void> {
   const secretHeader = call.request.orchestratorSecret;
 
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized gRPC telemetry stream requested');
     call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
     return;
@@ -748,13 +742,13 @@ async function uploadSingboxBinaryHandler(
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
   const metadataSecret = extractSecretFromMetadata(call);
-  if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
+  if (verifySecret(metadataSecret)) {
     secretVerified = true;
   }
 
   call.on('data', (data: BinaryChunkPayload) => {
     if (!secretVerified) {
-      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET || data.orchestrator_secret === config.EGRESS_CONTROL_SECRET) {
+      if (verifySecret(data.orchestratorSecret) || verifySecret(data.orchestrator_secret)) {
         secretVerified = true;
       }
     }
@@ -873,13 +867,13 @@ async function uploadOlcrtcBinaryHandler(
   let tempPath = '';
 
   const metadataSecret = extractSecretFromMetadata(call);
-  if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
+  if (verifySecret(metadataSecret)) {
     secretVerified = true;
   }
 
   call.on('data', (data: BinaryChunkPayload) => {
     if (!secretVerified) {
-      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET || data.orchestrator_secret === config.EGRESS_CONTROL_SECRET) {
+      if (verifySecret(data.orchestratorSecret) || verifySecret(data.orchestrator_secret)) {
         secretVerified = true;
       }
     }
@@ -970,7 +964,7 @@ async function upgradeSingboxHandler(
   callback: sendUnaryData<UploadBinaryResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized UpgradeSingbox request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -1045,7 +1039,7 @@ async function configureCaddyHandler(
   callback: sendUnaryData<CaddyConfigResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized ConfigureCaddy request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -1094,7 +1088,8 @@ async function configureCaddyHandler(
     }
 
     const rawCamouflagePath = camouflagePath || camouflage_path || '/var/www/camouflage';
-    const finalCamouflagePath = sanitizeConfigInput(rawCamouflagePath) || '/var/www/camouflage';
+    const sanitizedCamouflagePath = sanitizeConfigInput(rawCamouflagePath) || '/var/www/camouflage';
+    const finalCamouflagePath = validateSafeCamouflagePath(sanitizedCamouflagePath);
     const finalCamouflageHtml = camouflageHtml || camouflage_html || htmlContent;
 
     await fs.mkdir(finalCamouflagePath, { recursive: true });
@@ -1207,7 +1202,7 @@ async function configureOlcrtcHandler(
   callback: sendUnaryData<OlcrtcConfigResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized ConfigureOlcrtc request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -1329,7 +1324,7 @@ async function configureAwgHandler(
   callback: sendUnaryData<AwgConfigResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized ConfigureAwg request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -1516,7 +1511,7 @@ async function manageFirewallHandler(
   callback: sendUnaryData<FirewallResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized ManageFirewall request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
@@ -1578,7 +1573,7 @@ async function selfUpdateHandler(
   callback: sendUnaryData<SelfUpdateResponse>
 ): Promise<void> {
   const secretHeader = extractSecretFromMetadata(call);
-  if (!secretHeader || secretHeader !== config.EGRESS_CONTROL_SECRET) {
+  if (!verifySecret(secretHeader)) {
     logger.warn('Unauthorized SelfUpdate request blocked');
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }

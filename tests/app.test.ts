@@ -603,4 +603,58 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       });
     });
   });
+
+  await t.test('Middleware and Utilities Unit Tests', async (t) => {
+    const { verifySecret, authenticateCall } = await import('../src/middleware/auth.js');
+    const { validateSafeCamouflagePath } = await import('../src/utils/caddy.js');
+    const { execAsync, execFileAsync } = await import('../src/utils/exec.js');
+
+    await t.test('verifySecret should use timingSafeEqual and return true for valid secret', () => {
+      assert.strictEqual(verifySecret('test-secret-123'), true);
+      assert.strictEqual(verifySecret('wrong-secret'), false);
+      assert.strictEqual(verifySecret(''), false);
+      assert.strictEqual(verifySecret(null as any), false);
+      assert.strictEqual(verifySecret(undefined as any), false);
+    });
+
+    await t.test('authenticateCall should check metadata and request payload', () => {
+      const mockCallWithMetadata = {
+        metadata: {
+          get: (key: string) => key === 'x-orchestrator-secret' ? ['test-secret-123'] : []
+        }
+      };
+      assert.strictEqual(authenticateCall(mockCallWithMetadata), true);
+
+      const mockCallWithPayload = {
+        request: { orchestratorSecret: 'test-secret-123' }
+      };
+      assert.strictEqual(authenticateCall(mockCallWithPayload), true);
+
+      const mockCallInvalid = {
+        request: { orchestratorSecret: 'invalid' }
+      };
+      assert.strictEqual(authenticateCall(mockCallInvalid), false);
+    });
+
+    await t.test('validateSafeCamouflagePath should allow safe paths and reject Path Traversal attempts', () => {
+      const safe1 = validateSafeCamouflagePath('/var/www/my-site', true);
+      assert.ok(safe1.endsWith('my-site'));
+
+      const safe2 = validateSafeCamouflagePath('/tmp/camouflage/site', true);
+      assert.ok(safe2.endsWith('site'));
+
+      assert.throws(() => {
+        validateSafeCamouflagePath('/var/www/../etc/passwd', true);
+      }, /Path Traversal restriction/);
+
+      assert.throws(() => {
+        validateSafeCamouflagePath('/root/secret', true);
+      }, /Path Traversal restriction/);
+    });
+
+    await t.test('execAsync and execFileAsync should be functions', () => {
+      assert.strictEqual(typeof execAsync, 'function');
+      assert.strictEqual(typeof execFileAsync, 'function');
+    });
+  });
 });
