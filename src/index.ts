@@ -334,13 +334,17 @@ async function writeActivePortsCache(ports: number[]): Promise<void> {
  * Извлекает из объекта конфигурации sing-box уникальные порты входящих
  * соединений типов hysteria2/tuic, работающих поверх UDP
  */
-function extractUdpTunnelPorts(configObj: any): number[] {
-  const inbounds = Array.isArray(configObj?.inbounds) ? configObj.inbounds : [];
+/**
+ * Извлекает из объекта конфигурации sing-box уникальные порты входящих
+ * соединений типов hysteria2/tuic, работающих поверх UDP
+ */
+function extractUdpTunnelPorts(configObj: Record<string, unknown>): number[] {
+  const inbounds = Array.isArray(configObj?.inbounds) ? (configObj.inbounds as Record<string, unknown>[]) : [];
   const ports = new Set<number>();
 
   for (const inbound of inbounds) {
     if (!inbound || typeof inbound !== 'object') continue;
-    if (!UDP_TUNNEL_INBOUND_TYPES.has(inbound.type)) continue;
+    if (typeof inbound.type === 'string' && !UDP_TUNNEL_INBOUND_TYPES.has(inbound.type)) continue;
 
     const rawPort = inbound.listen_port ?? inbound.port;
     const port = Number(rawPort);
@@ -355,7 +359,7 @@ function extractUdpTunnelPorts(configObj: any): number[] {
 /**
  * Синхронизирует правила UFW с актуальным списком UDP-портов hysteria2/tuic
  */
-async function syncEgressFirewall(configObj: any): Promise<void> {
+async function syncEgressFirewall(configObj: Record<string, unknown>): Promise<void> {
   if (!(await isUfwInstalled())) {
     logger.warn('ufw is not installed on this system; skipping egress firewall synchronization');
     return;
@@ -375,8 +379,9 @@ async function syncEgressFirewall(configObj: any): Promise<void> {
       try {
         const { stdout, stderr } = await execAsync(`sudo ufw allow ${port}/udp`);
         logger.info({ port, stdout, stderr }, 'Opened UDP firewall port for egress tunnel inbound');
-      } catch (err: any) {
-        logger.error({ port, err: err.stderr || err.message }, 'Failed to open UFW UDP port');
+      } catch (err: unknown) {
+        const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+        logger.error({ port, err: stderr }, 'Failed to open UFW UDP port');
       }
     }
 
@@ -384,8 +389,9 @@ async function syncEgressFirewall(configObj: any): Promise<void> {
       try {
         const { stdout, stderr } = await execAsync(`sudo ufw delete allow ${port}/udp`);
         logger.info({ port, stdout, stderr }, 'Closed stale UDP firewall port no longer used by egress config');
-      } catch (err: any) {
-        logger.error({ port, err: err.stderr || err.message }, 'Failed to close UFW UDP port');
+      } catch (err: unknown) {
+        const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+        logger.error({ port, err: stderr }, 'Failed to close UFW UDP port');
       }
     }
 
@@ -393,8 +399,9 @@ async function syncEgressFirewall(configObj: any): Promise<void> {
       const { stdout, stderr } = await execAsync('sudo ufw reload');
       if (stdout) logger.info({ stdout }, 'UFW reload stdout');
       if (stderr) logger.warn({ stderr }, 'UFW reload stderr');
-    } catch (err: any) {
-      logger.error({ err: err.stderr || err.message }, 'Failed to reload UFW after egress firewall synchronization');
+    } catch (err: unknown) {
+      const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+      logger.error({ err: stderr }, 'Failed to reload UFW after egress firewall synchronization');
     }
 
     await writeActivePortsCache(newPorts);
@@ -407,7 +414,7 @@ async function syncEgressFirewall(configObj: any): Promise<void> {
 /**
  * Извлечение секрета из gRPC metadata
  */
-function extractSecretFromMetadata(call: { metadata: any }): string {
+function extractSecretFromMetadata(call: { metadata?: { get(key: string): unknown[] } }): string {
   const metadataValues = call.metadata ? call.metadata.get('x-orchestrator-secret') : [];
   return metadataValues && metadataValues[0] ? String(metadataValues[0]) : '';
 }
@@ -450,9 +457,10 @@ interface UpgradeResponse {
 }
 
 interface CaddyConfigPayload {
-  domain: string;
-  decoyPort: number;
-  htmlContent: string;
+  domains?: string[];
+  domain?: string;
+  decoyPort?: number;
+  htmlContent?: string;
 }
 
 interface CaddyConfigResponse {
@@ -822,18 +830,46 @@ async function configureCaddyHandler(
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
 
-  const { domain, decoyPort, htmlContent } = call.request;
+  const { domains, domain, decoyPort, htmlContent } = call.request;
 
   try {
-    const webDir = '/var/www/decoy';
-    await fs.mkdir(webDir, { recursive: true });
+    let rawDomains: string[] = [];
+    if (Array.isArray(domains) && domains.length > 0) {
+      rawDomains = domains;
+    } else if (domain) {
+      rawDomains = [domain];
+    }
+
+    const uniqueDomains = Array.from(
+      new Set(
+        rawDomains
+          .map((d) => (typeof d === 'string' ? d.trim() : ''))
+          .filter((d) => d.length > 0)
+      )
+    );
+
+    if (uniqueDomains.length === 0) {
+      return callback(null, { success: false, message: 'Список доменов пуст' });
+    }
+
     if (htmlContent) {
+      const webDir = '/var/www/decoy';
+      await fs.mkdir(webDir, { recursive: true });
       await fs.writeFile(path.join(webDir, 'index.html'), htmlContent, 'utf-8');
     }
 
-    const port = decoyPort || 8443;
-    const hostHeader = domain ? `${domain}:${port}` : `:${port}`;
-    const caddyfileContent = `${hostHeader} {\n\thandle {\n\t\troot * ${webDir}\n\t\tfile_server\n\t}\n}\n`;
+    let caddyfileContent = '# Auto-generated by Route Agent\n\n';
+
+    for (const d of uniqueDomains) {
+      const hostHeader = decoyPort ? `${d}:${decoyPort}` : d;
+      caddyfileContent += `${hostHeader} {\n`;
+      if (htmlContent) {
+        caddyfileContent += `\thandle {\n\t\troot * /var/www/decoy\n\t\tfile_server\n\t}\n`;
+      } else {
+        caddyfileContent += `\trespond "OK" 200\n`;
+      }
+      caddyfileContent += `}\n\n`;
+    }
 
     const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
     const caddyDir = path.dirname(caddyfilePath);
@@ -848,19 +884,20 @@ async function configureCaddyHandler(
         const { stdout, stderr } = await execAsync(reloadCmd);
         if (stdout) logger.info({ stdout }, 'Caddy reload stdout');
         if (stderr) logger.warn({ stderr }, 'Caddy reload stderr');
-      } catch (err: any) {
-        logger.warn({ err: err.message }, 'Failed to reload Caddy service');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: msg }, 'Failed to reload Caddy service');
       }
     }
 
     return callback(null, {
       success: true,
-      message: `Caddy successfully configured for ${hostHeader}`
+      message: `Caddyfile обновлен для доменов: ${uniqueDomains.join(', ')}`
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
+    const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err: msg }, 'Failed to configure Caddy');
-    return callback(null, { success: false, message: `Caddy configuration error: ${msg}` });
+    return callback(null, { success: false, message: msg });
   }
 }
 

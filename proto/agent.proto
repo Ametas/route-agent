@@ -69,9 +69,10 @@ message UpgradeResponse {
 }
 
 message CaddyConfigPayload {
-  string domain = 1;
-  uint32 decoy_port = 2;
-  string html_content = 3;
+  repeated string domains = 1;
+  string domain = 2;
+  uint32 decoy_port = 3;
+  string html_content = 4;
 }
 
 message CaddyConfigResponse {
