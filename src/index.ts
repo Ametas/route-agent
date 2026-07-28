@@ -32,7 +32,7 @@ const agentPackage = protoDescriptor.agent;
 export let serverInstance: Server | null = null;
 
 /**
- * Инициализация gRPC ServerCredentials (mTLS с проверкой клиентских сертификатов или insecure fallback)
+ * Инициализация gRPC ServerCredentials (mTLS с проверкой сертификатов или insecure fallback)
  */
 async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredentials; isMtls: boolean }> {
   try {
@@ -51,13 +51,10 @@ async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredenti
       ]);
 
       logger.info({ caPath: CA_CERT_PATH, certPath: AGENT_CERT_PATH }, '🔒 Enabling mTLS with strict client certificate verification');
-
-      const credentials = ServerCredentials.createSsl(
-        caCert,
-        [{ cert_chain: agentCert, private_key: agentKey }],
-        true
-      );
-      return { credentials, isMtls: true };
+      return {
+        credentials: ServerCredentials.createSsl(caCert, [{ cert_chain: agentCert, private_key: agentKey }], true),
+        isMtls: true
+      };
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
