@@ -153,14 +153,20 @@ export async function configureCaddyHandler(
     }
 
     const rawXhttpRegexp = sanitizeConfigInput(xhttpRegexp || xhttp_regexp);
-    const finalXhttpRegexp = rawXhttpRegexp || '^/xhttp-path.*$';
-    const finalXhttpRewrite = sanitizeConfigInput(xhttpRewrite || xhttp_rewrite);
+    const finalXhttpRegexp = rawXhttpRegexp || '^/(api/v1/health|api/v1/session/heartbeat|api/v1/push/register|api/v1/metrics/report|api/v1/user/preferences|api/v1/cdn/edge-status)(.*)$';
+    const rawXhttpRewrite = (xhttpRewrite !== undefined && xhttpRewrite !== null) || (xhttp_rewrite !== undefined && xhttp_rewrite !== null)
+      ? sanitizeConfigInput(xhttpRewrite || xhttp_rewrite)
+      : undefined;
+    const finalXhttpRewrite = rawXhttpRewrite !== undefined ? rawXhttpRewrite : '/api{re.xhttp.2}';
     const rawXhttpSocket = sanitizeConfigInput(xhttpSocket || xhttp_socket);
     const finalXhttpSocket = rawXhttpSocket || 'unix//dev/shm/vless-xhttp.sock';
 
     const rawGrpcRegexp = sanitizeConfigInput(grpcRegexp || grpc_regexp);
-    const finalGrpcRegexp = rawGrpcRegexp || '^/grpc-path.*$';
-    const finalGrpcRewrite = sanitizeConfigInput(grpcRewrite || grpc_rewrite);
+    const finalGrpcRegexp = rawGrpcRegexp || '^/(AssetPackService|ContentDeliveryService|ConfigFetchService|SessionSyncService|FeatureFlagService|CrashReportUploadService)(.*)$';
+    const rawGrpcRewrite = (grpcRewrite !== undefined && grpcRewrite !== null) || (grpc_rewrite !== undefined && grpc_rewrite !== null)
+      ? sanitizeConfigInput(grpcRewrite || grpc_rewrite)
+      : undefined;
+    const finalGrpcRewrite = rawGrpcRewrite !== undefined ? rawGrpcRewrite : '/AssetPackService{re.grpc.2}';
     const rawGrpcSocket = sanitizeConfigInput(grpcSocket || grpc_socket);
     const finalGrpcSocket = rawGrpcSocket || 'unix+h2c//dev/shm/vless-grpc.sock';
 
@@ -172,13 +178,12 @@ export async function configureCaddyHandler(
       caddyfileContent += `    log {\n        output stdout\n        format console\n        level DEBUG\n    }\n\n`;
 
       if (finalXhttpRegexp && finalXhttpSocket) {
-        caddyfileContent += `    @vless-xhttp path_regexp xhttp "${finalXhttpRegexp}"\n    
-    handle @vless-xhttp {\n`;
+        caddyfileContent += `    @vless-xhttp path_regexp xhttp ${finalXhttpRegexp}\n`;
+        caddyfileContent += `    handle @vless-xhttp {\n`;
         if (finalXhttpRewrite) {
           caddyfileContent += `        rewrite * ${finalXhttpRewrite}\n`;
         }
-        caddyfileContent += `        
-        reverse_proxy "${finalXhttpSocket}" {\n`;
+        caddyfileContent += `        reverse_proxy ${finalXhttpSocket} {\n`;
         caddyfileContent += `            flush_interval -1\n`;
         caddyfileContent += `            transport http {\n`;
         caddyfileContent += `                versions h2c 2\n`;
@@ -190,14 +195,13 @@ export async function configureCaddyHandler(
       if (finalGrpcRegexp && finalGrpcSocket) {
         caddyfileContent += `    @vless-grpc {\n`;
         caddyfileContent += `        protocol grpc\n`;
-        caddyfileContent += `        path_regexp grpc "${finalGrpcRegexp}"\n`;
-        caddyfileContent += `    }\n    
-    handle @vless-grpc {\n`;
+        caddyfileContent += `        path_regexp grpc ${finalGrpcRegexp}\n`;
+        caddyfileContent += `    }\n`;
+        caddyfileContent += `    handle @vless-grpc {\n`;
         if (finalGrpcRewrite) {
           caddyfileContent += `        rewrite * ${finalGrpcRewrite}\n`;
         }
-        caddyfileContent += `        
-        reverse_proxy "${finalGrpcSocket}" {\n`;
+        caddyfileContent += `        reverse_proxy ${finalGrpcSocket} {\n`;
         caddyfileContent += `            flush_interval -1\n`;
         caddyfileContent += `        }\n`;
         caddyfileContent += `    }\n\n`;
@@ -519,7 +523,19 @@ export async function configureAwgHandler(
 
       try {
         await execAsync('iptables -C FORWARD -i awg0 -j ACCEPT || iptables -A FORWARD -i awg0 -j ACCEPT');
-        await execAsync("iptables -t nat -C POSTROUTING -o $(ip route show default | awk '/default/ {print $5}') -j MASQUERADE || iptables -t nat -A POSTROUTING -o $(ip route show default | awk '/default/ {print $5}') -j MASQUERADE");
+
+        let defaultIface = '';
+        try {
+          const { stdout: routeOut } = await execAsync('ip route show default');
+          const match = routeOut.match(/dev\s+([^\s]+)/);
+          if (match && match[1]) {
+            defaultIface = match[1];
+          }
+        } catch {}
+
+        if (defaultIface) {
+          await execAsync(`iptables -t nat -C POSTROUTING -o ${defaultIface} -j MASQUERADE || iptables -t nat -A POSTROUTING -o ${defaultIface} -j MASQUERADE`);
+        }
       } catch (err: any) {
         logger.warn({ err: err.message }, 'Failed to configure iptables NAT rules for awg0');
       }

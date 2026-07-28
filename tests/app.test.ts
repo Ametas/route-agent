@@ -286,12 +286,12 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.strictEqual(htmlContent, '<html><body>Camouflage Site</body></html>');
 
         const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
-        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp "^/xhttp-path.*$"') || caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
-        assert.ok(caddyContent.includes('reverse_proxy "unix//run/sing-box-xhttp.sock"') || caddyContent.includes('reverse_proxy unix//run/sing-box-xhttp.sock'));
+        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
+        assert.ok(caddyContent.includes('reverse_proxy unix//run/sing-box-xhttp.sock'));
         assert.ok(caddyContent.includes('@vless-grpc'));
         assert.ok(caddyContent.includes('protocol grpc'));
-        assert.ok(caddyContent.includes('path_regexp grpc "^/grpc-path.*$"') || caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
-        assert.ok(caddyContent.includes('reverse_proxy "127.0.0.1:10080"') || caddyContent.includes('reverse_proxy 127.0.0.1:10080'));
+        assert.ok(caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
+        assert.ok(caddyContent.includes('reverse_proxy 127.0.0.1:10080'));
         assert.ok(caddyContent.includes(`root * ${tempCamouflageDir}`));
         assert.ok(caddyContent.includes('file_server'));
         done();
@@ -319,8 +319,11 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.strictEqual(response.success, true);
 
         const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
-        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp "^/xhttp-path.*$"') || caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
-        assert.ok(caddyContent.includes('path_regexp grpc "^/grpc-path.*$"') || caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
+        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp ^/(api/v1/health|api/v1/session/heartbeat|api/v1/push/register|api/v1/metrics/report|api/v1/user/preferences|api/v1/cdn/edge-status)(.*)$'));
+        assert.ok(caddyContent.includes('rewrite * /api{re.xhttp.2}'));
+        assert.ok(caddyContent.includes('@vless-grpc'));
+        assert.ok(caddyContent.includes('path_regexp grpc ^/(AssetPackService|ContentDeliveryService|ConfigFetchService|SessionSyncService|FeatureFlagService|CrashReportUploadService)(.*)$'));
+        assert.ok(caddyContent.includes('rewrite * /AssetPackService{re.grpc.2}'));
         done();
       } catch (e) {
         done(e);

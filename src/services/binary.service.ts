@@ -20,6 +20,7 @@ export async function uploadSingboxBinaryHandler(
 ): Promise<void> {
   const metadataSecret = extractSecretFromMetadata(call);
   let secretVerified = verifySecret(metadataSecret);
+  let isAborted = false;
 
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
@@ -28,6 +29,8 @@ export async function uploadSingboxBinaryHandler(
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
   call.on('data', (data: any) => {
+    if (isAborted) return;
+
     if (!secretVerified) {
       if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
         secretVerified = true;
@@ -35,6 +38,7 @@ export async function uploadSingboxBinaryHandler(
     }
 
     if (!secretVerified) {
+      isAborted = true;
       logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
       try {
         callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
@@ -57,6 +61,8 @@ export async function uploadSingboxBinaryHandler(
   });
 
   call.on('end', async () => {
+    if (isAborted) return;
+
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
     }
@@ -145,6 +151,7 @@ export async function uploadOlcrtcBinaryHandler(
 ): Promise<void> {
   const metadataSecret = extractSecretFromMetadata(call);
   let secretVerified = verifySecret(metadataSecret);
+  let isAborted = false;
 
   let targetVersion = 'unknown';
   let targetBinary = 'olcrtc-manager';
@@ -155,6 +162,8 @@ export async function uploadOlcrtcBinaryHandler(
   let tempPath = '';
 
   call.on('data', (data: any) => {
+    if (isAborted) return;
+
     if (!secretVerified) {
       if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
         secretVerified = true;
@@ -162,6 +171,7 @@ export async function uploadOlcrtcBinaryHandler(
     }
 
     if (!secretVerified) {
+      isAborted = true;
       logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
       try {
         callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
@@ -190,6 +200,8 @@ export async function uploadOlcrtcBinaryHandler(
   });
 
   call.on('end', async () => {
+    if (isAborted) return;
+
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
     }
@@ -293,7 +305,7 @@ export async function upgradeSingboxHandler(
   try {
     logger.info({ version: targetVersion, url }, 'Initiating sing-box binary upgrade via download URL...');
 
-    await execFileAsync('curl', ['-fsSL', '--proto', '=http,https', '--', url, '-o', tempPath]);
+    await execFileAsync('curl', ['-fsSL', '--connect-timeout', '10', '--max-time', '300', '--proto', '=http,https', '--', url, '-o', tempPath]);
     await fs.chmod(tempPath, 0o755);
 
     if (process.env.NODE_ENV !== 'test') {
