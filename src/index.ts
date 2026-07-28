@@ -12,6 +12,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 import path from 'path';
 import pino from 'pino';
 import net from 'net';
@@ -34,26 +35,30 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 const protoDescriptor = loadPackageDefinition(packageDefinition) as any;
 const agentPackage = protoDescriptor.agent;
 
-let lastCpuStats = { idle: 0, total: 0 };
+interface CpuStats {
+  idle: number;
+  total: number;
+}
 
 /**
  * Читает и высчитывает дельту утилизации CPU из /proc/stat
  */
-async function getCpuUsage(): Promise<number> {
+async function getCpuUsage(prevStats: CpuStats): Promise<{ cpuUsage: number; newStats: CpuStats }> {
   try {
     const stat = await fs.readFile('/proc/stat', 'utf-8');
     const firstLine = stat.split('\n')[0];
     const times = firstLine.split(/\s+/).slice(1).map(Number);
     const total = times.reduce((a, b) => a + b, 0);
     const idle = times[3];
-    
-    const diffIdle = idle - lastCpuStats.idle;
-    const diffTotal = total - lastCpuStats.total;
-    lastCpuStats = { idle, total };
-    
-    return diffTotal === 0 ? 0 : ((diffTotal - diffIdle) / diffTotal) * 100;
+
+    const diffIdle = idle - prevStats.idle;
+    const diffTotal = total - prevStats.total;
+    const newStats = { idle, total };
+
+    const cpuUsage = diffTotal === 0 ? 0 : ((diffTotal - diffIdle) / diffTotal) * 100;
+    return { cpuUsage, newStats };
   } catch {
-    return 0;
+    return { cpuUsage: 0, newStats: prevStats };
   }
 }
 
@@ -647,6 +652,7 @@ async function streamTelemetryHandler(
 
   let telemetryInterval: NodeJS.Timeout | null = null;
   let isCleanedUp = false;
+  let streamCpuStats: CpuStats = { idle: 0, total: 0 };
 
   // Единая функция очистки всех ресурсов стрима
   const cleanup = () => {
@@ -673,19 +679,20 @@ async function streamTelemetryHandler(
     if (isCleanedUp) return;
 
     try {
-      const [cpu, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
-        getCpuUsage(),
+      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
+        getCpuUsage(streamCpuStats),
         getMemoryUsage(),
         getConnectionCount(),
         getWebRtcStatus(),
         getSingBoxVersionCached(),
         getAwgActivePeersCount()
       ]);
+      streamCpuStats = newStats;
 
       if (isCleanedUp) return;
 
       call.write({
-        cpuUsage: cpu,
+        cpuUsage,
         memUsage: mem,
         activeConnections: conns,
         systemLogs: logBuffer,
@@ -707,12 +714,14 @@ async function streamTelemetryHandler(
  * RPC Обработчик UploadSingboxBinary (клиентский стрим RPC)
  */
 async function uploadSingboxBinaryHandler(
-  call: ServerReadableStream<BinaryChunk, UpgradeResponse>,
+  call: ServerReadableStream<BinaryChunkPayload, UpgradeResponse>,
   callback: sendUnaryData<UpgradeResponse>
 ): Promise<void> {
-  const chunks: Buffer[] = [];
+  const tempPath = '/tmp/sing-box.download';
   let secretVerified = false;
   let targetVersion = 'unknown';
+  let bytesWritten = 0;
+  let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
   const metadataSecret = extractSecretFromMetadata(call);
   if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
@@ -729,27 +738,35 @@ async function uploadSingboxBinaryHandler(
       targetVersion = data.version;
     }
     if (data.chunk && data.chunk.length > 0) {
-      chunks.push(Buffer.from(data.chunk));
+      if (!fileStream) {
+        fileStream = createWriteStream(tempPath);
+      }
+      const buf = Buffer.from(data.chunk);
+      fileStream.write(buf);
+      bytesWritten += buf.length;
     }
   });
 
   call.on('end', async () => {
+    if (fileStream) {
+      await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
     if (!secretVerified) {
+      await fs.unlink(tempPath).catch(() => {});
       logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
       return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
-    if (chunks.length === 0) {
+    if (bytesWritten === 0) {
+      await fs.unlink(tempPath).catch(() => {});
       return callback(null, { success: false, message: 'No binary data received.' });
     }
 
     try {
-      const fullBuffer = Buffer.concat(chunks);
-      const tempPath = '/tmp/sing-box.download';
       const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
 
       await fs.mkdir(path.dirname(tempPath), { recursive: true });
-      await fs.writeFile(tempPath, fullBuffer);
       await fs.chmod(tempPath, 0o755);
 
       if (process.env.NODE_ENV !== 'test') {
@@ -793,12 +810,15 @@ async function uploadSingboxBinaryHandler(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       logger.error({ err: msg }, 'Failed to apply uploaded sing-box binary');
+      await fs.unlink(tempPath).catch(() => {});
       return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
     }
   });
 
   call.on('error', (err) => {
     logger.error({ err: err.message }, 'Error in UploadSingboxBinary stream');
+    if (fileStream) fileStream.end();
+    fs.unlink(tempPath).catch(() => {});
   });
 }
 
@@ -806,60 +826,70 @@ async function uploadSingboxBinaryHandler(
  * RPC Обработчик UploadOlcrtcBinary (универсальный клиентский стрим RPC для olcrtc / olcrtc-manager)
  */
 async function uploadOlcrtcBinaryHandler(
-  call: ServerReadableStream<BinaryChunk, UpgradeResponse>,
-  callback: sendUnaryData<UpgradeResponse>
+  call: ServerReadableStream<BinaryChunkPayload, UploadBinaryResponse>,
+  callback: sendUnaryData<UploadBinaryResponse>
 ): Promise<void> {
-  const chunks: Buffer[] = [];
   let secretVerified = false;
   let targetVersion = 'unknown';
   let targetBinary = 'olcrtc-manager';
+  let bytesWritten = 0;
+
+  const ALLOWED_BINARIES = new Set(['olcrtc', 'olcrtc-manager']);
+  let fileStream: ReturnType<typeof createWriteStream> | null = null;
+  let tempPath = '';
 
   const metadataSecret = extractSecretFromMetadata(call);
   if (metadataSecret === config.EGRESS_CONTROL_SECRET) {
     secretVerified = true;
   }
 
-  call.on('data', (data: BinaryChunk) => {
+  call.on('data', (data: BinaryChunkPayload) => {
     if (!secretVerified) {
-      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET) {
+      if (data.orchestratorSecret === config.EGRESS_CONTROL_SECRET || data.orchestrator_secret === config.EGRESS_CONTROL_SECRET) {
         secretVerified = true;
       }
     }
     if (data.version) {
       targetVersion = data.version;
     }
-    if (data.targetBinary) {
-      targetBinary = data.targetBinary;
+    if (data.targetBinary || data.target_binary) {
+      targetBinary = (data.targetBinary || data.target_binary)!;
     }
     if (data.chunk && data.chunk.length > 0) {
-      chunks.push(Buffer.from(data.chunk));
+      if (!fileStream) {
+        const safeTargetBinary = ALLOWED_BINARIES.has(targetBinary) ? targetBinary : 'olcrtc-manager';
+        tempPath = `/tmp/${safeTargetBinary}.download`;
+        fileStream = createWriteStream(tempPath);
+      }
+      const buf = Buffer.from(data.chunk);
+      fileStream.write(buf);
+      bytesWritten += buf.length;
     }
   });
 
   call.on('end', async () => {
+    if (fileStream) {
+      await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
     if (!secretVerified) {
+      if (tempPath) await fs.unlink(tempPath).catch(() => {});
       logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
       return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
-    if (chunks.length === 0) {
+    if (bytesWritten === 0) {
+      if (tempPath) await fs.unlink(tempPath).catch(() => {});
       return callback(null, { success: false, message: 'No binary data received.' });
     }
 
     try {
-      const fullBuffer = Buffer.concat(chunks);
-
-      const ALLOWED_BINARIES = new Set(['olcrtc', 'olcrtc-manager']);
-      const requestedBinary = targetBinary || 'olcrtc-manager';
-      const safeTargetBinary = ALLOWED_BINARIES.has(requestedBinary) ? requestedBinary : 'olcrtc-manager';
-
-      const tempPath = `/tmp/${safeTargetBinary}.download`;
+      const safeTargetBinary = ALLOWED_BINARIES.has(targetBinary) ? targetBinary : 'olcrtc-manager';
       let targetPath = (safeTargetBinary === 'olcrtc') 
         ? (config.OLCRTC_BINARY_PATH || '/usr/local/bin/olcrtc')
         : (config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager');
 
       await fs.mkdir(path.dirname(tempPath), { recursive: true });
-      await fs.writeFile(tempPath, fullBuffer);
       await fs.chmod(tempPath, 0o755);
 
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
