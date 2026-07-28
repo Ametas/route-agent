@@ -1,7 +1,7 @@
 import { ServerWritableStream } from '@grpc/grpc-js';
 import { spawn } from 'child_process';
 import pino from 'pino';
-import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
+import { authenticateCall } from '../middleware/auth.js';
 import {
   getCpuUsage,
   getMemoryUsage,
@@ -20,9 +20,7 @@ const logger = pino({ level: 'info' });
 export async function streamTelemetryHandler(
   call: ServerWritableStream<any, any>
 ): Promise<void> {
-  const secretHeader = extractSecretFromMetadata(call) || call.request?.orchestratorSecret;
-
-  if (!verifySecret(secretHeader)) {
+  if (!authenticateCall(call)) {
     logger.warn('Unauthorized gRPC telemetry stream requested');
     call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
     return;
@@ -75,8 +73,8 @@ export async function streamTelemetryHandler(
   call.on('finish', cleanup);
   call.on('error', cleanup);
 
-  const sendTelemetry = async () => {
-    if (isCleanedUp) return;
+  const sendTelemetryTick = async (): Promise<void> => {
+    if (isCleanedUp || call.destroyed) return;
 
     try {
       const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
@@ -89,7 +87,7 @@ export async function streamTelemetryHandler(
       ]);
       streamCpuStats = newStats;
 
-      if (isCleanedUp) return;
+      if (isCleanedUp || call.destroyed) return;
 
       call.write({
         cpuUsage,
@@ -110,6 +108,6 @@ export async function streamTelemetryHandler(
   };
 
   // Immediate initial push, then stream every 2s
-  sendTelemetry();
-  telemetryInterval = setInterval(sendTelemetry, 2000);
+  await sendTelemetryTick();
+  telemetryInterval = setInterval(sendTelemetryTick, 2000);
 }
