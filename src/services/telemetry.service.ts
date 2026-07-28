@@ -9,6 +9,8 @@ import {
   getWebRtcStatus,
   getSingBoxVersionCached,
   getAwgActivePeersCount,
+  getAwgVersionCached,
+  getAwgStatus,
   CpuStats
 } from '../utils/telemetry.js';
 
@@ -79,13 +81,15 @@ export async function streamTelemetryHandler(
     if (isCleanedUp || call.destroyed) return;
 
     try {
-      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
+      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgVer, awgStat] = await Promise.all([
         getCpuUsage(streamCpuStats),
         getMemoryUsage(),
         getConnectionCount(),
         getWebRtcStatus(),
         getSingBoxVersionCached(),
-        getAwgActivePeersCount()
+        getAwgActivePeersCount(),
+        getAwgVersionCached(),
+        getAwgStatus()
       ]);
       streamCpuStats = newStats;
 
@@ -100,7 +104,9 @@ export async function streamTelemetryHandler(
           timestamp: Date.now(),
           webrtcStatus: webrtc,
           singboxVersion: sbVersion,
-          awgActivePeers: awgPeers
+          awgActivePeers: awgPeers,
+          awgVersion: awgVer,
+          awgStatus: awgStat
         });
       } catch {
         cleanup();
@@ -136,19 +142,23 @@ export async function getTelemetryHandler(
       timestamp: Date.now(),
       webrtcStatus: 'unauthorized',
       singboxVersion: 'unknown',
-      awgActivePeers: 0
+      awgActivePeers: 0,
+      awgVersion: 'unknown',
+      awgStatus: 'unauthorized'
     });
   }
 
   try {
     let streamCpuStats: CpuStats = { idle: 0, total: 0 };
-    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers] = await Promise.all([
+    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgVer, awgStat] = await Promise.all([
       getCpuUsage(streamCpuStats),
       getMemoryUsage(),
       getConnectionCount(),
       getWebRtcStatus(),
       getSingBoxVersionCached(),
-      getAwgActivePeersCount()
+      getAwgActivePeersCount(),
+      getAwgVersionCached(),
+      getAwgStatus()
     ]);
 
     return callback(null, {
@@ -159,7 +169,9 @@ export async function getTelemetryHandler(
       timestamp: Date.now(),
       webrtcStatus: webrtc,
       singboxVersion: sbVersion,
-      awgActivePeers: awgPeers
+      awgActivePeers: awgPeers,
+      awgVersion: awgVer,
+      awgStatus: awgStat
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -172,7 +184,9 @@ export async function getTelemetryHandler(
       timestamp: Date.now(),
       webrtcStatus: 'error',
       singboxVersion: 'error',
-      awgActivePeers: 0
+      awgActivePeers: 0,
+      awgVersion: 'error',
+      awgStatus: 'error'
     });
   }
 }

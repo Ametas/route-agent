@@ -216,3 +216,46 @@ export async function getAwgActivePeersCount(): Promise<number> {
     return 0;
   }
 }
+
+/**
+ * Определение версии AmneziaWG (awg)
+ */
+export async function getAwgVersion(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('/usr/local/bin/awg', ['--version']);
+    const match = stdout.match(/v?([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
+    return match ? match[1] : 'installed';
+  } catch {
+    return 'not_installed';
+  }
+}
+
+let cachedAwgVersion = '';
+let lastAwgCheckTime = 0;
+
+export async function getAwgVersionCached(): Promise<string> {
+  const now = Date.now();
+  if (cachedAwgVersion && (now - lastAwgCheckTime < 60000)) {
+    return cachedAwgVersion;
+  }
+  cachedAwgVersion = await getAwgVersion();
+  lastAwgCheckTime = now;
+  return cachedAwgVersion;
+}
+
+export function invalidateAwgVersionCache(): void {
+  cachedAwgVersion = '';
+  lastAwgCheckTime = 0;
+}
+
+export async function getAwgStatus(): Promise<string> {
+  if (process.env.NODE_ENV === 'test') {
+    return 'nominal';
+  }
+  try {
+    await execAsync('ip link show awg0');
+    return 'nominal';
+  } catch {
+    return 'inactive';
+  }
+}

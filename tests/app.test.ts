@@ -93,9 +93,13 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.ok(data.hasOwnProperty('webrtcStatus'));
         assert.ok(data.hasOwnProperty('singboxVersion'));
         assert.ok(data.hasOwnProperty('awgActivePeers'));
+        assert.ok(data.hasOwnProperty('awgVersion'));
+        assert.ok(data.hasOwnProperty('awgStatus'));
         assert.strictEqual(data.webrtcStatus, 'nominal');
         assert.strictEqual(typeof data.singboxVersion, 'string');
         assert.strictEqual(typeof data.awgActivePeers, 'number');
+        assert.strictEqual(typeof data.awgVersion, 'string');
+        assert.strictEqual(typeof data.awgStatus, 'string');
         assert.strictEqual(typeof data.cpuUsage, 'number');
         assert.strictEqual(typeof data.memUsage, 'number');
         assert.strictEqual(typeof data.activeConnections, 'number');
@@ -119,8 +123,12 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.ok(response.hasOwnProperty('webrtcStatus'));
       assert.ok(response.hasOwnProperty('singboxVersion'));
       assert.ok(response.hasOwnProperty('awgActivePeers'));
+      assert.ok(response.hasOwnProperty('awgVersion'));
+      assert.ok(response.hasOwnProperty('awgStatus'));
       assert.strictEqual(typeof response.singboxVersion, 'string');
       assert.strictEqual(typeof response.awgActivePeers, 'number');
+      assert.strictEqual(typeof response.awgVersion, 'string');
+      assert.strictEqual(typeof response.awgStatus, 'string');
       assert.strictEqual(typeof response.cpuUsage, 'number');
       assert.strictEqual(typeof response.memUsage, 'number');
       assert.strictEqual(typeof response.activeConnections, 'number');

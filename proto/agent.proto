@@ -11,6 +11,7 @@ service EgressAgentService {
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
   rpc UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  rpc UploadAwgBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
@@ -38,6 +39,8 @@ message TelemetryResponse {
   string webrtc_status = 6;
   string singbox_version = 7;
   uint32 awg_active_peers = 8;
+  string awg_version = 9;
+  string awg_status = 10;
 }
 
 message UpgradePayload {
