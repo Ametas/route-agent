@@ -54,7 +54,8 @@ export async function validateSingBoxConfig(configObj: object): Promise<{ valid:
  */
 export async function atomicApplyAndReload(configObj: object): Promise<void> {
   const targetDir = path.dirname(config.SINGBOX_CONFIG_PATH);
-  const tempFilePath = path.join(targetDir, `.config.${Date.now()}.tmp`);
+  const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const tempFilePath = path.join(targetDir, `.config.${uniqueId}.tmp`);
   const backupFilePath = `${config.SINGBOX_CONFIG_PATH}.bak`;
 
   // 1. Сохраняем бэкап текущей конфигурации при её наличии

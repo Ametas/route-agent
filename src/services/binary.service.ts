@@ -18,27 +18,20 @@ export async function uploadSingboxBinaryHandler(
   call: ServerReadableStream<any, any>,
   callback: sendUnaryData<any>
 ): Promise<void> {
+  const metadataSecret = extractSecretFromMetadata(call);
+  if (!verifySecret(metadataSecret)) {
+    logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
+    call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
-  let secretVerified = false;
   let targetVersion = 'unknown';
   let bytesWritten = 0;
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
-  const metadataSecret = extractSecretFromMetadata(call);
-  if (verifySecret(metadataSecret)) {
-    secretVerified = true;
-  }
-
   call.on('data', (data: any) => {
-    if (!secretVerified) {
-      if (verifySecret(data.orchestratorSecret) || verifySecret(data.orchestrator_secret)) {
-        secretVerified = true;
-      }
-    }
-    if (!secretVerified) {
-      return;
-    }
     if (data.version) {
       targetVersion = data.version;
     }
@@ -55,12 +48,6 @@ export async function uploadSingboxBinaryHandler(
   call.on('end', async () => {
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
-    }
-
-    if (!secretVerified) {
-      await fs.unlink(tempPath).catch(() => {});
-      logger.warn('Unauthorized UploadSingboxBinary attempt rejected');
-      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
     if (bytesWritten === 0) {
@@ -139,7 +126,13 @@ export async function uploadOlcrtcBinaryHandler(
   call: ServerReadableStream<any, any>,
   callback: sendUnaryData<any>
 ): Promise<void> {
-  let secretVerified = false;
+  const metadataSecret = extractSecretFromMetadata(call);
+  if (!verifySecret(metadataSecret)) {
+    logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
+    call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
   let targetVersion = 'unknown';
   let targetBinary = 'olcrtc-manager';
   let bytesWritten = 0;
@@ -148,20 +141,7 @@ export async function uploadOlcrtcBinaryHandler(
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
   let tempPath = '';
 
-  const metadataSecret = extractSecretFromMetadata(call);
-  if (verifySecret(metadataSecret)) {
-    secretVerified = true;
-  }
-
   call.on('data', (data: any) => {
-    if (!secretVerified) {
-      if (verifySecret(data.orchestratorSecret) || verifySecret(data.orchestrator_secret)) {
-        secretVerified = true;
-      }
-    }
-    if (!secretVerified) {
-      return;
-    }
     if (data.version) {
       targetVersion = data.version;
     }
@@ -184,12 +164,6 @@ export async function uploadOlcrtcBinaryHandler(
   call.on('end', async () => {
     if (fileStream) {
       await new Promise<void>((resolve) => fileStream!.end(resolve));
-    }
-
-    if (!secretVerified) {
-      if (tempPath) await fs.unlink(tempPath).catch(() => {});
-      logger.warn('Unauthorized UploadOlcrtcBinary attempt rejected');
-      return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
     }
 
     if (bytesWritten === 0) {
@@ -269,6 +243,15 @@ export async function upgradeSingboxHandler(
     return callback(null, { success: false, message: 'Missing download_url in request payload.' });
   }
 
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return callback(null, { success: false, message: 'Invalid URL protocol: must be http or https.' });
+    }
+  } catch {
+    return callback(null, { success: false, message: 'Invalid download_url format.' });
+  }
+
   const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempPath = `/tmp/sing-box_${uniqueId}.tmp`;
@@ -276,7 +259,7 @@ export async function upgradeSingboxHandler(
   try {
     logger.info({ version: targetVersion, url }, 'Initiating sing-box binary upgrade via download URL...');
 
-    await execFileAsync('curl', ['-fsSL', url, '-o', tempPath]);
+    await execFileAsync('curl', ['-fsSL', '--proto', '=http,https', '--', url, '-o', tempPath]);
     await fs.chmod(tempPath, 0o755);
 
     if (process.env.NODE_ENV !== 'test') {

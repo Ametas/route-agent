@@ -24,8 +24,8 @@ export async function manageFirewallHandler(
     const rawUdp = openUdpPorts || open_udp_ports || [];
     const rawTcp = openTcpPorts || open_tcp_ports || [];
 
-    const openUdp = Array.isArray(rawUdp) ? rawUdp.map(Number).filter((p) => p > 0 && p <= 65535) : [];
-    const openTcp = Array.isArray(rawTcp) ? rawTcp.map(Number).filter((p) => p > 0 && p <= 65535) : [];
+    const openUdp = Array.isArray(rawUdp) ? rawUdp.map(Number).filter((p) => Number.isInteger(p) && p > 0 && p <= 65535) : [];
+    const openTcp = Array.isArray(rawTcp) ? rawTcp.map(Number).filter((p) => Number.isInteger(p) && p > 0 && p <= 65535) : [];
 
     if (process.env.NODE_ENV === 'test') {
       return callback(null, {

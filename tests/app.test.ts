@@ -51,6 +51,9 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     grpc.credentials.createInsecure()
   );
 
+  const validMetadata = new grpc.Metadata();
+  validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
   t.after(async () => {
     client.close();
     server.forceShutdown();
@@ -111,8 +114,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('UploadSingboxBinary should block stream with invalid secret', (t, done) => {
-    const call = client.uploadSingboxBinary((err: any, response: any) => {
-      assert.ifError(err);
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'invalid_secret');
+
+    const call = client.uploadSingboxBinary(badMetadata, (err: any, response: any) => {
+      if (err) {
+        assert.ok(err);
+        done();
+        return;
+      }
       assert.strictEqual(response.success, false);
       assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
       done();
@@ -122,7 +132,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('UploadSingboxBinary should upload binary chunks and update target binary file', (t, done) => {
-    const call = client.uploadSingboxBinary(async (err: any, response: any) => {
+    const call = client.uploadSingboxBinary(validMetadata, async (err: any, response: any) => {
       try {
         assert.ifError(err);
         assert.strictEqual(response.success, true);
@@ -140,7 +150,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('UploadOlcrtcBinary should upload olcrtc / olcrtc-manager binaries', (t, done) => {
-    const call = client.uploadOlcrtcBinary(async (err: any, response: any) => {
+    const call = client.uploadOlcrtcBinary(validMetadata, async (err: any, response: any) => {
       try {
         assert.ifError(err);
         assert.strictEqual(response.success, true);
@@ -157,7 +167,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('UploadOlcrtcBinary should sanitize path traversal targetBinary to olcrtc-manager fallback', (t, done) => {
-    const call = client.uploadOlcrtcBinary(async (err: any, response: any) => {
+    const call = client.uploadOlcrtcBinary(validMetadata, async (err: any, response: any) => {
       try {
         assert.ifError(err);
         assert.strictEqual(response.success, true);
@@ -637,18 +647,18 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
 
     await t.test('validateSafeCamouflagePath should allow safe paths and reject Path Traversal attempts', () => {
-      const safe1 = validateSafeCamouflagePath('/var/www/my-site', true);
+      const safe1 = validateSafeCamouflagePath('/var/www/my-site');
       assert.ok(safe1.endsWith('my-site'));
 
-      const safe2 = validateSafeCamouflagePath('/tmp/camouflage/site', true);
+      const safe2 = validateSafeCamouflagePath('/tmp/camouflage/site');
       assert.ok(safe2.endsWith('site'));
 
       assert.throws(() => {
-        validateSafeCamouflagePath('/var/www/../etc/passwd', true);
+        validateSafeCamouflagePath('/var/www/../etc/passwd');
       }, /Path Traversal restriction/);
 
       assert.throws(() => {
-        validateSafeCamouflagePath('/root/secret', true);
+        validateSafeCamouflagePath('/root/secret');
       }, /Path Traversal restriction/);
     });
 
