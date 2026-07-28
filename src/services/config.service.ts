@@ -160,11 +160,19 @@ export async function configureCaddyHandler(
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
         }
+        
+        let journalLogs = '';
+        try {
+          const { stdout } = await execAsync('journalctl -u caddy -n 12 --no-pager');
+          journalLogs = stdout.trim();
+        } catch {}
+
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err: msg }, 'Failed to reload Caddy service, rolled back to previous Caddyfile');
+        logger.warn({ err: msg, journalLogs }, 'Failed to reload Caddy service');
+        
         return callback(null, {
           success: false,
-          message: `Сбой службы Caddy при reload:\n${msg}`
+          message: `Сбой службы Caddy при reload:\n${journalLogs || msg}`
         });
       }
     }
