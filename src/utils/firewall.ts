@@ -91,25 +91,29 @@ export async function syncEgressFirewall(configObj: Record<string, unknown>): Pr
     const portsToOpen = newPorts.filter((port) => !previousPortsSet.has(port));
     const portsToClose = previousPorts.filter((port) => !newPortsSet.has(port));
 
-    for (const port of portsToOpen) {
-      try {
-        const { stdout, stderr } = await execAsync(`sudo ufw allow ${port}/udp`);
-        logger.info({ port, stdout, stderr }, 'Opened UDP firewall port for egress tunnel inbound');
-      } catch (err: unknown) {
-        const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
-        logger.error({ port, err: stderr }, 'Failed to open UFW UDP port');
-      }
-    }
+    await Promise.allSettled(
+      portsToOpen.map(async (port) => {
+        try {
+          const { stdout, stderr } = await execAsync(`sudo ufw allow ${port}/udp`);
+          logger.info({ port, stdout, stderr }, 'Opened UDP firewall port for egress tunnel inbound');
+        } catch (err: unknown) {
+          const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+          logger.error({ port, err: stderr }, 'Failed to open UFW UDP port');
+        }
+      })
+    );
 
-    for (const port of portsToClose) {
-      try {
-        const { stdout, stderr } = await execAsync(`sudo ufw delete allow ${port}/udp`);
-        logger.info({ port, stdout, stderr }, 'Closed stale UDP firewall port no longer used by egress config');
-      } catch (err: unknown) {
-        const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
-        logger.error({ port, err: stderr }, 'Failed to close UFW UDP port');
-      }
-    }
+    await Promise.allSettled(
+      portsToClose.map(async (port) => {
+        try {
+          const { stdout, stderr } = await execAsync(`sudo ufw delete allow ${port}/udp`);
+          logger.info({ port, stdout, stderr }, 'Closed stale UDP firewall port no longer used by egress config');
+        } catch (err: unknown) {
+          const stderr = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+          logger.error({ port, err: stderr }, 'Failed to close UFW UDP port');
+        }
+      })
+    );
 
     try {
       const { stdout, stderr } = await execAsync('sudo ufw reload');
