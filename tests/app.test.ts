@@ -156,6 +156,20 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     call.end();
   });
 
+  await t.test('UploadOlcrtcBinary should sanitize path traversal targetBinary to olcrtc-manager fallback', (t, done) => {
+    const call = client.uploadOlcrtcBinary(async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('path_traversal_test'), version: '1.0.0', targetBinary: '../../etc/malicious', isFinal: true });
+    call.end();
+  });
+
   await t.test('UpgradeSingbox should block unauthorized requests', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');

@@ -9,7 +9,7 @@ import {
   loadPackageDefinition
 } from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { exec, spawn } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import path from 'path';
@@ -19,6 +19,7 @@ import http from 'http';
 import { config } from './config.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const logger = pino({ level: 'info' });
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
@@ -847,8 +848,13 @@ async function uploadOlcrtcBinaryHandler(
 
     try {
       const fullBuffer = Buffer.concat(chunks);
-      const tempPath = `/tmp/${targetBinary}.download`;
-      let targetPath = (targetBinary === 'olcrtc') 
+
+      const ALLOWED_BINARIES = new Set(['olcrtc', 'olcrtc-manager']);
+      const requestedBinary = targetBinary || 'olcrtc-manager';
+      const safeTargetBinary = ALLOWED_BINARIES.has(requestedBinary) ? requestedBinary : 'olcrtc-manager';
+
+      const tempPath = `/tmp/${safeTargetBinary}.download`;
+      let targetPath = (safeTargetBinary === 'olcrtc') 
         ? (config.OLCRTC_BINARY_PATH || '/usr/local/bin/olcrtc')
         : (config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager');
 
@@ -914,7 +920,7 @@ async function upgradeSingboxHandler(
     const targetPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
     const tempPath = '/tmp/sing-box.download';
 
-    await execAsync(`curl -fsSL "${url}" -o "${tempPath}"`);
+    await execFileAsync('curl', ['-fsSL', url, '-o', tempPath]);
     await fs.chmod(tempPath, 0o755);
 
     if (process.env.NODE_ENV !== 'test') {
