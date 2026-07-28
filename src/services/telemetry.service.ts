@@ -75,7 +75,7 @@ export async function streamTelemetryHandler(
   call.on('finish', cleanup);
   call.on('error', cleanup);
 
-  telemetryInterval = setInterval(async () => {
+  const sendTelemetry = async () => {
     if (isCleanedUp) return;
 
     try {
@@ -102,10 +102,14 @@ export async function streamTelemetryHandler(
         awgActivePeers: awgPeers
       });
 
-      logBuffer = ''; 
+      logBuffer = '';
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.debug({ err: msg }, 'Error inside telemetry streaming interval tick');
     }
-  }, 2000);
+  };
+
+  // Immediate initial push, then stream every 2s
+  sendTelemetry();
+  telemetryInterval = setInterval(sendTelemetry, 2000);
 }

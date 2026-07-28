@@ -154,19 +154,15 @@ export async function configureCaddyHandler(
 
     const rawXhttpRegexp = sanitizeConfigInput(xhttpRegexp || xhttp_regexp);
     const finalXhttpRegexp = rawXhttpRegexp || '^/(api/v1/health|api/v1/session/heartbeat|api/v1/push/register|api/v1/metrics/report|api/v1/user/preferences|api/v1/cdn/edge-status)(.*)$';
-    const rawXhttpRewrite = (xhttpRewrite !== undefined && xhttpRewrite !== null) || (xhttp_rewrite !== undefined && xhttp_rewrite !== null)
-      ? sanitizeConfigInput(xhttpRewrite || xhttp_rewrite)
-      : undefined;
-    const finalXhttpRewrite = rawXhttpRewrite !== undefined ? rawXhttpRewrite : '/api{re.xhttp.2}';
+    const rawXhttpRewrite = sanitizeConfigInput(xhttpRewrite || xhttp_rewrite);
+    const finalXhttpRewrite = rawXhttpRewrite || '/api{re.xhttp.2}';
     const rawXhttpSocket = sanitizeConfigInput(xhttpSocket || xhttp_socket);
     const finalXhttpSocket = rawXhttpSocket || 'unix//dev/shm/vless-xhttp.sock';
 
     const rawGrpcRegexp = sanitizeConfigInput(grpcRegexp || grpc_regexp);
     const finalGrpcRegexp = rawGrpcRegexp || '^/(AssetPackService|ContentDeliveryService|ConfigFetchService|SessionSyncService|FeatureFlagService|CrashReportUploadService)(.*)$';
-    const rawGrpcRewrite = (grpcRewrite !== undefined && grpcRewrite !== null) || (grpc_rewrite !== undefined && grpc_rewrite !== null)
-      ? sanitizeConfigInput(grpcRewrite || grpc_rewrite)
-      : undefined;
-    const finalGrpcRewrite = rawGrpcRewrite !== undefined ? rawGrpcRewrite : '/AssetPackService{re.grpc.2}';
+    const rawGrpcRewrite = sanitizeConfigInput(grpcRewrite || grpc_rewrite);
+    const finalGrpcRewrite = rawGrpcRewrite || '/AssetPackService{re.grpc.2}';
     const rawGrpcSocket = sanitizeConfigInput(grpcSocket || grpc_socket);
     const finalGrpcSocket = rawGrpcSocket || 'unix+h2c//dev/shm/vless-grpc.sock';
 
