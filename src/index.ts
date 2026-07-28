@@ -899,11 +899,13 @@ async function configureCaddyHandler(
       await fs.writeFile(path.join(finalCamouflagePath, 'index.html'), finalCamouflageHtml, 'utf-8');
     }
 
-    const finalXhttpRegexp = xhttpRegexp || xhttp_regexp;
+    const rawXhttpRegexp = (xhttpRegexp || xhttp_regexp || '').trim();
+    const finalXhttpRegexp = rawXhttpRegexp || '^/xhttp-path.*$';
     const finalXhttpRewrite = xhttpRewrite || xhttp_rewrite;
     const finalXhttpSocket = xhttpSocket || xhttp_socket;
 
-    const finalGrpcRegexp = grpcRegexp || grpc_regexp;
+    const rawGrpcRegexp = (grpcRegexp || grpc_regexp || '').trim();
+    const finalGrpcRegexp = rawGrpcRegexp || '^/grpc-path.*$';
     const finalGrpcRewrite = grpcRewrite || grpc_rewrite;
     const finalGrpcSocket = grpcSocket || grpc_socket;
 

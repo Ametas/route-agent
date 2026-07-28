@@ -242,6 +242,33 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  await t.test('ConfigureCaddy should substitute default regex values when xhttpRegexp or grpcRegexp are empty strings', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const payload = {
+      domains: ['default-regex.example.com'],
+      xhttpRegexp: '',
+      xhttpSocket: 'unix//run/sing-box-xhttp.sock',
+      grpcRegexp: '   ',
+      grpcSocket: '127.0.0.1:10080'
+    };
+
+    client.configureCaddy(payload, validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+
+        const caddyContent = await fs.readFile(tempCaddyfilePath, 'utf-8');
+        assert.ok(caddyContent.includes('@vless-xhttp path_regexp xhttp ^/xhttp-path.*$'));
+        assert.ok(caddyContent.includes('path_regexp grpc ^/grpc-path.*$'));
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
   await t.test('ConfigureOlcrtc should block unauthorized requests', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');

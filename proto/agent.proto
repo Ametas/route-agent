@@ -70,18 +70,14 @@ message UpgradeResponse {
 
 message CaddyConfigPayload {
   repeated string domains = 1;
-  string camouflage_html = 2;
-  string camouflage_path = 3;
-  string xhttp_regexp = 4;
-  string xhttp_rewrite = 5;
-  string xhttp_socket = 6;
-  string grpc_regexp = 7;
-  string grpc_rewrite = 8;
-  string grpc_socket = 9;
-
-  string domain = 10;
-  uint32 decoy_port = 11;
-  string html_content = 12;
+  string xhttp_regexp = 2;
+  string xhttp_rewrite = 3;
+  string xhttp_socket = 4;
+  string grpc_regexp = 5;
+  string grpc_rewrite = 6;
+  string grpc_socket = 7;
+  string camouflage_path = 8;
+  string camouflage_html = 9;
 }
 
 message CaddyConfigResponse {
