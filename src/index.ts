@@ -627,7 +627,7 @@ async function streamTelemetryHandler(
       getAwgActivePeersCount()
     ]);
     
-    logger.info({ awgActivePeers: awgPeers }, 'AWG active peers telemetry fetched');
+    logger.debug({ awgActivePeers: awgPeers }, 'AWG active peers telemetry fetched');
 
     call.write({
       cpuUsage: cpu,
