@@ -221,13 +221,29 @@ export async function getAwgActivePeersCount(): Promise<number> {
  * Определение версии AmneziaWG (awg)
  */
 export async function getAwgVersion(): Promise<string> {
+  // 1. Проверяем бинарник amneziawg-go
+  try {
+    const { stdout } = await execFileAsync('/usr/local/bin/amneziawg-go', ['-v']);
+    const match = stdout.match(/v?([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
+    if (match) return match[1];
+    if (stdout.trim().length > 0) return 'installed';
+  } catch {}
+
+  try {
+    const { stdout } = await execFileAsync('/usr/local/bin/amneziawg-go', ['--version']);
+    const match = stdout.match(/v?([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
+    if (match) return match[1];
+    if (stdout.trim().length > 0) return 'installed';
+  } catch {}
+
+  // 2. Фоллбек на утилиту awg
   try {
     const { stdout } = await execFileAsync('/usr/local/bin/awg', ['--version']);
     const match = stdout.match(/v?([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
     return match ? match[1] : 'installed';
-  } catch {
-    return 'not_installed';
-  }
+  } catch {}
+
+  return 'not_installed';
 }
 
 let cachedAwgVersion = '';
