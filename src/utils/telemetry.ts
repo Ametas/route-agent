@@ -221,28 +221,18 @@ export async function getAwgActivePeersCount(): Promise<number> {
  * Определение версии AmneziaWG (awg)
  */
 export async function getAwgVersion(): Promise<string> {
-  // 1. Проверяем amneziawg-go через -v и --version
+  // 1. Проверяем наличие скомпилированного бинарника amneziawg-go в /usr/local/bin
   try {
-    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['-v']);
-    const out = stdout || stderr;
-    const match = out.match(/v?([0-9.]+)/) || out.match(/version\s+([\w\.\-]+)/i);
-    if (match) return match[1];
-    if (out.trim().length > 0) return 'installed';
+    await fs.access('/usr/local/bin/amneziawg-go');
+    // Если файл есть, считаем что AmneziaWG активен (в модульных ядрах Go-юзерспейс опционален, но бинарник доставлен)
+    return 'installed';
   } catch {}
 
-  try {
-    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['--version']);
-    const out = stdout || stderr;
-    const match = out.match(/v?([0-9.]+)/) || out.match(/version\s+([\w\.\-]+)/i);
-    if (match) return match[1];
-    if (out.trim().length > 0) return 'installed';
-  } catch {}
-
-  // 2. Фоллбек на утилиту awg
+  // 2. Фоллбек на системную утилиту awg
   try {
     const { stdout, stderr } = await execFileAsync('/usr/local/bin/awg', ['--version']);
-    const out = stdout || stderr;
-    const match = out.match(/v?([0-9.]+)/) || out.match(/version\s+([\w\.\-]+)/i);
+    const out = (stdout || stderr).trim();
+    const match = out.match(/v?([0-9]+\.[0-9]+\.[0-9]+)/i);
     return match ? match[1] : 'installed';
   } catch {}
 
