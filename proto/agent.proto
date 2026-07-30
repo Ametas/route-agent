@@ -12,6 +12,8 @@ service EgressAgentService {
   rpc UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadAwgBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  rpc UploadAwgToolsBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  rpc UploadAwgGoBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);

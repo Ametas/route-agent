@@ -518,3 +518,196 @@ export async function upgradeSingboxHandler(
     return callback(null, { success: false, message: `Failed to upgrade sing-box binary: ${msg}` });
   }
 }
+
+/**
+ * RPC Обработчик UploadAwgToolsBinary (клиентский стрим RPC для загрузки бинарника amneziawg-tools / awg)
+ */
+export async function uploadAwgToolsBinaryHandler(
+  call: ServerReadableStream<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  const metadataSecret = extractSecretFromMetadata(call);
+  let secretVerified = verifySecret(metadataSecret);
+  let isAborted = false;
+
+  const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const tempPath = `/tmp/awg_tools_${uniqueId}.tmp`;
+  let targetVersion = 'unknown';
+  let bytesWritten = 0;
+  let fileStream: ReturnType<typeof createWriteStream> | null = null;
+
+  call.on('data', (data: any) => {
+    if (isAborted) return;
+
+    if (!secretVerified) {
+      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
+        secretVerified = true;
+      }
+    }
+
+    if (!secretVerified) {
+      isAborted = true;
+      logger.warn('Unauthorized UploadAwgToolsBinary attempt rejected');
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
+    }
+
+    if (data.version) {
+      targetVersion = data.version;
+    }
+    if (data.chunk && data.chunk.length > 0) {
+      if (!fileStream) {
+        fileStream = createWriteStream(tempPath);
+      }
+      const buf = Buffer.from(data.chunk);
+      fileStream.write(buf);
+      bytesWritten += buf.length;
+    }
+  });
+
+  call.on('end', async () => {
+    if (isAborted) return;
+
+    if (fileStream) {
+      await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
+    if (!secretVerified || bytesWritten === 0) {
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: 'No valid binary data received or unauthorized.' });
+    }
+
+    try {
+      const targetPath = config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg';
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.chmod(tempPath, 0o755);
+
+      await replaceBinaryAtomically(tempPath, targetPath);
+      await fs.unlink(tempPath).catch(() => {});
+
+      logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated awg-tools binary');
+      invalidateAwgVersionCache();
+
+      return callback(null, {
+        success: true,
+        message: `awg-tools (awg) binary version ${targetVersion} successfully updated`
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err: msg }, 'Failed to apply uploaded awg-tools binary');
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    }
+  });
+
+  const cleanup = () => {
+    if (fileStream) fileStream.end();
+    fs.unlink(tempPath).catch(() => {});
+  };
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadAwgToolsBinary stream');
+    cleanup();
+  });
+  call.on('cancelled', cleanup);
+}
+
+/**
+ * RPC Обработчик UploadAwgGoBinary (клиентский стрим RPC для загрузки бинарника amneziawg-go)
+ */
+export async function uploadAwgGoBinaryHandler(
+  call: ServerReadableStream<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  const metadataSecret = extractSecretFromMetadata(call);
+  let secretVerified = verifySecret(metadataSecret);
+  let isAborted = false;
+
+  const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const tempPath = `/tmp/amneziawg_go_${uniqueId}.tmp`;
+  let targetVersion = 'unknown';
+  let bytesWritten = 0;
+  let fileStream: ReturnType<typeof createWriteStream> | null = null;
+
+  call.on('data', (data: any) => {
+    if (isAborted) return;
+
+    if (!secretVerified) {
+      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
+        secretVerified = true;
+      }
+    }
+
+    if (!secretVerified) {
+      isAborted = true;
+      logger.warn('Unauthorized UploadAwgGoBinary attempt rejected');
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
+    }
+
+    if (data.version) {
+      targetVersion = data.version;
+    }
+    if (data.chunk && data.chunk.length > 0) {
+      if (!fileStream) {
+        fileStream = createWriteStream(tempPath);
+      }
+      const buf = Buffer.from(data.chunk);
+      fileStream.write(buf);
+      bytesWritten += buf.length;
+    }
+  });
+
+  call.on('end', async () => {
+    if (isAborted) return;
+
+    if (fileStream) {
+      await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
+    if (!secretVerified || bytesWritten === 0) {
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: 'No valid binary data received or unauthorized.' });
+    }
+
+    try {
+      const targetPath = config.AWG_GO_BINARY_PATH || '/usr/local/bin/amneziawg-go';
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.chmod(tempPath, 0o755);
+
+      await replaceBinaryAtomically(tempPath, targetPath);
+      await fs.unlink(tempPath).catch(() => {});
+
+      logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated amneziawg-go binary');
+      invalidateAwgVersionCache();
+
+      return callback(null, {
+        success: true,
+        message: `amneziawg-go binary version ${targetVersion} successfully updated`
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err: msg }, 'Failed to apply uploaded amneziawg-go binary');
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    }
+  });
+
+  const cleanup = () => {
+    if (fileStream) fileStream.end();
+    fs.unlink(tempPath).catch(() => {});
+  };
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadAwgGoBinary stream');
+    cleanup();
+  });
+  call.on('cancelled', cleanup);
+}
+

@@ -17,6 +17,9 @@ const tempOlcrtcPath = path.join(tempDir, 'olcrtc');
 const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
 const tempAwgPath = path.join(tempDir, 'awg0.conf');
 
+const tempAwgToolsBinaryPath = path.join(tempDir, 'awg');
+const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
+
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
 process.env.PORT = '8082';
@@ -28,6 +31,8 @@ process.env.CADDYFILE_PATH = tempCaddyfilePath;
 process.env.OLCRTC_BINARY_PATH = tempOlcrtcPath;
 process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
 process.env.AWG_CONFIG_PATH = tempAwgPath;
+process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
+process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -220,6 +225,40 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       }
     });
     call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('path_traversal_test'), version: '1.0.0', targetBinary: '../../etc/malicious', isFinal: true });
+    call.end();
+  });
+
+  await t.test('UploadAwgToolsBinary should upload awg tools binary', (t, done) => {
+    const call = client.uploadAwgToolsBinary(validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('1.0.20260618-2'));
+        const exists = await fs.stat(tempAwgToolsBinaryPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, true);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('awg_tools_binary_data'), version: '1.0.20260618-2', isFinal: true });
+    call.end();
+  });
+
+  await t.test('UploadAwgGoBinary should upload amneziawg-go binary', (t, done) => {
+    const call = client.uploadAwgGoBinary(validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('0.0.20230223'));
+        const exists = await fs.stat(tempAwgGoBinaryPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, true);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('awg_go_binary_data'), version: '0.0.20230223', isFinal: true });
     call.end();
   });
 

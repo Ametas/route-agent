@@ -10,7 +10,7 @@ import path from 'path';
 import pino from 'pino';
 import { config } from './config.js';
 import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configureOlcrtcHandler } from './services/config.service.js';
-import { uploadSingboxBinaryHandler, uploadOlcrtcBinaryHandler, uploadAwgBinaryHandler, upgradeSingboxHandler } from './services/binary.service.js';
+import { uploadSingboxBinaryHandler, uploadOlcrtcBinaryHandler, uploadAwgBinaryHandler, uploadAwgToolsBinaryHandler, uploadAwgGoBinaryHandler, upgradeSingboxHandler } from './services/binary.service.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
 import { selfUpdateHandler } from './services/system.service.js';
@@ -84,6 +84,8 @@ export async function startServer(): Promise<Server> {
       uploadSingboxBinary: uploadSingboxBinaryHandler,
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       uploadAwgBinary: uploadAwgBinaryHandler,
+      uploadAwgToolsBinary: uploadAwgToolsBinaryHandler,
+      uploadAwgGoBinary: uploadAwgGoBinaryHandler,
       configureCaddy: configureCaddyHandler,
       configureOlcrtc: configureOlcrtcHandler,
       configureAwg: configureAwgHandler,
