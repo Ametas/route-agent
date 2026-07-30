@@ -628,5 +628,26 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(typeof execAsync, 'function');
       assert.strictEqual(typeof execFileAsync, 'function');
     });
+
+    await t.test('replaceBinaryAtomically should atomically replace target file', async () => {
+      const { replaceBinaryAtomically } = await import('../src/services/binary.service.js');
+      const srcFile = path.join(tempDir, 'test_src_binary.tmp');
+      const targetFile = path.join(tempDir, 'test_target_dir', 'test_binary');
+
+      await fs.writeFile(srcFile, 'binary_content_v1');
+      await replaceBinaryAtomically(srcFile, targetFile);
+
+      const targetContent = await fs.readFile(targetFile, 'utf-8');
+      assert.strictEqual(targetContent, 'binary_content_v1');
+
+      // Verify overwrite of existing binary
+      const srcFile2 = path.join(tempDir, 'test_src_binary_2.tmp');
+      await fs.writeFile(srcFile2, 'binary_content_v2');
+      await replaceBinaryAtomically(srcFile2, targetFile);
+
+      const updatedContent = await fs.readFile(targetFile, 'utf-8');
+      assert.strictEqual(updatedContent, 'binary_content_v2');
+    });
   });
 });
+

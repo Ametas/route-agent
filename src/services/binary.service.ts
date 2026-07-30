@@ -12,6 +12,32 @@ import { invalidateSingboxVersionCache, invalidateAwgVersionCache } from '../uti
 const logger = pino({ level: 'info' });
 
 /**
+ * Выполняет атомарную замену бинарного файла через промежуточный временный файл в той же директории назначения.
+ * Это предотвращает ошибки EXDEV (между разными файловыми системами) и ETXTBSY (при перезаписи запущенного исполняемого файла).
+ */
+export async function replaceBinaryAtomically(sourcePath: string, targetPath: string): Promise<void> {
+  const targetDir = path.dirname(targetPath);
+  await fs.mkdir(targetDir, { recursive: true });
+
+  const tempTarget = path.join(
+    targetDir,
+    `.${path.basename(targetPath)}_${Date.now()}_${crypto.randomUUID().slice(0, 6)}.tmp`
+  );
+
+  try {
+    // Copy/move source into a temp file located IN THE SAME DESTINATION DIRECTORY
+    await fs.copyFile(sourcePath, tempTarget);
+    await fs.chmod(tempTarget, 0o755);
+
+    // Atomic rename within the same directory (same filesystem) never throws EXDEV,
+    // and Linux kernel permits atomic rename over a currently running executable.
+    await fs.rename(tempTarget, targetPath);
+  } finally {
+    await fs.unlink(tempTarget).catch(() => {});
+  }
+}
+
+/**
  * RPC Обработчик UploadSingboxBinary (клиентский стрим RPC)
  */
 export async function uploadSingboxBinaryHandler(
@@ -101,11 +127,16 @@ export async function uploadSingboxBinaryHandler(
         }
       }
 
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.rename(tempPath, targetPath).catch(async () => {
-        await fs.copyFile(tempPath, targetPath);
-        await fs.unlink(tempPath).catch(() => {});
-      });
+      await replaceBinaryAtomically(tempPath, targetPath);
+      await fs.unlink(tempPath).catch(() => {});
+
+      if (process.env.NODE_ENV !== 'test' && process.platform === 'linux') {
+        try {
+          await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${targetPath}`);
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Failed to setcap on target sing-box binary');
+        }
+      }
 
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated sing-box binary');
       invalidateSingboxVersionCache();
@@ -236,11 +267,8 @@ export async function uploadOlcrtcBinaryHandler(
       await fs.mkdir(path.dirname(tempPath), { recursive: true });
       await fs.chmod(tempPath, 0o755);
 
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.rename(tempPath, targetPath).catch(async () => {
-        await fs.copyFile(tempPath, targetPath);
-        await fs.unlink(tempPath).catch(() => {});
-      });
+      await replaceBinaryAtomically(tempPath, targetPath);
+      if (tempPath) await fs.unlink(tempPath).catch(() => {});
 
       logger.info({ path: targetPath, binary: targetBinary, version: targetVersion }, 'Atomically updated olcrtc component binary');
 
@@ -334,12 +362,13 @@ export async function uploadAwgBinaryHandler(
       return callback(null, { success: false, message: 'No valid binary data received or unauthorized.' });
     }
 
+    const extractDir = `/tmp/awg_extract_${Date.now()}`;
+
     try {
       const targetDir = '/usr/local/bin';
       await fs.mkdir(targetDir, { recursive: true });
       await fs.chmod(tempPath, 0o755);
 
-      const extractDir = `/tmp/awg_extract_${Date.now()}`;
       await fs.mkdir(extractDir, { recursive: true });
 
       let isTar = false;
@@ -361,29 +390,20 @@ export async function uploadAwgBinaryHandler(
 
         if (await fs.stat(amneziaGoSrc).then(() => true).catch(() => false)) {
           await fs.chmod(amneziaGoSrc, 0o755);
-          await fs.rename(amneziaGoSrc, targetAmneziaGo).catch(async () => {
-            await fs.copyFile(amneziaGoSrc, targetAmneziaGo);
-          });
+          await replaceBinaryAtomically(amneziaGoSrc, targetAmneziaGo);
         }
         if (await fs.stat(awgSrc).then(() => true).catch(() => false)) {
           await fs.chmod(awgSrc, 0o755);
-          await fs.rename(awgSrc, targetAwg).catch(async () => {
-            await fs.copyFile(awgSrc, targetAwg);
-          });
+          await replaceBinaryAtomically(awgSrc, targetAwg);
         }
       } else {
         // Сохраняем сырой скомпилированный бинарник строго как /usr/local/bin/amneziawg-go
-        await fs.rename(tempPath, targetAmneziaGo).catch(async () => {
-          await fs.copyFile(tempPath, targetAmneziaGo);
-        });
+        await replaceBinaryAtomically(tempPath, targetAmneziaGo);
         // Создаем симлинк /usr/local/bin/awg -> amneziawg-go при необходимости
         if (!(await fs.stat(targetAwg).then(() => true).catch(() => false))) {
           await fs.symlink(targetAmneziaGo, targetAwg).catch(() => {});
         }
       }
-
-      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-      await fs.unlink(tempPath).catch(() => {});
 
       logger.info('Atomically updated AmneziaWG binaries at /usr/local/bin/amneziawg-go');
       invalidateAwgVersionCache();
@@ -395,8 +415,10 @@ export async function uploadAwgBinaryHandler(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       logger.error({ err: msg }, 'Failed to apply uploaded AmneziaWG binaries');
-      await fs.unlink(tempPath).catch(() => {});
       return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+      await fs.unlink(tempPath).catch(() => {});
     }
   });
 
@@ -460,11 +482,16 @@ export async function upgradeSingboxHandler(
       }
     }
 
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.rename(tempPath, targetPath).catch(async () => {
-      await fs.copyFile(tempPath, targetPath);
-      await fs.unlink(tempPath).catch(() => {});
-    });
+    await replaceBinaryAtomically(tempPath, targetPath);
+    await fs.unlink(tempPath).catch(() => {});
+
+    if (process.env.NODE_ENV !== 'test' && process.platform === 'linux') {
+      try {
+        await execAsync(`setcap 'cap_net_admin,cap_net_bind_service=+ep' ${targetPath}`);
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Failed to setcap on target sing-box binary');
+      }
+    }
 
     invalidateSingboxVersionCache();
     logger.info({ path: targetPath, version: targetVersion }, 'Successfully upgraded sing-box binary via URL');
