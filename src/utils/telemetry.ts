@@ -224,6 +224,7 @@ export async function getAwgActivePeersCount(): Promise<number> {
 export function parseAwgVersionString(stdout: string): string | null {
   if (!stdout) return null;
   const match = stdout.match(/amneziawg-go\s+v?([0-9\.]+[\w\-]*)/i) || 
+                stdout.match(/amneziawg-go\s+v?([0-9\.]+)/i) ||
                 stdout.match(/v?([0-9\.]+\-[0-9a-zA-Z]+)/i) ||
                 stdout.match(/v?([0-9]+\.[0-9]+[0-9a-zA-Z.-]*)/i) ||
                 stdout.match(/([0-9\.]+)/);
@@ -247,7 +248,7 @@ export async function getAwgToolsVersion(): Promise<string> {
     return process.env.TEST_AWG_VERSION;
   }
 
-  const pathsToTry = ['/usr/bin/awg', '/usr/local/bin/awg'];
+  const pathsToTry = ['/usr/local/bin/awg', '/usr/bin/awg'];
 
   for (const binPath of pathsToTry) {
     try {
@@ -275,13 +276,6 @@ export async function getAwgToolsVersion(): Promise<string> {
     if (ver) return ver;
   } catch {}
 
-  for (const binPath of pathsToTry) {
-    try {
-      await fs.access(binPath);
-      return 'present';
-    } catch {}
-  }
-
   return 'not_installed';
 }
 
@@ -308,13 +302,6 @@ export async function getAmneziaWgGoVersion(): Promise<string> {
       const out = (stdout || stderr || '').trim();
       const ver = parseAwgVersionString(out);
       if (ver) return ver;
-    } catch {}
-  }
-
-  for (const binPath of pathsToTry) {
-    try {
-      await fs.access(binPath);
-      return 'present';
     } catch {}
   }
 
