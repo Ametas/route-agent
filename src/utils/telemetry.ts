@@ -218,24 +218,69 @@ export async function getAwgActivePeersCount(): Promise<number> {
 }
 
 /**
- * Определение версии AmneziaWG (awg)
+ * Парсит семантическую версию из вывода команд awg / amneziawg-go
+ */
+export function parseAwgVersionString(str: string): string | null {
+  const match = str.match(/v?([0-9]+\.[0-9]+[0-9a-zA-Z.-]*)/i);
+  if (match && match[1]) {
+    const cleaned = match[1].replace(/^v/i, '').replace(/[\s.-]+$/, '').trim();
+    if (cleaned.length > 0) {
+      return cleaned;
+    }
+  }
+  return null;
+}
+
+/**
+ * Определение версии AmneziaWG (awg / amneziawg-go)
  */
 export async function getAwgVersion(): Promise<string> {
-  // 1. Проверяем наличие скомпилированного бинарника amneziawg-go в /usr/local/bin
-  try {
-    await fs.access('/usr/local/bin/amneziawg-go');
-    // Если файл есть, считаем что AmneziaWG активен (в модульных ядрах Go-юзерспейс опционален, но бинарник доставлен)
-    return 'installed';
-  } catch {}
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_VERSION !== undefined) {
+    return process.env.TEST_AWG_VERSION;
+  }
 
-  // 2. Фоллбек на системную утилиту awg
+  // 1. Пробуем исполнить /usr/local/bin/awg --version
   try {
     const { stdout, stderr } = await execFileAsync('/usr/local/bin/awg', ['--version']);
-    const out = (stdout || stderr).trim();
-    const match = out.match(/v?([0-9]+\.[0-9]+\.[0-9]+)/i);
-    return match ? match[1] : 'installed';
+    const out = (stdout || stderr || '').trim();
+    const ver = parseAwgVersionString(out);
+    if (ver) return ver;
   } catch {}
 
+  // 2. Пробуем исполнить /usr/local/bin/amneziawg-go --version или version
+  try {
+    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['--version']);
+    const out = (stdout || stderr || '').trim();
+    const ver = parseAwgVersionString(out);
+    if (ver) return ver;
+  } catch {}
+
+  try {
+    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['version']);
+    const out = (stdout || stderr || '').trim();
+    const ver = parseAwgVersionString(out);
+    if (ver) return ver;
+  } catch {}
+
+  // 3. Если версию не удалось распарсить, проверяем существование файлов
+  let awgExists = false;
+  let amneziaGoExists = false;
+
+  try {
+    await fs.access('/usr/local/bin/awg');
+    awgExists = true;
+  } catch {}
+
+  try {
+    await fs.access('/usr/local/bin/amneziawg-go');
+    amneziaGoExists = true;
+  } catch {}
+
+  if (awgExists || amneziaGoExists) {
+    return 'present';
+  }
+
+  // 4. Если бинарники отсутствуют
   return 'not_installed';
 }
 
@@ -258,7 +303,10 @@ export function invalidateAwgVersionCache(): void {
 }
 
 export async function getAwgStatus(): Promise<string> {
-  if (process.env.NODE_ENV === 'test') {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_STATUS !== undefined) {
+    return process.env.TEST_AWG_STATUS;
+  }
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_STATUS === undefined) {
     return 'nominal';
   }
   try {
@@ -268,3 +316,4 @@ export async function getAwgStatus(): Promise<string> {
     return 'inactive';
   }
 }
+

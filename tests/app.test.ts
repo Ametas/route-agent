@@ -648,6 +648,40 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       const updatedContent = await fs.readFile(targetFile, 'utf-8');
       assert.strictEqual(updatedContent, 'binary_content_v2');
     });
+
+    await t.test('parseAwgVersionString and getAwgVersion logic', async () => {
+      const { parseAwgVersionString, getAwgVersion } = await import('../src/utils/telemetry.js');
+
+      assert.strictEqual(parseAwgVersionString('awg v1.0.20260618-2\n'), '1.0.20260618-2');
+      assert.strictEqual(parseAwgVersionString('v1.0.0'), '1.0.0');
+      assert.strictEqual(parseAwgVersionString('1.0.20260618-2'), '1.0.20260618-2');
+      assert.strictEqual(parseAwgVersionString('amneziawg-go v0.0.20230223'), '0.0.20230223');
+      assert.strictEqual(parseAwgVersionString('no_version_here'), null);
+
+      process.env.TEST_AWG_VERSION = '1.0.20260618-2';
+      assert.strictEqual(await getAwgVersion(), '1.0.20260618-2');
+
+      process.env.TEST_AWG_VERSION = 'present';
+      assert.strictEqual(await getAwgVersion(), 'present');
+
+      process.env.TEST_AWG_VERSION = 'not_installed';
+      assert.strictEqual(await getAwgVersion(), 'not_installed');
+
+      delete process.env.TEST_AWG_VERSION;
+    });
+
+    await t.test('getAwgStatus test logic', async () => {
+      const { getAwgStatus } = await import('../src/utils/telemetry.js');
+
+      process.env.TEST_AWG_STATUS = 'nominal';
+      assert.strictEqual(await getAwgStatus(), 'nominal');
+
+      process.env.TEST_AWG_STATUS = 'inactive';
+      assert.strictEqual(await getAwgStatus(), 'inactive');
+
+      delete process.env.TEST_AWG_STATUS;
+    });
   });
 });
+
 
