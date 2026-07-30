@@ -701,16 +701,19 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
       assert.strictEqual(parseAwgVersionString('awg v1.0.20260618-2\n'), '1.0.20260618-2');
       assert.strictEqual(parseAwgVersionString('v1.0.0'), '1.0.0');
+      assert.strictEqual(parseAwgVersionString('v3.0.2'), '3.0.2');
+      assert.strictEqual(parseAwgVersionString('0.0.20250522'), '0.0.20250522');
       assert.strictEqual(parseAwgVersionString('1.0.20260618-2'), '1.0.20260618-2');
+      assert.strictEqual(parseAwgVersionString('amneziawg-go v3.0.2'), '3.0.2');
       assert.strictEqual(parseAwgVersionString('amneziawg-go v0.0.20230223'), '0.0.20230223');
       assert.strictEqual(parseAwgVersionString('no_version_here'), null);
 
-      process.env.TEST_AWG_TOOLS_VERSION = '1.0.20260618-2';
-      assert.strictEqual(await getAwgToolsVersion(), '1.0.20260618-2');
-      assert.strictEqual(await getAwgVersion(), '1.0.20260618-2');
+      process.env.TEST_AWG_TOOLS_VERSION = '3.0.2';
+      assert.strictEqual(await getAwgToolsVersion(), '3.0.2');
+      assert.strictEqual(await getAwgVersion(), '3.0.2');
 
-      process.env.TEST_AMNEZIAWG_GO_VERSION = '0.0.20230223';
-      assert.strictEqual(await getAmneziaWgGoVersion(), '0.0.20230223');
+      process.env.TEST_AMNEZIAWG_GO_VERSION = '0.0.20250522';
+      assert.strictEqual(await getAmneziaWgGoVersion(), '0.0.20250522');
 
       delete process.env.TEST_AWG_TOOLS_VERSION;
       delete process.env.TEST_AMNEZIAWG_GO_VERSION;

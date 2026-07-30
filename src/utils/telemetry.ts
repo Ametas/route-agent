@@ -218,13 +218,18 @@ export async function getAwgActivePeersCount(): Promise<number> {
 }
 
 /**
- * Парсит семантическую версию из вывода команд awg / amneziawg-go
+ * Парсит семантическую версию или гибридную дату из вывода команд awg / amneziawg-go.
+ * Поддерживает форматы SemVer (v3.0.2, 3.0.2), датировки WireGuard (0.0.20250522, 1.0.20260618-2) и суффиксы.
  */
-export function parseAwgVersionString(str: string): string | null {
-  const match = str.match(/v?([0-9]+\.[0-9]+[0-9a-zA-Z.-]*)/i);
+export function parseAwgVersionString(stdout: string): string | null {
+  if (!stdout) return null;
+  const match = stdout.match(/amneziawg-go\s+v?([0-9\.]+[\w\-]*)/i) || 
+                stdout.match(/v?([0-9\.]+\-[0-9a-zA-Z]+)/i) ||
+                stdout.match(/v?([0-9]+\.[0-9]+[0-9a-zA-Z.-]*)/i) ||
+                stdout.match(/([0-9\.]+)/);
   if (match && match[1]) {
     const cleaned = match[1].replace(/^v/i, '').replace(/[\s.-]+$/, '').trim();
-    if (cleaned.length > 0) {
+    if (cleaned.length > 0 && cleaned !== '.') {
       return cleaned;
     }
   }
@@ -242,24 +247,40 @@ export async function getAwgToolsVersion(): Promise<string> {
     return process.env.TEST_AWG_VERSION;
   }
 
-  try {
-    const { stdout, stderr } = await execFileAsync('/usr/local/bin/awg', ['--version']);
-    const out = (stdout || stderr || '').trim();
-    const ver = parseAwgVersionString(out);
-    if (ver) return ver;
-  } catch {}
+  const pathsToTry = ['/usr/bin/awg', '/usr/local/bin/awg'];
+
+  for (const binPath of pathsToTry) {
+    try {
+      const { stdout, stderr } = await execFileAsync(binPath, ['--version']);
+      const out = (stdout || stderr || '').trim();
+
+      if (out.toLowerCase().includes('amneziawg-go')) {
+        return 'not_installed';
+      }
+
+      const ver = parseAwgVersionString(out);
+      if (ver) return ver;
+    } catch {}
+  }
 
   try {
     const { stdout, stderr } = await execAsync('awg --version');
     const out = (stdout || stderr || '').trim();
+
+    if (out.toLowerCase().includes('amneziawg-go')) {
+      return 'not_installed';
+    }
+
     const ver = parseAwgVersionString(out);
     if (ver) return ver;
   } catch {}
 
-  try {
-    await fs.access('/usr/local/bin/awg');
-    return 'present';
-  } catch {}
+  for (const binPath of pathsToTry) {
+    try {
+      await fs.access(binPath);
+      return 'present';
+    } catch {}
+  }
 
   return 'not_installed';
 }
@@ -272,24 +293,30 @@ export async function getAmneziaWgGoVersion(): Promise<string> {
     return process.env.TEST_AMNEZIAWG_GO_VERSION;
   }
 
-  try {
-    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['--version']);
-    const out = (stdout || stderr || '').trim();
-    const ver = parseAwgVersionString(out);
-    if (ver) return ver;
-  } catch {}
+  const pathsToTry = ['/usr/local/bin/amneziawg-go', '/usr/bin/amneziawg-go'];
 
-  try {
-    const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['version']);
-    const out = (stdout || stderr || '').trim();
-    const ver = parseAwgVersionString(out);
-    if (ver) return ver;
-  } catch {}
+  for (const binPath of pathsToTry) {
+    try {
+      const { stdout, stderr } = await execFileAsync(binPath, ['--version']);
+      const out = (stdout || stderr || '').trim();
+      const ver = parseAwgVersionString(out);
+      if (ver) return ver;
+    } catch {}
 
-  try {
-    await fs.access('/usr/local/bin/amneziawg-go');
-    return 'present';
-  } catch {}
+    try {
+      const { stdout, stderr } = await execFileAsync(binPath, ['version']);
+      const out = (stdout || stderr || '').trim();
+      const ver = parseAwgVersionString(out);
+      if (ver) return ver;
+    } catch {}
+  }
+
+  for (const binPath of pathsToTry) {
+    try {
+      await fs.access(binPath);
+      return 'present';
+    } catch {}
+  }
 
   return 'not_installed';
 }
