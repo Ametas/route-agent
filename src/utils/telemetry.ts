@@ -248,7 +248,11 @@ export async function getAwgToolsVersion(): Promise<string> {
     return process.env.TEST_AWG_VERSION;
   }
 
-  const pathsToTry = ['/usr/local/bin/awg', '/usr/bin/awg'];
+  const pathsToTry = Array.from(new Set([
+    config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg',
+    '/usr/local/bin/awg',
+    '/usr/bin/awg'
+  ]));
 
   for (const binPath of pathsToTry) {
     try {
@@ -287,19 +291,22 @@ export async function getAmneziaWgGoVersion(): Promise<string> {
     return process.env.TEST_AMNEZIAWG_GO_VERSION;
   }
 
-  const pathsToTry = ['/usr/local/bin/amneziawg-go', '/usr/bin/amneziawg-go'];
+  const pathsToTry = Array.from(new Set([
+    config.AWG_GO_BINARY_PATH || '/usr/local/bin/amneziawg-go',
+    '/usr/local/bin/amneziawg-go'
+  ]));
 
   for (const binPath of pathsToTry) {
     try {
       const { stdout, stderr } = await execFileAsync(binPath, ['--version']);
       const out = (stdout || stderr || '').trim();
-      const ver = parseAwgVersionString(out);
-      if (ver) return ver;
-    } catch {}
 
-    try {
-      const { stdout, stderr } = await execFileAsync(binPath, ['version']);
-      const out = (stdout || stderr || '').trim();
+      const match = out.match(/amneziawg-go\s+v?([0-9\.]+[\w\-]*)/i) ||
+                    out.match(/amneziawg-go\s+v?([0-9\.]+)/i);
+      if (match && match[1]) {
+        return match[1].replace(/^v/i, '').trim();
+      }
+
       const ver = parseAwgVersionString(out);
       if (ver) return ver;
     } catch {}
