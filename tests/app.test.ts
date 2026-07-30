@@ -95,11 +95,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.ok(data.hasOwnProperty('awgActivePeers'));
         assert.ok(data.hasOwnProperty('awgVersion'));
         assert.ok(data.hasOwnProperty('awgStatus'));
+        assert.ok(data.hasOwnProperty('awgToolsVersion'));
+        assert.ok(data.hasOwnProperty('awgGoVersion'));
         assert.strictEqual(data.webrtcStatus, 'nominal');
         assert.strictEqual(typeof data.singboxVersion, 'string');
         assert.strictEqual(typeof data.awgActivePeers, 'number');
         assert.strictEqual(typeof data.awgVersion, 'string');
         assert.strictEqual(typeof data.awgStatus, 'string');
+        assert.strictEqual(typeof data.awgToolsVersion, 'string');
+        assert.strictEqual(typeof data.awgGoVersion, 'string');
         assert.strictEqual(typeof data.cpuUsage, 'number');
         assert.strictEqual(typeof data.memUsage, 'number');
         assert.strictEqual(typeof data.activeConnections, 'number');
@@ -125,10 +129,14 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.ok(response.hasOwnProperty('awgActivePeers'));
       assert.ok(response.hasOwnProperty('awgVersion'));
       assert.ok(response.hasOwnProperty('awgStatus'));
+      assert.ok(response.hasOwnProperty('awgToolsVersion'));
+      assert.ok(response.hasOwnProperty('awgGoVersion'));
       assert.strictEqual(typeof response.singboxVersion, 'string');
       assert.strictEqual(typeof response.awgActivePeers, 'number');
       assert.strictEqual(typeof response.awgVersion, 'string');
       assert.strictEqual(typeof response.awgStatus, 'string');
+      assert.strictEqual(typeof response.awgToolsVersion, 'string');
+      assert.strictEqual(typeof response.awgGoVersion, 'string');
       assert.strictEqual(typeof response.cpuUsage, 'number');
       assert.strictEqual(typeof response.memUsage, 'number');
       assert.strictEqual(typeof response.activeConnections, 'number');
@@ -649,8 +657,8 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(updatedContent, 'binary_content_v2');
     });
 
-    await t.test('parseAwgVersionString and getAwgVersion logic', async () => {
-      const { parseAwgVersionString, getAwgVersion } = await import('../src/utils/telemetry.js');
+    await t.test('parseAwgVersionString, getAwgToolsVersion, and getAmneziaWgGoVersion logic', async () => {
+      const { parseAwgVersionString, getAwgToolsVersion, getAmneziaWgGoVersion, getAwgVersion } = await import('../src/utils/telemetry.js');
 
       assert.strictEqual(parseAwgVersionString('awg v1.0.20260618-2\n'), '1.0.20260618-2');
       assert.strictEqual(parseAwgVersionString('v1.0.0'), '1.0.0');
@@ -658,16 +666,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(parseAwgVersionString('amneziawg-go v0.0.20230223'), '0.0.20230223');
       assert.strictEqual(parseAwgVersionString('no_version_here'), null);
 
-      process.env.TEST_AWG_VERSION = '1.0.20260618-2';
+      process.env.TEST_AWG_TOOLS_VERSION = '1.0.20260618-2';
+      assert.strictEqual(await getAwgToolsVersion(), '1.0.20260618-2');
       assert.strictEqual(await getAwgVersion(), '1.0.20260618-2');
 
-      process.env.TEST_AWG_VERSION = 'present';
-      assert.strictEqual(await getAwgVersion(), 'present');
+      process.env.TEST_AMNEZIAWG_GO_VERSION = '0.0.20230223';
+      assert.strictEqual(await getAmneziaWgGoVersion(), '0.0.20230223');
 
-      process.env.TEST_AWG_VERSION = 'not_installed';
-      assert.strictEqual(await getAwgVersion(), 'not_installed');
-
-      delete process.env.TEST_AWG_VERSION;
+      delete process.env.TEST_AWG_TOOLS_VERSION;
+      delete process.env.TEST_AMNEZIAWG_GO_VERSION;
     });
 
     await t.test('getAwgStatus test logic', async () => {

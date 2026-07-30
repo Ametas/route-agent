@@ -9,7 +9,8 @@ import {
   getWebRtcStatus,
   getSingBoxVersionCached,
   getAwgActivePeersCount,
-  getAwgVersionCached,
+  getAwgToolsVersionCached,
+  getAmneziaWgGoVersionCached,
   getAwgStatus,
   CpuStats
 } from '../utils/telemetry.js';
@@ -81,14 +82,15 @@ export async function streamTelemetryHandler(
     if (isCleanedUp || call.destroyed) return;
 
     try {
-      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgVer, awgStat] = await Promise.all([
+      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat] = await Promise.all([
         getCpuUsage(streamCpuStats),
         getMemoryUsage(),
         getConnectionCount(),
         getWebRtcStatus(),
         getSingBoxVersionCached(),
         getAwgActivePeersCount(),
-        getAwgVersionCached(),
+        getAwgToolsVersionCached(),
+        getAmneziaWgGoVersionCached(),
         getAwgStatus()
       ]);
       streamCpuStats = newStats;
@@ -105,8 +107,10 @@ export async function streamTelemetryHandler(
           webrtcStatus: webrtc,
           singboxVersion: sbVersion,
           awgActivePeers: awgPeers,
-          awgVersion: awgVer,
-          awgStatus: awgStat
+          awgVersion: awgToolsVer,
+          awgStatus: awgStat,
+          awgToolsVersion: awgToolsVer,
+          awgGoVersion: awgGoVer
         });
       } catch {
         cleanup();
@@ -144,20 +148,23 @@ export async function getTelemetryHandler(
       singboxVersion: 'unknown',
       awgActivePeers: 0,
       awgVersion: 'unknown',
-      awgStatus: 'unauthorized'
+      awgStatus: 'unauthorized',
+      awgToolsVersion: 'unknown',
+      awgGoVersion: 'unknown'
     });
   }
 
   try {
     let streamCpuStats: CpuStats = { idle: 0, total: 0 };
-    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgVer, awgStat] = await Promise.all([
+    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat] = await Promise.all([
       getCpuUsage(streamCpuStats),
       getMemoryUsage(),
       getConnectionCount(),
       getWebRtcStatus(),
       getSingBoxVersionCached(),
       getAwgActivePeersCount(),
-      getAwgVersionCached(),
+      getAwgToolsVersionCached(),
+      getAmneziaWgGoVersionCached(),
       getAwgStatus()
     ]);
 
@@ -170,8 +177,10 @@ export async function getTelemetryHandler(
       webrtcStatus: webrtc,
       singboxVersion: sbVersion,
       awgActivePeers: awgPeers,
-      awgVersion: awgVer,
-      awgStatus: awgStat
+      awgVersion: awgToolsVer,
+      awgStatus: awgStat,
+      awgToolsVersion: awgToolsVer,
+      awgGoVersion: awgGoVer
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -186,7 +195,10 @@ export async function getTelemetryHandler(
       singboxVersion: 'error',
       awgActivePeers: 0,
       awgVersion: 'error',
-      awgStatus: 'error'
+      awgStatus: 'error',
+      awgToolsVersion: 'error',
+      awgGoVersion: 'error'
     });
   }
 }
+

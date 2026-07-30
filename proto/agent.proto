@@ -41,6 +41,8 @@ message TelemetryResponse {
   uint32 awg_active_peers = 8;
   string awg_version = 9;
   string awg_status = 10;
+  string awg_tools_version = 11;
+  string awg_go_version = 12;
 }
 
 message UpgradePayload {

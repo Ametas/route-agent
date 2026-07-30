@@ -232,14 +232,16 @@ export function parseAwgVersionString(str: string): string | null {
 }
 
 /**
- * Определение версии AmneziaWG (awg / amneziawg-go)
+ * Определение версии amneziawg-tools (утилиты awg)
  */
-export async function getAwgVersion(): Promise<string> {
+export async function getAwgToolsVersion(): Promise<string> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_TOOLS_VERSION !== undefined) {
+    return process.env.TEST_AWG_TOOLS_VERSION;
+  }
   if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_VERSION !== undefined) {
     return process.env.TEST_AWG_VERSION;
   }
 
-  // 1. Пробуем исполнить /usr/local/bin/awg --version
   try {
     const { stdout, stderr } = await execFileAsync('/usr/local/bin/awg', ['--version']);
     const out = (stdout || stderr || '').trim();
@@ -247,7 +249,29 @@ export async function getAwgVersion(): Promise<string> {
     if (ver) return ver;
   } catch {}
 
-  // 2. Пробуем исполнить /usr/local/bin/amneziawg-go --version или version
+  try {
+    const { stdout, stderr } = await execAsync('awg --version');
+    const out = (stdout || stderr || '').trim();
+    const ver = parseAwgVersionString(out);
+    if (ver) return ver;
+  } catch {}
+
+  try {
+    await fs.access('/usr/local/bin/awg');
+    return 'present';
+  } catch {}
+
+  return 'not_installed';
+}
+
+/**
+ * Определение версии Go-ядра amneziawg-go
+ */
+export async function getAmneziaWgGoVersion(): Promise<string> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AMNEZIAWG_GO_VERSION !== undefined) {
+    return process.env.TEST_AMNEZIAWG_GO_VERSION;
+  }
+
   try {
     const { stdout, stderr } = await execFileAsync('/usr/local/bin/amneziawg-go', ['--version']);
     const out = (stdout || stderr || '').trim();
@@ -262,43 +286,52 @@ export async function getAwgVersion(): Promise<string> {
     if (ver) return ver;
   } catch {}
 
-  // 3. Если версию не удалось распарсить, проверяем существование файлов
-  let awgExists = false;
-  let amneziaGoExists = false;
-
-  try {
-    await fs.access('/usr/local/bin/awg');
-    awgExists = true;
-  } catch {}
-
   try {
     await fs.access('/usr/local/bin/amneziawg-go');
-    amneziaGoExists = true;
+    return 'present';
   } catch {}
 
-  if (awgExists || amneziaGoExists) {
-    return 'present';
-  }
-
-  // 4. Если бинарники отсутствуют
   return 'not_installed';
 }
 
-let cachedAwgVersion = '';
+/**
+ * Алиас getAwgVersion -> getAwgToolsVersion для обратной совместимости
+ */
+export async function getAwgVersion(): Promise<string> {
+  return getAwgToolsVersion();
+}
+
+let cachedAwgToolsVersion = '';
+let cachedAmneziaWgGoVersion = '';
 let lastAwgCheckTime = 0;
 
-export async function getAwgVersionCached(): Promise<string> {
+export async function getAwgToolsVersionCached(): Promise<string> {
   const now = Date.now();
-  if (cachedAwgVersion && (now - lastAwgCheckTime < 60000)) {
-    return cachedAwgVersion;
+  if (cachedAwgToolsVersion && (now - lastAwgCheckTime < 60000)) {
+    return cachedAwgToolsVersion;
   }
-  cachedAwgVersion = await getAwgVersion();
+  cachedAwgToolsVersion = await getAwgToolsVersion();
   lastAwgCheckTime = now;
-  return cachedAwgVersion;
+  return cachedAwgToolsVersion;
+}
+
+export async function getAmneziaWgGoVersionCached(): Promise<string> {
+  const now = Date.now();
+  if (cachedAmneziaWgGoVersion && (now - lastAwgCheckTime < 60000)) {
+    return cachedAmneziaWgGoVersion;
+  }
+  cachedAmneziaWgGoVersion = await getAmneziaWgGoVersion();
+  lastAwgCheckTime = now;
+  return cachedAmneziaWgGoVersion;
+}
+
+export async function getAwgVersionCached(): Promise<string> {
+  return getAwgToolsVersionCached();
 }
 
 export function invalidateAwgVersionCache(): void {
-  cachedAwgVersion = '';
+  cachedAwgToolsVersion = '';
+  cachedAmneziaWgGoVersion = '';
   lastAwgCheckTime = 0;
 }
 
@@ -316,4 +349,5 @@ export async function getAwgStatus(): Promise<string> {
     return 'inactive';
   }
 }
+
 
