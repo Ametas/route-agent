@@ -17,6 +17,7 @@ const configSchema = z.object({
   AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awg0.conf'),
   AWG_RELOAD_COMMAND: z.string().default('systemctl restart route-awg@awg0'),
   AWG_TOOLS_BINARY_PATH: z.string().default('/usr/local/bin/awg'),
+  AWG_QUICK_BINARY_PATH: z.string().default('/usr/local/bin/awg-quick'),
   AWG_GO_BINARY_PATH: z.string().default('/usr/local/bin/amneziawg-go'),
   AWG_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-awg@.service'),
   CA_CERT_PATH: z.string().default('/etc/route-agent/certs/ca.crt'),

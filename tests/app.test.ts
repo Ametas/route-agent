@@ -18,6 +18,7 @@ const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
 const tempAwgPath = path.join(tempDir, 'awg0.conf');
 
 const tempAwgToolsBinaryPath = path.join(tempDir, 'awg');
+const tempAwgQuickBinaryPath = path.join(tempDir, 'awg-quick');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
 const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
 
@@ -33,6 +34,7 @@ process.env.OLCRTC_BINARY_PATH = tempOlcrtcPath;
 process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
 process.env.AWG_CONFIG_PATH = tempAwgPath;
 process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
+process.env.AWG_QUICK_BINARY_PATH = tempAwgQuickBinaryPath;
 process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
 process.env.AWG_UNIT_FILE_PATH = tempAwgUnitPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
@@ -332,6 +334,53 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       }
     });
     call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('awg_tools_binary_data'), version: '1.0.20260618-2', isFinal: true });
+    call.end();
+  });
+
+  await t.test('UploadAwgToolsBinary with target_binary === awg-quick should save executable script', (t, done) => {
+    const call = client.uploadAwgToolsBinary(validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('awg-quick script'));
+        const exists = await fs.stat(tempAwgQuickBinaryPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, true);
+
+        const content = await fs.readFile(tempAwgQuickBinaryPath, 'utf-8');
+        assert.ok(content.startsWith('#!/bin/sh'));
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+    call.write({
+      orchestratorSecret: 'test-secret-123',
+      chunk: Buffer.from('#!/bin/sh\necho "awg-quick mock script"\n'),
+      version: '1.0.20260618-2',
+      targetBinary: 'awg-quick',
+      isFinal: true
+    });
+    call.end();
+  });
+
+  await t.test('UploadAwgToolsBinary with target_binary === awg-quick should reject script without shebang', (t, done) => {
+    const call = client.uploadAwgToolsBinary(validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, false);
+        assert.ok(response.message.includes('missing shebang'));
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+    call.write({
+      orchestratorSecret: 'test-secret-123',
+      chunk: Buffer.from('echo "no shebang header"\n'),
+      version: '1.0.20260618-2',
+      targetBinary: 'awg-quick',
+      isFinal: true
+    });
     call.end();
   });
 

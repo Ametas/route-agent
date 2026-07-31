@@ -430,6 +430,7 @@ export async function uploadAwgToolsBinaryHandler(
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempPath = `/tmp/awg_tools_${uniqueId}.tmp`;
   let targetVersion = 'unknown';
+  let targetBinaryName = '';
   let bytesWritten = 0;
   let fileStream: ReturnType<typeof createWriteStream> | null = null;
 
@@ -452,6 +453,9 @@ export async function uploadAwgToolsBinaryHandler(
       return;
     }
 
+    if (data.targetBinary || data.target_binary) {
+      targetBinaryName = data.targetBinary || data.target_binary;
+    }
     if (data.version) {
       targetVersion = data.version;
     }
@@ -478,14 +482,50 @@ export async function uploadAwgToolsBinaryHandler(
     }
 
     try {
-      const targetPath = config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg';
-      await fs.mkdir(path.dirname(tempPath), { recursive: true });
-      await fs.chmod(tempPath, 0o755);
+      const isAwgQuick = targetBinaryName === 'awg-quick';
+      const targetPath = isAwgQuick
+        ? (config.AWG_QUICK_BINARY_PATH || '/usr/local/bin/awg-quick')
+        : (config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg');
 
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+
+      if (isAwgQuick) {
+        // Проверка заголовка shebang (#!) для скрипта awg-quick
+        const contentHeader = await fs.readFile(tempPath, { encoding: 'utf-8', flag: 'r' }).catch(() => '');
+        if (!contentHeader.startsWith('#!')) {
+          await fs.unlink(tempPath).catch(() => {});
+          logger.warn({ path: tempPath }, 'Uploaded awg-quick script missing shebang (#!) header');
+          return callback(null, {
+            success: false,
+            message: 'Invalid awg-quick script: missing shebang (#!) header.'
+          });
+        }
+
+        // Проверка синтаксиса bash -n на платформах Linux/Unix
+        if (process.platform !== 'win32') {
+          try {
+            await execAsync(`bash -n ${tempPath}`);
+          } catch (err: any) {
+            const errMsg = (err.stderr || err.stdout || err.message || '').trim();
+            logger.error({ err: errMsg }, 'awg-quick script syntax validation failed via bash -n');
+            await fs.unlink(tempPath).catch(() => {});
+            return callback(null, {
+              success: false,
+              message: `Invalid awg-quick script syntax: ${errMsg}`
+            });
+          }
+        }
+      }
+
+      await fs.chmod(tempPath, 0o755);
       await replaceBinaryAtomically(tempPath, targetPath);
       await fs.unlink(tempPath).catch(() => {});
 
-      logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated awg-tools binary');
+      if (isAwgQuick) {
+        logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated awg-quick script');
+      } else {
+        logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated awg-tools binary');
+      }
       invalidateAwgVersionCache();
 
       let serviceMsg = '';
@@ -498,9 +538,10 @@ export async function uploadAwgToolsBinaryHandler(
         }
       }
 
+      const label = isAwgQuick ? 'awg-quick script' : 'awg-tools (awg) binary';
       return callback(null, {
         success: true,
-        message: `awg-tools (awg) binary version ${targetVersion} successfully updated${serviceMsg}`
+        message: `${label} version ${targetVersion} successfully updated${serviceMsg}`
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
