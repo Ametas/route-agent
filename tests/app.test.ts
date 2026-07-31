@@ -278,6 +278,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
   });
 
+  await t.test('getAwgInterfaceName and restartActiveAwgServices when unconfigured', async () => {
+    const { getAwgInterfaceName, restartActiveAwgServices } = await import('../src/utils/awg.js');
+    assert.strictEqual(getAwgInterfaceName(), 'awg0');
+
+    const res = await restartActiveAwgServices();
+    assert.strictEqual(res.reloaded, false);
+    assert.strictEqual(res.restartedUnits.length, 0);
+  });
+
   await t.test('UploadAwgToolsBinary should upload awg tools binary', (t, done) => {
     const call = client.uploadAwgToolsBinary(validMetadata, async (err: any, response: any) => {
       try {

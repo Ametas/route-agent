@@ -15,7 +15,7 @@ const configSchema = z.object({
   OLCRTC_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc'),
   OLCRTC_MANAGER_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-manager'),
   AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awg0.conf'),
-  AWG_RELOAD_COMMAND: z.string().default('systemctl restart awg-quick@awg0'),
+  AWG_RELOAD_COMMAND: z.string().default('systemctl restart route-awg@awg0'),
   AWG_TOOLS_BINARY_PATH: z.string().default('/usr/local/bin/awg'),
   AWG_GO_BINARY_PATH: z.string().default('/usr/local/bin/amneziawg-go'),
   AWG_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-awg@.service'),

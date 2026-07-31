@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import { execAsync, execFileAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
 import { invalidateSingboxVersionCache, invalidateAwgVersionCache } from '../utils/telemetry.js';
+import { restartActiveAwgServices } from '../utils/awg.js';
 
 const logger = pino({ level: 'info' });
 
@@ -489,16 +490,11 @@ export async function uploadAwgToolsBinaryHandler(
 
       let serviceMsg = '';
       if (process.env.NODE_ENV !== 'test') {
-        try {
-          const reloadCmd = config.AWG_RELOAD_COMMAND || 'systemctl restart awg-quick@awg0';
-          const { stdout, stderr } = await execAsync(reloadCmd);
-          if (stdout) logger.info({ stdout }, 'Restart/Reload after awg-tools binary upgrade');
-          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
-          serviceMsg = ' and service restarted';
-        } catch (err: any) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn({ err: msg }, 'Failed to restart AWG service after awg-tools binary upgrade');
-          serviceMsg = ' (service restart failed or unconfigured)';
+        const restartRes = await restartActiveAwgServices();
+        if (restartRes.reloaded) {
+          serviceMsg = ' and active AWG service(s) restarted';
+        } else {
+          serviceMsg = ' (service restart skipped: not yet configured)';
         }
       }
 
@@ -600,16 +596,11 @@ export async function uploadAwgGoBinaryHandler(
 
       let serviceMsg = '';
       if (process.env.NODE_ENV !== 'test') {
-        try {
-          const reloadCmd = config.AWG_RELOAD_COMMAND || 'systemctl restart awg-quick@awg0';
-          const { stdout, stderr } = await execAsync(reloadCmd);
-          if (stdout) logger.info({ stdout }, 'Restart/Reload after amneziawg-go binary upgrade');
-          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
-          serviceMsg = ' and service restarted';
-        } catch (err: any) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn({ err: msg }, 'Failed to restart AWG service after amneziawg-go binary upgrade');
-          serviceMsg = ' (service restart failed or unconfigured)';
+        const restartRes = await restartActiveAwgServices();
+        if (restartRes.reloaded) {
+          serviceMsg = ' and active AWG service(s) restarted';
+        } else {
+          serviceMsg = ' (service restart skipped: not yet configured)';
         }
       }
 

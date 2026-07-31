@@ -9,6 +9,7 @@ import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../mi
 import { validateSafeCamouflagePath } from '../utils/caddy.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
+import { getAwgInterfaceName } from '../utils/awg.js';
 
 const logger = pino({ level: 'info' });
 
@@ -347,7 +348,7 @@ export async function configureAwgHandler(
 
   try {
     const awgConfigPath = config.AWG_CONFIG_PATH || '/etc/amnezia/amneziawg/awg0.conf';
-    const iface = 'awg0';
+    const iface = getAwgInterfaceName();
     const unitName = `route-awg@${iface}`;
 
     if (!enabled) {
