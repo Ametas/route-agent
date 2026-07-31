@@ -18,6 +18,7 @@ import {
   upgradeSingboxHandler,
   sanitizeAwgToolsSymlink
 } from './services/binary.service.js';
+import { ensureAwgSystemdUnit } from './services/systemdUnit.service.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
 import { selfUpdateHandler } from './services/system.service.js';
@@ -74,6 +75,7 @@ async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredenti
 
 export async function startServer(): Promise<Server> {
   await sanitizeAwgToolsSymlink();
+  await ensureAwgSystemdUnit();
   const { credentials, isMtls } = await getGrpcServerCredentials();
   return new Promise((resolve, reject) => {
     const serverOptions = {

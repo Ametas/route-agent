@@ -19,6 +19,7 @@ const tempAwgPath = path.join(tempDir, 'awg0.conf');
 
 const tempAwgToolsBinaryPath = path.join(tempDir, 'awg');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
+const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
 
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
@@ -33,6 +34,7 @@ process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
 process.env.AWG_CONFIG_PATH = tempAwgPath;
 process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
 process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
+process.env.AWG_UNIT_FILE_PATH = tempAwgUnitPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -252,6 +254,28 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         throw err;
       }
     }
+  });
+
+  await t.test('ensureAwgSystemdUnit idempotency check', async () => {
+    const { ensureAwgSystemdUnit } = await import('../src/services/systemdUnit.service.js');
+    const customTestUnitPath = path.join(tempDir, 'test-route-awg@.service');
+    await fs.unlink(customTestUnitPath).catch(() => {});
+
+    // 1. Initial call on clean filesystem creates the file with expected content
+    const firstCallResult = await ensureAwgSystemdUnit(customTestUnitPath);
+    assert.strictEqual(firstCallResult, true, 'First call should create unit file');
+
+    const content = await fs.readFile(customTestUnitPath, 'utf-8');
+    assert.ok(content.includes('Description=AmneziaWG interface %i (managed by route-agent)'));
+    assert.ok(content.includes('ExecStart='));
+    assert.ok(content.includes('ExecStop='));
+    assert.ok(content.includes('ExecReload='));
+    assert.ok(content.includes(`${tempAwgToolsBinaryPath}-quick up %i`));
+    assert.ok(content.includes(`${tempAwgToolsBinaryPath} syncconf %i <(${tempAwgToolsBinaryPath}-quick strip %i)`));
+
+    // 2. Second call with unchanged content should return false without rewriting file or triggering daemon-reload
+    const secondCallResult = await ensureAwgSystemdUnit(customTestUnitPath);
+    assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
   });
 
   await t.test('UploadAwgToolsBinary should upload awg tools binary', (t, done) => {
