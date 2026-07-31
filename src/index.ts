@@ -13,7 +13,6 @@ import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configu
 import { 
   uploadSingboxBinaryHandler, 
   uploadOlcrtcBinaryHandler, 
-  uploadAwgBinaryHandler, 
   uploadAwgToolsBinaryHandler, 
   uploadAwgGoBinaryHandler, 
   upgradeSingboxHandler,
@@ -92,7 +91,6 @@ export async function startServer(): Promise<Server> {
       upgradeSingbox: upgradeSingboxHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
-      uploadAwgBinary: uploadAwgBinaryHandler,
       uploadAwgToolsBinary: uploadAwgToolsBinaryHandler,
       uploadAwgGoBinary: uploadAwgGoBinaryHandler,
       configureCaddy: configureCaddyHandler,

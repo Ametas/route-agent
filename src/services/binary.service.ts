@@ -307,140 +307,24 @@ export async function uploadOlcrtcBinaryHandler(
 }
 
 /**
- * Defensive health check при старте ноды:
- * Если AWG_TOOLS_BINARY_PATH является символической ссылкой, указывающей на amneziawg-go,
- * логирует warning и удаляет неверную ссылку.
+ * Defensive health check при старте ноды (self-heal для очистки legacy-состояния):
+ * Если AWG_TOOLS_BINARY_PATH является символической ссылкой, удаляет её и логирует warning.
  */
 export async function sanitizeAwgToolsSymlink(): Promise<void> {
   const awgToolsPath = config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg';
   try {
     const stat = await fs.lstat(awgToolsPath);
     if (stat.isSymbolicLink()) {
-      const linkTarget = await fs.readlink(awgToolsPath);
-      const targetBase = path.basename(linkTarget);
-      const goBinBase = path.basename(config.AWG_GO_BINARY_PATH || 'amneziawg-go');
-
-      if (linkTarget.includes('amneziawg-go') || targetBase === goBinBase || linkTarget === config.AWG_GO_BINARY_PATH) {
-        logger.warn({ path: awgToolsPath, target: linkTarget }, 'Removing invalid symlink at AWG_TOOLS_BINARY_PATH pointing to amneziawg-go');
-        await fs.unlink(awgToolsPath);
-      }
+      const linkTarget = await fs.readlink(awgToolsPath).catch(() => 'unknown');
+      logger.warn(
+        { path: awgToolsPath, target: linkTarget },
+        'Self-heal: removed legacy symlink at AWG_TOOLS_BINARY_PATH created by deprecated UploadAwgBinary RPC'
+      );
+      await fs.unlink(awgToolsPath);
     }
   } catch {
     // Игнорируем ошибки, если файл/симлинк не существует
   }
-}
-
-/**
- * RPC Обработчик UploadAwgBinary (клиентский стрим RPC для загрузки бинарников AmneziaWG - DEPRECATED)
- */
-export async function uploadAwgBinaryHandler(
-  call: ServerReadableStream<any, any>,
-  callback: sendUnaryData<any>
-): Promise<void> {
-  const metadataSecret = extractSecretFromMetadata(call);
-  let secretVerified = verifySecret(metadataSecret);
-  let isAborted = false;
-
-  const tempPath = `/tmp/awg_bin_${Date.now()}.tmp`;
-  let bytesWritten = 0;
-  let fileStream: ReturnType<typeof createWriteStream> | null = null;
-
-  call.on('data', (data: any) => {
-    if (isAborted) return;
-
-    if (!secretVerified) {
-      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
-        secretVerified = true;
-      }
-    }
-
-    if (!secretVerified) {
-      isAborted = true;
-      logger.warn('Unauthorized UploadAwgBinary attempt rejected');
-      try {
-        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
-      } catch {}
-      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
-      return;
-    }
-
-    if (data.chunk && data.chunk.length > 0) {
-      if (!fileStream) {
-        fileStream = createWriteStream(tempPath);
-      }
-      const buf = Buffer.from(data.chunk);
-      fileStream.write(buf);
-      bytesWritten += buf.length;
-    }
-  });
-
-  call.on('end', async () => {
-    if (isAborted) return;
-
-    if (fileStream) {
-      await new Promise<void>((resolve) => fileStream!.end(resolve));
-    }
-
-    if (!secretVerified || bytesWritten === 0) {
-      await fs.unlink(tempPath).catch(() => {});
-      return callback(null, { success: false, message: 'No valid binary data received or unauthorized.' });
-    }
-
-    const extractDir = `/tmp/awg_extract_${Date.now()}`;
-
-    try {
-      const targetAmneziaGo = config.AWG_GO_BINARY_PATH || '/usr/local/bin/amneziawg-go';
-      await fs.mkdir(path.dirname(targetAmneziaGo), { recursive: true });
-      await fs.chmod(tempPath, 0o755);
-
-      await fs.mkdir(extractDir, { recursive: true });
-
-      let isTar = false;
-      if (process.env.NODE_ENV !== 'test') {
-        try {
-          await execAsync(`tar -xf ${tempPath} -C ${extractDir}`);
-          isTar = true;
-        } catch {
-          isTar = false;
-        }
-      }
-
-      if (isTar) {
-        const amneziaGoSrc = path.join(extractDir, 'amneziawg-go');
-
-        if (await fs.stat(amneziaGoSrc).then(() => true).catch(() => false)) {
-          await fs.chmod(amneziaGoSrc, 0o755);
-          await replaceBinaryAtomically(amneziaGoSrc, targetAmneziaGo);
-        }
-      } else {
-        // Сохраняем сырой скомпилированный бинарник строго по пути amneziawg-go (не трогая awg)
-        await replaceBinaryAtomically(tempPath, targetAmneziaGo);
-      }
-
-      logger.info({ path: targetAmneziaGo }, 'Atomically updated amneziawg-go binary via legacy UploadAwgBinary');
-      invalidateAwgVersionCache();
-
-      return callback(null, {
-        success: true,
-        message: 'Бинарник AmneziaWG (amneziawg-go) успешно установлен.'
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      logger.error({ err: msg }, 'Failed to apply uploaded AmneziaWG binaries');
-      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
-    } finally {
-      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-      await fs.unlink(tempPath).catch(() => {});
-    }
-  });
-
-  const cleanup = () => {
-    if (fileStream) fileStream.end();
-    fs.unlink(tempPath).catch(() => {});
-  };
-
-  call.on('error', cleanup);
-  call.on('cancelled', cleanup);
 }
 
 /**

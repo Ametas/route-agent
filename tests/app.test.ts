@@ -228,35 +228,6 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     call.end();
   });
 
-  await t.test('UploadAwgBinary should update amneziawg-go binary and NOT create awg file or symlink', (t, done) => {
-    (async () => {
-      await fs.unlink(tempAwgToolsBinaryPath).catch(() => {});
-      await fs.unlink(tempAwgGoBinaryPath).catch(() => {});
-
-      const call = client.uploadAwgBinary(validMetadata, async (err: any, response: any) => {
-        try {
-          assert.ifError(err);
-          assert.strictEqual(response.success, true);
-          assert.ok(response.message.includes('AmneziaWG'));
-
-          // amneziawg-go should exist
-          const goExists = await fs.stat(tempAwgGoBinaryPath).then(() => true).catch(() => false);
-          assert.strictEqual(goExists, true);
-
-          // awg should NOT exist (neither as file nor as symlink)
-          const awgExists = await fs.lstat(tempAwgToolsBinaryPath).then(() => true).catch(() => false);
-          assert.strictEqual(awgExists, false, 'awg binary or symlink must NOT be created by UploadAwgBinary');
-
-          done();
-        } catch (e) {
-          done(e);
-        }
-      });
-      call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('legacy_awg_go_data'), version: '0.0.20230223', isFinal: true });
-      call.end();
-    })();
-  });
-
   await t.test('sanitizeAwgToolsSymlink health check should remove invalid symlink pointing to amneziawg-go', async () => {
     const { sanitizeAwgToolsSymlink } = await import('../src/services/binary.service.js');
     await fs.mkdir(path.dirname(tempAwgToolsBinaryPath), { recursive: true });
