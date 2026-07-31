@@ -287,6 +287,37 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(res.restartedUnits.length, 0);
   });
 
+  await t.test('checkAndHealAwgInterface self-healing and rate-limiting test', async () => {
+    const { checkAndHealAwgInterface, getAwgHealthState } = await import('../src/utils/telemetry.js');
+
+    // 1. When interface is configured and alive
+    delete process.env.TEST_AWG_STATUS;
+    process.env.TEST_AWG_UNCONFIGURED = 'false';
+    process.env.TEST_AWG_ALIVE = 'true';
+
+    const stateAlive = await checkAndHealAwgInterface('awg0');
+    assert.strictEqual(stateAlive.status, 'nominal');
+
+    // 2. When interface falls down (crashes), self-healing is triggered
+    process.env.TEST_AWG_ALIVE = 'false';
+    const stateCrashed = await checkAndHealAwgInterface('awg0');
+    assert.strictEqual(stateCrashed.autoRestartCount, 1);
+    assert.ok(stateCrashed.status.startsWith('crashed (restarted'));
+
+    // 3. Immediate second check while still down is rate-limited (5 min cooldown)
+    const stateRateLimited = await checkAndHealAwgInterface('awg0');
+    assert.strictEqual(stateRateLimited.autoRestartCount, 1, 'Restart count should not increase due to 5m rate-limiting');
+
+    // 4. When interface recovers and becomes alive again
+    process.env.TEST_AWG_ALIVE = 'true';
+    const stateRecovered = await checkAndHealAwgInterface('awg0');
+    assert.ok(stateRecovered.status.startsWith('nominal (restarted'));
+
+    // Cleanup env overrides
+    delete process.env.TEST_AWG_UNCONFIGURED;
+    delete process.env.TEST_AWG_ALIVE;
+  });
+
   await t.test('UploadAwgToolsBinary should upload awg tools binary', (t, done) => {
     const call = client.uploadAwgToolsBinary(validMetadata, async (err: any, response: any) => {
       try {

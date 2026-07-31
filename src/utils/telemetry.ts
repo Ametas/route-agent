@@ -356,19 +356,172 @@ export function invalidateAwgVersionCache(): void {
   lastAwgCheckTime = 0;
 }
 
+import { getAwgInterfaceName } from './awg.js';
+
+export interface AwgHealthState {
+  lastCheckTime: number;
+  lastAutoRestartTime: number;
+  autoRestartCount: number;
+  status: string;
+}
+
+const awgHealthStates: Record<string, AwgHealthState> = {};
+
+/**
+ * Проверяет состояние AWG-интерфейса и выполняет автоматический рестарт (self-healing) при падении.
+ * Ограничивает частоту авто-рестартов (не чаще 1 раза в 5 минут).
+ */
+export async function checkAndHealAwgInterface(iface: string = getAwgInterfaceName()): Promise<AwgHealthState> {
+  const now = Date.now();
+  const currentState: AwgHealthState = awgHealthStates[iface] || {
+    lastCheckTime: 0,
+    lastAutoRestartTime: 0,
+    autoRestartCount: 0,
+    status: 'unknown'
+  };
+
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_STATUS !== undefined) {
+    currentState.status = process.env.TEST_AWG_STATUS;
+    currentState.lastCheckTime = now;
+    awgHealthStates[iface] = currentState;
+    return currentState;
+  }
+
+  // 1. Проверяем, был ли сконфигурирован/включен юнит route-awg@<iface> или конфиг
+  const awgConfigPath = config.AWG_CONFIG_PATH || `/etc/amnezia/amneziawg/${iface}.conf`;
+  const unitName = `route-awg@${iface}`;
+
+  let isConfigured = false;
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const configExists = await fs.stat(awgConfigPath).then(() => true).catch(() => false);
+      let isEnabled = false;
+      try {
+        const { stdout } = await execAsync(`systemctl is-enabled ${unitName}`);
+        isEnabled = stdout.trim() === 'enabled';
+      } catch {}
+      isConfigured = configExists || isEnabled;
+    } catch {
+      isConfigured = false;
+    }
+  } else {
+    isConfigured = process.env.TEST_AWG_UNCONFIGURED !== 'true';
+  }
+
+  if (!isConfigured) {
+    currentState.status = 'inactive';
+    currentState.lastCheckTime = now;
+    awgHealthStates[iface] = currentState;
+    return currentState;
+  }
+
+  // 2. Проверяем, жив ли демон / сетевой интерфейс
+  let isAlive = false;
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      await execAsync(`ip link show ${iface}`);
+      isAlive = true;
+    } catch {
+      isAlive = false;
+    }
+  } else {
+    isAlive = process.env.TEST_AWG_ALIVE !== 'false';
+  }
+
+  const RESTART_COOLDOWN_MS = 5 * 60 * 1000; // 5 минут ограничение частоты авто-рестартов
+
+  if (!isAlive) {
+    logger.warn({ iface }, `AWG interface ${iface} is down but unit is configured. Checking auto-restart cooldown...`);
+
+    const timeSinceLastRestart = now - currentState.lastAutoRestartTime;
+    if (currentState.lastAutoRestartTime === 0 || timeSinceLastRestart >= RESTART_COOLDOWN_MS) {
+      logger.warn({ iface }, `Initiating self-healing restart for AWG service ${unitName}...`);
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          await execAsync(`systemctl restart ${unitName}`);
+          currentState.lastAutoRestartTime = now;
+          currentState.autoRestartCount++;
+          logger.info({ iface, count: currentState.autoRestartCount }, `Self-healing restart executed for ${unitName}`);
+        } catch (err: any) {
+          logger.error({ iface, err: err.message }, `Self-healing restart failed for ${unitName}`);
+        }
+      } else {
+        currentState.lastAutoRestartTime = now;
+        currentState.autoRestartCount++;
+      }
+    } else {
+      const waitSec = Math.ceil((RESTART_COOLDOWN_MS - timeSinceLastRestart) / 1000);
+      logger.warn({ iface, waitSec }, `Auto-restart cooldown active for ${iface}. Next attempt allowed in ${waitSec}s.`);
+    }
+  }
+
+  // 3. Формируем текстовое описание состояния с учётом последнего авто-рестарта
+  let restartInfo = '';
+  if (currentState.lastAutoRestartTime > 0) {
+    const elapsedMs = now - currentState.lastAutoRestartTime;
+    const elapsedMins = Math.floor(elapsedMs / 60000);
+    if (elapsedMins < 60) {
+      restartInfo = `restarted ${Math.max(0, elapsedMins)}m ago`;
+    } else {
+      const elapsedHours = Math.floor(elapsedMins / 60);
+      restartInfo = `restarted ${elapsedHours}h ago`;
+    }
+  }
+
+  if (isAlive) {
+    if (restartInfo && (now - currentState.lastAutoRestartTime) < 24 * 60 * 60 * 1000) {
+      currentState.status = `nominal (${restartInfo})`;
+    } else {
+      currentState.status = 'nominal';
+    }
+  } else {
+    if (restartInfo) {
+      currentState.status = `crashed (${restartInfo})`;
+    } else {
+      currentState.status = 'crashed';
+    }
+  }
+
+  currentState.lastCheckTime = now;
+  awgHealthStates[iface] = currentState;
+  return currentState;
+}
+
+export function getAwgHealthState(iface: string = getAwgInterfaceName()): AwgHealthState {
+  return awgHealthStates[iface] || {
+    lastCheckTime: 0,
+    lastAutoRestartTime: 0,
+    autoRestartCount: 0,
+    status: 'inactive'
+  };
+}
+
+let awgHealthCheckTimer: NodeJS.Timeout | null = null;
+
+export function startAwgHealthCheckTimer(intervalMs = 30000): void {
+  if (awgHealthCheckTimer) return;
+  if (process.env.NODE_ENV === 'test') return;
+
+  awgHealthCheckTimer = setInterval(async () => {
+    try {
+      await checkAndHealAwgInterface();
+    } catch (err: any) {
+      logger.debug({ err: err.message }, 'Error in AWG health check timer tick');
+    }
+  }, intervalMs);
+}
+
+export function stopAwgHealthCheckTimer(): void {
+  if (awgHealthCheckTimer) {
+    clearInterval(awgHealthCheckTimer);
+    awgHealthCheckTimer = null;
+  }
+}
+
 export async function getAwgStatus(): Promise<string> {
   if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_STATUS !== undefined) {
     return process.env.TEST_AWG_STATUS;
   }
-  if (process.env.NODE_ENV === 'test' && process.env.TEST_AWG_STATUS === undefined) {
-    return 'nominal';
-  }
-  try {
-    await execAsync('ip link show awg0');
-    return 'nominal';
-  } catch {
-    return 'inactive';
-  }
+  const state = await checkAndHealAwgInterface();
+  return state.status;
 }
-
-
