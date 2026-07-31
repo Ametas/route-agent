@@ -11,6 +11,7 @@ service EgressAgentService {
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
   rpc UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  // Deprecated: UploadAwgBinary is deprecated. Use UploadAwgToolsBinary or UploadAwgGoBinary instead.
   rpc UploadAwgBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadAwgToolsBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
   rpc UploadAwgGoBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);

@@ -307,7 +307,31 @@ export async function uploadOlcrtcBinaryHandler(
 }
 
 /**
- * RPC Обработчик UploadAwgBinary (клиентский стрим RPC для загрузки бинарников AmneziaWG)
+ * Defensive health check при старте ноды:
+ * Если AWG_TOOLS_BINARY_PATH является символической ссылкой, указывающей на amneziawg-go,
+ * логирует warning и удаляет неверную ссылку.
+ */
+export async function sanitizeAwgToolsSymlink(): Promise<void> {
+  const awgToolsPath = config.AWG_TOOLS_BINARY_PATH || '/usr/local/bin/awg';
+  try {
+    const stat = await fs.lstat(awgToolsPath);
+    if (stat.isSymbolicLink()) {
+      const linkTarget = await fs.readlink(awgToolsPath);
+      const targetBase = path.basename(linkTarget);
+      const goBinBase = path.basename(config.AWG_GO_BINARY_PATH || 'amneziawg-go');
+
+      if (linkTarget.includes('amneziawg-go') || targetBase === goBinBase || linkTarget === config.AWG_GO_BINARY_PATH) {
+        logger.warn({ path: awgToolsPath, target: linkTarget }, 'Removing invalid symlink at AWG_TOOLS_BINARY_PATH pointing to amneziawg-go');
+        await fs.unlink(awgToolsPath);
+      }
+    }
+  } catch {
+    // Игнорируем ошибки, если файл/симлинк не существует
+  }
+}
+
+/**
+ * RPC Обработчик UploadAwgBinary (клиентский стрим RPC для загрузки бинарников AmneziaWG - DEPRECATED)
  */
 export async function uploadAwgBinaryHandler(
   call: ServerReadableStream<any, any>,
@@ -365,8 +389,8 @@ export async function uploadAwgBinaryHandler(
     const extractDir = `/tmp/awg_extract_${Date.now()}`;
 
     try {
-      const targetDir = '/usr/local/bin';
-      await fs.mkdir(targetDir, { recursive: true });
+      const targetAmneziaGo = config.AWG_GO_BINARY_PATH || '/usr/local/bin/amneziawg-go';
+      await fs.mkdir(path.dirname(targetAmneziaGo), { recursive: true });
       await fs.chmod(tempPath, 0o755);
 
       await fs.mkdir(extractDir, { recursive: true });
@@ -381,36 +405,24 @@ export async function uploadAwgBinaryHandler(
         }
       }
 
-      const targetAmneziaGo = path.join(targetDir, 'amneziawg-go');
-      const targetAwg = path.join(targetDir, 'awg');
-
       if (isTar) {
-        const awgSrc = path.join(extractDir, 'awg');
         const amneziaGoSrc = path.join(extractDir, 'amneziawg-go');
 
         if (await fs.stat(amneziaGoSrc).then(() => true).catch(() => false)) {
           await fs.chmod(amneziaGoSrc, 0o755);
           await replaceBinaryAtomically(amneziaGoSrc, targetAmneziaGo);
         }
-        if (await fs.stat(awgSrc).then(() => true).catch(() => false)) {
-          await fs.chmod(awgSrc, 0o755);
-          await replaceBinaryAtomically(awgSrc, targetAwg);
-        }
       } else {
-        // Сохраняем сырой скомпилированный бинарник строго как /usr/local/bin/amneziawg-go
+        // Сохраняем сырой скомпилированный бинарник строго по пути amneziawg-go (не трогая awg)
         await replaceBinaryAtomically(tempPath, targetAmneziaGo);
-        // Создаем симлинк /usr/local/bin/awg -> amneziawg-go при необходимости
-        if (!(await fs.stat(targetAwg).then(() => true).catch(() => false))) {
-          await fs.symlink(targetAmneziaGo, targetAwg).catch(() => {});
-        }
       }
 
-      logger.info('Atomically updated AmneziaWG binaries at /usr/local/bin/amneziawg-go');
+      logger.info({ path: targetAmneziaGo }, 'Atomically updated amneziawg-go binary via legacy UploadAwgBinary');
       invalidateAwgVersionCache();
 
       return callback(null, {
         success: true,
-        message: 'Бинарник AmneziaWG (amneziawg-go) успешно установлен в /usr/local/bin/.'
+        message: 'Бинарник AmneziaWG (amneziawg-go) успешно установлен.'
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -591,9 +603,24 @@ export async function uploadAwgToolsBinaryHandler(
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated awg-tools binary');
       invalidateAwgVersionCache();
 
+      let serviceMsg = '';
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          const reloadCmd = config.AWG_RELOAD_COMMAND || 'systemctl restart awg-quick@awg0';
+          const { stdout, stderr } = await execAsync(reloadCmd);
+          if (stdout) logger.info({ stdout }, 'Restart/Reload after awg-tools binary upgrade');
+          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
+          serviceMsg = ' and service restarted';
+        } catch (err: any) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err: msg }, 'Failed to restart AWG service after awg-tools binary upgrade');
+          serviceMsg = ' (service restart failed or unconfigured)';
+        }
+      }
+
       return callback(null, {
         success: true,
-        message: `awg-tools (awg) binary version ${targetVersion} successfully updated`
+        message: `awg-tools (awg) binary version ${targetVersion} successfully updated${serviceMsg}`
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -687,9 +714,24 @@ export async function uploadAwgGoBinaryHandler(
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated amneziawg-go binary');
       invalidateAwgVersionCache();
 
+      let serviceMsg = '';
+      if (process.env.NODE_ENV !== 'test') {
+        try {
+          const reloadCmd = config.AWG_RELOAD_COMMAND || 'systemctl restart awg-quick@awg0';
+          const { stdout, stderr } = await execAsync(reloadCmd);
+          if (stdout) logger.info({ stdout }, 'Restart/Reload after amneziawg-go binary upgrade');
+          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
+          serviceMsg = ' and service restarted';
+        } catch (err: any) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err: msg }, 'Failed to restart AWG service after amneziawg-go binary upgrade');
+          serviceMsg = ' (service restart failed or unconfigured)';
+        }
+      }
+
       return callback(null, {
         success: true,
-        message: `amneziawg-go binary version ${targetVersion} successfully updated`
+        message: `amneziawg-go binary version ${targetVersion} successfully updated${serviceMsg}`
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
