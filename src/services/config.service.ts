@@ -347,13 +347,15 @@ export async function configureAwgHandler(
 
   try {
     const awgConfigPath = config.AWG_CONFIG_PATH || '/etc/amnezia/amneziawg/awg0.conf';
+    const iface = 'awg0';
+    const unitName = `route-awg@${iface}`;
 
     if (!enabled) {
       if (process.env.NODE_ENV !== 'test') {
         try {
-          await execAsync('awg-quick down awg0 || systemctl stop awg-quick@awg0 || true');
+          await execAsync(`systemctl stop ${unitName} || systemctl stop awg-quick@${iface} || awg-quick down ${iface} || true`);
         } catch (err: any) {
-          logger.warn({ err: err.message }, 'Error stopping AmneziaWG interface');
+          logger.warn({ err: err.message }, 'Error stopping AmneziaWG interface service');
         }
 
         if (port && (await isUfwInstalled())) {
@@ -439,7 +441,7 @@ export async function configureAwgHandler(
     if (process.env.NODE_ENV !== 'test') {
       let interfaceExists = false;
       try {
-        await execAsync('ip link show awg0');
+        await execAsync(`ip link show ${iface}`);
         interfaceExists = true;
       } catch {
         interfaceExists = false;
@@ -447,13 +449,39 @@ export async function configureAwgHandler(
 
       if (interfaceExists) {
         try {
-          await execAsync(`bash -c "awg syncconf awg0 <(awg-quick strip ${awgConfigPath})"` );
+          // Горячая перезагрузка конфига через systemctl reload route-awg@awg0 (исполняет ExecReload в юните)
+          await execAsync(`systemctl reload ${unitName}`);
         } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed hot reload via awg syncconf, attempting awg-quick restart');
-          await execAsync(`awg-quick down awg0 || true && awg-quick up ${awgConfigPath}`);
+          const reloadErr = (err.stderr || err.stdout || err.message || 'systemctl reload error').trim();
+          logger.warn({ err: reloadErr }, `Failed systemctl reload ${unitName}, attempting restart`);
+          try {
+            await execAsync(`systemctl restart ${unitName}`);
+          } catch (restartErr: any) {
+            const restartMsg = (restartErr.stderr || restartErr.stdout || restartErr.message || 'systemctl restart error').trim();
+            logger.error({ err: restartMsg }, `Failed to restart AWG service ${unitName}`);
+            return callback(null, {
+              success: false,
+              message: `Failed to reload or restart AWG service (${unitName}): ${restartMsg}`
+            });
+          }
         }
       } else {
-        await execAsync(`awg-quick up ${awgConfigPath}`);
+        try {
+          await execAsync(`systemctl start ${unitName}`);
+        } catch (startErr: any) {
+          const startMsg = (startErr.stderr || startErr.stdout || startErr.message || 'systemctl start error').trim();
+          logger.error({ err: startMsg }, `Failed to start AWG service ${unitName}`);
+          return callback(null, {
+            success: false,
+            message: `Failed to start AWG service (${unitName}): ${startMsg}`
+          });
+        }
+      }
+
+      try {
+        await execAsync(`systemctl enable ${unitName}`);
+      } catch (enableErr: any) {
+        logger.warn({ err: enableErr.message }, `Failed to enable AWG service ${unitName} for auto-start`);
       }
 
       try {
