@@ -712,6 +712,23 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.ok(baseHash);
   });
 
+  await t.test('computeProtoContractHash should produce identical hash for reordered proto declarations', async () => {
+    clearProtoContractHashCache();
+    const originalHash = computeProtoContractHash(PROTO_PATH);
+
+    const originalContent = await fs.readFile(PROTO_PATH, 'utf-8');
+    const blocks = originalContent.split(/\n(?=message |service )/);
+    const reorderedContent = blocks.slice(0, 1).concat(blocks.slice(1).reverse()).join('\n');
+
+    const reorderedProtoPath = path.join(tempDir, 'agent-reordered.proto');
+    await fs.writeFile(reorderedProtoPath, reorderedContent, 'utf-8');
+
+    clearProtoContractHashCache();
+    const reorderedHash = computeProtoContractHash(reorderedProtoPath);
+
+    assert.strictEqual(reorderedHash, originalHash, 'computeProtoContractHash must produce identical hash regardless of block or field declaration order in .proto');
+  });
+
   await t.test('WebRTC status check logic (mocking olcrtc-manager API)', async (t) => {
     const http = await import('http');
     

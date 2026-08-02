@@ -6,6 +6,25 @@ export const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
 
 let cachedProtoHash: string | null = null;
 
+/**
+ * Рекурсивно сортирует ключи объекта и элементов массивов по алфавиту
+ * для создания детерминированного JSON-представления.
+ */
+export function sortObjectKeys(obj: any): any {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(sortObjectKeys);
+  }
+  const sortedKeys = Object.keys(obj).sort();
+  const result: Record<string, any> = {};
+  for (const key of sortedKeys) {
+    result[key] = sortObjectKeys(obj[key]);
+  }
+  return result;
+}
+
 export function getCanonicalSchemaFromPackageDef(packageDefinition: any) {
   const messages: any[] = [];
   const services: any[] = [];
@@ -54,7 +73,8 @@ export function getCanonicalSchemaFromPackageDef(packageDefinition: any) {
   messages.sort((a, b) => a.name.localeCompare(b.name));
   services.sort((a, b) => a.name.localeCompare(b.name));
 
-  return { messages, services };
+  const rawSchema = { messages, services };
+  return sortObjectKeys(rawSchema);
 }
 
 /**
