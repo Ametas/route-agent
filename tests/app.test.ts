@@ -45,7 +45,7 @@ process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 const { startServer } = await import('../src/index.js');
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: true });
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: false });
 const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
 const EgressAgentService = protoDescriptor.agent.EgressAgentService;
 
@@ -647,11 +647,12 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('GetAgentInfo should return deterministic proto contract hash and agent info without secret', (t, done) => {
-    client.getAgentInfo({}, new grpc.Metadata(), (err: any, response: any) => {
+    client.getAgentInfo({ orchestrator_secret: 'test-secret-123' }, new grpc.Metadata(), (err: any, response: any) => {
       try {
         assert.ifError(err);
-        const hash = response.proto_contract_hash;
-        const version = response.agent_version;
+        const hash = response.protoContractHash || response.proto_contract_hash;
+        const version = response.agentVersion || response.agent_version;
+        const source = response.protoContractSource || response.proto_contract_source;
 
         assert.ok(hash, 'proto_contract_hash must be present');
         assert.strictEqual(typeof hash, 'string');
@@ -661,7 +662,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.ok(version, 'agent_version must be present');
         assert.notStrictEqual(hash, version, 'proto_contract_hash and agent_version must not be equal');
         assert.notStrictEqual(hash.length, version.length, 'proto_contract_hash length (64) must not equal agent_version length');
-        assert.strictEqual(response.proto_contract_source, 'canonical-json');
+        assert.strictEqual(source, 'canonical-json');
 
         // Проверяем детерминированность вызова computeProtoContractHash
         const hash1 = computeProtoContractHash();

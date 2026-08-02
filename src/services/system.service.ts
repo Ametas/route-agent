@@ -43,10 +43,13 @@ export async function getAgentVersion(): Promise<string> {
 /**
  * RPC Обработчик GetAgentInfo
  * 
- * ВАЖНО: Данный эндпоинт сознательно исполняется БЕЗ проверки x-orchestrator-secret.
- * Это read-only диагностический метод, используемый оркестратором для pre-flight
- * валидации совместимости контракта Protobuf и версии агента до проведения
- * мутирующих RPC вызовов (включая ситуации первичного подключения и диагностики).
+ * ВАЖНО: Поле orchestrator_secret присутствует в контракте сообщения AgentInfoRequest
+ * для единообразия gRPC вызовов и на случай ввода строгого режима проверки в будущем.
+ * Однако в текущей реализации эндпоинт сознательно исполняется БЕЗ валидации секрета.
+ * Это read-only диагностический метод, используемый оркестратором для предварительной
+ * проверки (pre-flight check) совместимости Protobuf контракта и версии агента
+ * до проведения аутентифицированных мутирующих RPC вызовов (включая ситуации
+ * первичного подключения или восстановления рассинхронизированной ноды).
  */
 export async function getAgentInfoHandler(
   _call: ServerUnaryCall<any, any>,
@@ -57,16 +60,22 @@ export async function getAgentInfoHandler(
     const agentVersion = await getAgentVersion();
     return callback(null, {
       proto_contract_hash: protoContractHash,
+      protoContractHash: protoContractHash,
       agent_version: agentVersion,
+      agentVersion: agentVersion,
       proto_contract_source: 'canonical-json',
+      protoContractSource: 'canonical-json',
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     logger.error({ err: msg }, 'Failed to process GetAgentInfo RPC');
     return callback(null, {
       proto_contract_hash: '',
+      protoContractHash: '',
       agent_version: '',
+      agentVersion: '',
       proto_contract_source: 'canonical-json',
+      protoContractSource: 'canonical-json',
     });
   }
 }
