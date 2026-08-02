@@ -1,9 +1,75 @@
 import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
+import * as fs from 'fs/promises';
+import path from 'path';
 import pino from 'pino';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
+import { computeProtoContractHash } from './protoContract.service.js';
 
 const logger = pino({ level: 'info' });
+
+let cachedAgentVersion: string | null = null;
+
+export async function getAgentVersion(): Promise<string> {
+  if (cachedAgentVersion) return cachedAgentVersion;
+
+  let version = '';
+  try {
+    const { stdout } = await execAsync('git rev-parse --short HEAD');
+    if (stdout && stdout.trim()) {
+      version = stdout.trim();
+    }
+  } catch {}
+
+  if (!version) {
+    try {
+      const pkgPath = path.resolve(process.cwd(), 'package.json');
+      const pkgContent = await fs.readFile(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgContent);
+      if (pkg.version && typeof pkg.version === 'string') {
+        version = pkg.version;
+      }
+    } catch {}
+  }
+
+  if (!version) {
+    version = '1.0.0';
+  }
+
+  cachedAgentVersion = version;
+  return version;
+}
+
+/**
+ * RPC Обработчик GetAgentInfo
+ * 
+ * ВАЖНО: Данный эндпоинт сознательно исполняется БЕЗ проверки x-orchestrator-secret.
+ * Это read-only диагностический метод, используемый оркестратором для pre-flight
+ * валидации совместимости контракта Protobuf и версии агента до проведения
+ * мутирующих RPC вызовов (включая ситуации первичного подключения и диагностики).
+ */
+export async function getAgentInfoHandler(
+  _call: ServerUnaryCall<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  try {
+    const protoContractHash = computeProtoContractHash();
+    const agentVersion = await getAgentVersion();
+    return callback(null, {
+      protoContractHash,
+      agentVersion,
+      protoContractSource: 'canonical-json',
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    logger.error({ err: msg }, 'Failed to process GetAgentInfo RPC');
+    return callback(null, {
+      protoContractHash: '',
+      agentVersion: '',
+      protoContractSource: 'canonical-json',
+    });
+  }
+}
 
 /**
  * RPC Обработчик SelfUpdate

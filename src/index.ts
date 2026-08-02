@@ -22,7 +22,7 @@ import { ensureAwgSystemdUnit } from './services/systemdUnit.service.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
 import { startAwgHealthCheckTimer } from './utils/telemetry.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
-import { selfUpdateHandler } from './services/system.service.js';
+import { selfUpdateHandler, getAgentInfoHandler } from './services/system.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -101,7 +101,8 @@ export async function startServer(): Promise<Server> {
       configureOlcrtc: configureOlcrtcHandler,
       configureAwg: configureAwgHandler,
       manageFirewall: manageFirewallHandler,
-      selfUpdate: selfUpdateHandler
+      selfUpdate: selfUpdateHandler,
+      getAgentInfo: getAgentInfoHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

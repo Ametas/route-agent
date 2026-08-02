@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import { computeProtoContractHash, clearProtoContractHashCache, getCanonicalSchemaFromPackageDef } from '../src/services/protoContract.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tempDir = path.join(__dirname, 'temp');
@@ -625,6 +626,64 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.ok(response.message.includes('Self-update sequence initiated'));
       done();
     });
+  });
+
+  await t.test('GetAgentInfo should return deterministic proto contract hash and agent info without secret', (t, done) => {
+    client.getAgentInfo({}, new grpc.Metadata(), (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.ok(response.protoContractHash);
+        assert.strictEqual(typeof response.protoContractHash, 'string');
+        assert.match(response.protoContractHash, /^[a-f0-9]{64}$/);
+        assert.ok(response.agentVersion);
+        assert.strictEqual(response.protoContractSource, 'canonical-json');
+
+        // Проверяем детерминированность вызова computeProtoContractHash
+        const hash1 = computeProtoContractHash();
+        const hash2 = computeProtoContractHash();
+        assert.strictEqual(hash1, hash2);
+        assert.strictEqual(response.protoContractHash, hash1);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('computeProtoContractHash should change hash when field number or type is modified', async () => {
+    clearProtoContractHashCache();
+    const baseHash = computeProtoContractHash();
+
+    // Симулируем изменение типа поля в схеме
+    const fakePackageDef: any = {
+      'agent.TestMsg': {
+        format: 'Protocol Buffer 3 DescriptorProto',
+        type: {
+          field: [
+            { number: 1, name: 'fieldA', type: 'TYPE_STRING', label: 'LABEL_OPTIONAL' }
+          ]
+        }
+      }
+    };
+    const fakePackageDefModified: any = {
+      'agent.TestMsg': {
+        format: 'Protocol Buffer 3 DescriptorProto',
+        type: {
+          field: [
+            { number: 1, name: 'fieldA', type: 'TYPE_UINT32', label: 'LABEL_OPTIONAL' }
+          ]
+        }
+      }
+    };
+
+    const schema1 = getCanonicalSchemaFromPackageDef(fakePackageDef);
+    const schema2 = getCanonicalSchemaFromPackageDef(fakePackageDefModified);
+
+    const cryptoModule = await import('crypto');
+    const h1 = cryptoModule.createHash('sha256').update(JSON.stringify(schema1)).digest('hex');
+    const h2 = cryptoModule.createHash('sha256').update(JSON.stringify(schema2)).digest('hex');
+    assert.notStrictEqual(h1, h2);
+    assert.ok(baseHash);
   });
 
   await t.test('WebRTC status check logic (mocking olcrtc-manager API)', async (t) => {

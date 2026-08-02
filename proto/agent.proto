@@ -16,6 +16,7 @@ service EgressAgentService {
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
+  rpc GetAgentInfo (Empty) returns (AgentInfoResponse);
 }
 
 message ConfigPayload {
@@ -150,3 +151,12 @@ message SelfUpdateResponse {
   bool success = 1;
   string message = 2;
 }
+
+message Empty {}
+
+message AgentInfoResponse {
+  string proto_contract_hash = 1;
+  string agent_version = 2;
+  string proto_contract_source = 3;
+}
+
