@@ -632,17 +632,24 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     client.getAgentInfo({}, new grpc.Metadata(), (err: any, response: any) => {
       try {
         assert.ifError(err);
-        assert.ok(response.protoContractHash);
-        assert.strictEqual(typeof response.protoContractHash, 'string');
-        assert.match(response.protoContractHash, /^[a-f0-9]{64}$/);
-        assert.ok(response.agentVersion);
-        assert.strictEqual(response.protoContractSource, 'canonical-json');
+        const hash = response.protoContractHash || response.proto_contract_hash;
+        const version = response.agentVersion || response.agent_version;
+
+        assert.ok(hash, 'protoContractHash must be present');
+        assert.strictEqual(typeof hash, 'string');
+        assert.strictEqual(hash.length, 64, `protoContractHash length must be 64, got ${hash.length} (${hash})`);
+        assert.match(hash, /^[a-f0-9]{64}$/);
+
+        assert.ok(version, 'agentVersion must be present');
+        assert.notStrictEqual(hash, version, 'protoContractHash and agentVersion must not be equal');
+        assert.notStrictEqual(hash.length, version.length, 'protoContractHash length (64) must not equal agentVersion length');
+        assert.strictEqual(response.protoContractSource || response.proto_contract_source, 'canonical-json');
 
         // Проверяем детерминированность вызова computeProtoContractHash
         const hash1 = computeProtoContractHash();
         const hash2 = computeProtoContractHash();
         assert.strictEqual(hash1, hash2);
-        assert.strictEqual(response.protoContractHash, hash1);
+        assert.strictEqual(hash, hash1);
         done();
       } catch (e) {
         done(e);

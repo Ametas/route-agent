@@ -23,6 +23,7 @@ import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetr
 import { startAwgHealthCheckTimer } from './utils/telemetry.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
 import { selfUpdateHandler, getAgentInfoHandler } from './services/system.service.js';
+import { computeProtoContractHash } from './services/protoContract.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -115,7 +116,8 @@ export async function startServer(): Promise<Server> {
         return;
       }
       const scheme = isMtls ? 'h2' : 'h2c';
-      logger.info(`🚀 gRPC Route Agent actively listening at ${scheme}://${config.HOST}:${port}`);
+      const protoHash = computeProtoContractHash();
+      logger.info({ protoHash, len: protoHash.length }, `🚀 gRPC Route Agent actively listening at ${scheme}://${config.HOST}:${port} (Proto Contract SHA256: ${protoHash})`);
       serverInstance = server;
       resolve(server);
     });
