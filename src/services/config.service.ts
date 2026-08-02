@@ -13,9 +13,9 @@ import { getAwgInterfaceName } from '../utils/awg.js';
 
 const logger = pino({ level: 'info' });
 
-function sanitizeConfigInput(val: string | undefined | null): string {
-  if (!val || typeof val !== 'string') return '';
-  return val.replace(/[\r\n]/g, '').trim();
+function sanitizeConfigInput(val: string | number | undefined | null): string {
+  if (val === undefined || val === null) return '';
+  return String(val).replace(/[\r\n]/g, '').trim();
 }
 
 function getJson(url: string, timeoutMs = 3000): Promise<any> {
@@ -341,6 +341,11 @@ export async function configureAwgHandler(
     h2,
     h3,
     h4,
+    i1,
+    i2,
+    i3,
+    i4,
+    i5,
     headerProtectionKey,
     peers,
     ipv6Mode
@@ -398,6 +403,11 @@ export async function configureAwgHandler(
     const cleanAddressV4 = sanitizeConfigInput(addressV4);
     const cleanAddressV6 = sanitizeConfigInput(addressV6);
     const cleanHeaderProtectionKey = sanitizeConfigInput(headerProtectionKey);
+    const cleanI1 = sanitizeConfigInput(i1);
+    const cleanI2 = sanitizeConfigInput(i2);
+    const cleanI3 = sanitizeConfigInput(i3);
+    const cleanI4 = sanitizeConfigInput(i4);
+    const cleanI5 = sanitizeConfigInput(i5);
 
     const addresses: string[] = [];
     if (cleanAddressV4) addresses.push(cleanAddressV4);
@@ -411,14 +421,19 @@ export async function configureAwgHandler(
     if (jc !== undefined && jc !== null) configContent += `Jc = ${jc}\n`;
     if (jmin !== undefined && jmin !== null) configContent += `Jmin = ${jmin}\n`;
     if (jmax !== undefined && jmax !== null) configContent += `Jmax = ${jmax}\n`;
-    if (s1 !== undefined && s1 !== null) configContent += `S1 = ${s1}\n`;
-    if (s2 !== undefined && s2 !== null) configContent += `S2 = ${s2}\n`;
-    if (s3 !== undefined && s3 !== null) configContent += `S3 = ${s3}\n`;
-    if (s4 !== undefined && s4 !== null) configContent += `S4 = ${s4}\n`;
-    if (h1 !== undefined && h1 !== null) configContent += `H1 = ${h1}\n`;
-    if (h2 !== undefined && h2 !== null) configContent += `H2 = ${h2}\n`;
-    if (h3 !== undefined && h3 !== null) configContent += `H3 = ${h3}\n`;
-    if (h4 !== undefined && h4 !== null) configContent += `H4 = ${h4}\n`;
+    if (s1 !== undefined && s1 !== null && s1 !== '') configContent += `S1 = ${sanitizeConfigInput(s1)}\n`;
+    if (s2 !== undefined && s2 !== null && s2 !== '') configContent += `S2 = ${sanitizeConfigInput(s2)}\n`;
+    if (s3 !== undefined && s3 !== null && s3 !== '') configContent += `S3 = ${sanitizeConfigInput(s3)}\n`;
+    if (s4 !== undefined && s4 !== null && s4 !== '') configContent += `S4 = ${sanitizeConfigInput(s4)}\n`;
+    if (h1 !== undefined && h1 !== null && h1 !== '') configContent += `H1 = ${sanitizeConfigInput(h1)}\n`;
+    if (h2 !== undefined && h2 !== null && h2 !== '') configContent += `H2 = ${sanitizeConfigInput(h2)}\n`;
+    if (h3 !== undefined && h3 !== null && h3 !== '') configContent += `H3 = ${sanitizeConfigInput(h3)}\n`;
+    if (h4 !== undefined && h4 !== null && h4 !== '') configContent += `H4 = ${sanitizeConfigInput(h4)}\n`;
+    if (cleanI1) configContent += `I1 = ${cleanI1}\n`;
+    if (cleanI2) configContent += `I2 = ${cleanI2}\n`;
+    if (cleanI3) configContent += `I3 = ${cleanI3}\n`;
+    if (cleanI4) configContent += `I4 = ${cleanI4}\n`;
+    if (cleanI5) configContent += `I5 = ${cleanI5}\n`;
     if (cleanHeaderProtectionKey) configContent += `HeaderProtectionKey = ${cleanHeaderProtectionKey}\n`;
 
     if (Array.isArray(peers)) {

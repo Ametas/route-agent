@@ -513,14 +513,19 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       jc: 4,
       jmin: 40,
       jmax: 70,
-      s1: 15,
-      s2: 25,
-      s3: 35,
-      s4: 45,
-      h1: 101,
-      h2: 202,
-      h3: 303,
-      h4: 404,
+      s1: '15',
+      s2: '25',
+      s3: '35',
+      s4: '45',
+      h1: '317325099-317328813',
+      h2: '202',
+      h3: '303',
+      h4: '404',
+      i1: '<b 0xfe00><rc 16>',
+      i2: '<b 0x00><rc 4>',
+      i3: '10-20',
+      i4: '30',
+      i5: '40',
       headerProtectionKey: 'protkey999',
       peers: [
         {
@@ -544,7 +549,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.ok(awgContent.includes('Jmin = 40'));
         assert.ok(awgContent.includes('Jmax = 70'));
         assert.ok(awgContent.includes('S1 = 15'));
-        assert.ok(awgContent.includes('H1 = 101'));
+        assert.ok(awgContent.includes('H1 = 317325099-317328813'));
+        assert.ok(awgContent.includes('H2 = 202'));
+        assert.ok(awgContent.includes('H3 = 303'));
+        assert.ok(awgContent.includes('H4 = 404'));
+        assert.ok(awgContent.includes('I1 = <b 0xfe00><rc 16>'));
+        assert.ok(awgContent.includes('I2 = <b 0x00><rc 4>'));
+        assert.ok(awgContent.includes('I3 = 10-20'));
+        assert.ok(awgContent.includes('I4 = 30'));
+        assert.ok(awgContent.includes('I5 = 40'));
         assert.ok(awgContent.includes('HeaderProtectionKey = protkey999'));
         assert.ok(awgContent.includes('PublicKey = peerpubkey1'));
         assert.ok(awgContent.includes('PresharedKey = psk1'));
