@@ -56,22 +56,16 @@ export async function getAgentInfoHandler(
     const protoContractHash = computeProtoContractHash();
     const agentVersion = await getAgentVersion();
     return callback(null, {
-      protoContractHash,
       proto_contract_hash: protoContractHash,
-      agentVersion,
       agent_version: agentVersion,
-      protoContractSource: 'canonical-json',
       proto_contract_source: 'canonical-json',
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     logger.error({ err: msg }, 'Failed to process GetAgentInfo RPC');
     return callback(null, {
-      protoContractHash: '',
       proto_contract_hash: '',
-      agentVersion: '',
       agent_version: '',
-      protoContractSource: 'canonical-json',
       proto_contract_source: 'canonical-json',
     });
   }

@@ -45,7 +45,7 @@ process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 const { startServer } = await import('../src/index.js');
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: false });
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: true });
 const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
 const EgressAgentService = protoDescriptor.agent.EgressAgentService;
 
@@ -88,7 +88,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     const payload = { log: { level: 'info' } };
 
-    client.applyConfig({ configJson: JSON.stringify(payload) }, validMetadata, (err: any, response: any) => {
+    client.applyConfig({ config_json: JSON.stringify(payload), configJson: JSON.stringify(payload) }, validMetadata, (err: any, response: any) => {
       assert.ifError(err);
       assert.strictEqual(response.success, true);
       done();
@@ -96,28 +96,37 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('StreamTelemetry should stream telemetry containing webrtcStatus and singboxVersion', (t, done) => {
-    const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
+    const stream = client.streamTelemetry({ orchestrator_secret: 'test-secret-123', orchestratorSecret: 'test-secret-123' });
     
     stream.on('data', (data: any) => {
       try {
-        assert.ok(data.hasOwnProperty('webrtcStatus'));
-        assert.ok(data.hasOwnProperty('singboxVersion'));
-        assert.ok(data.hasOwnProperty('awgActivePeers'));
-        assert.ok(data.hasOwnProperty('awgVersion'));
-        assert.ok(data.hasOwnProperty('awgStatus'));
-        assert.ok(data.hasOwnProperty('awgToolsVersion'));
-        assert.ok(data.hasOwnProperty('awgGoVersion'));
-        assert.strictEqual(data.webrtcStatus, 'nominal');
-        assert.strictEqual(typeof data.singboxVersion, 'string');
-        assert.strictEqual(typeof data.awgActivePeers, 'number');
-        assert.strictEqual(typeof data.awgVersion, 'string');
-        assert.strictEqual(typeof data.awgStatus, 'string');
-        assert.strictEqual(typeof data.awgToolsVersion, 'string');
-        assert.strictEqual(typeof data.awgGoVersion, 'string');
-        assert.strictEqual(typeof data.cpuUsage, 'number');
-        assert.strictEqual(typeof data.memUsage, 'number');
-        assert.strictEqual(typeof data.activeConnections, 'number');
-        assert.strictEqual(typeof data.systemLogs, 'string');
+        const webrtcStat = data.webrtc_status || data.webrtcStatus;
+        const sbVer = data.singbox_version || data.singboxVersion;
+        const awgPeers = data.awg_active_peers ?? data.awgActivePeers;
+        const awgVer = data.awg_version || data.awgVersion;
+        const awgStat = data.awg_status || data.awgStatus;
+        const awgToolsVer = data.awg_tools_version || data.awgToolsVersion;
+        const awgGoVer = data.awg_go_version || data.awgGoVersion;
+
+        assert.ok(webrtcStat !== undefined, 'webrtc_status must be present');
+        assert.ok(sbVer !== undefined, 'singbox_version must be present');
+        assert.ok(awgPeers !== undefined, 'awg_active_peers must be present');
+        assert.ok(awgVer !== undefined, 'awg_version must be present');
+        assert.ok(awgStat !== undefined, 'awg_status must be present');
+        assert.ok(awgToolsVer !== undefined, 'awg_tools_version must be present');
+        assert.ok(awgGoVer !== undefined, 'awg_go_version must be present');
+
+        assert.strictEqual(webrtcStat, 'nominal');
+        assert.strictEqual(typeof sbVer, 'string');
+        assert.strictEqual(typeof awgPeers, 'number');
+        assert.strictEqual(typeof awgVer, 'string');
+        assert.strictEqual(typeof awgStat, 'string');
+        assert.strictEqual(typeof awgToolsVer, 'string');
+        assert.strictEqual(typeof awgGoVer, 'string');
+        assert.strictEqual(typeof (data.cpu_usage ?? data.cpuUsage), 'number');
+        assert.strictEqual(typeof (data.mem_usage ?? data.memUsage), 'number');
+        assert.strictEqual(typeof (data.active_connections ?? data.activeConnections), 'number');
+        assert.strictEqual(typeof (data.system_logs ?? data.systemLogs), 'string');
         stream.destroy();
         done();
       } catch (err) {
@@ -132,22 +141,31 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   });
 
   await t.test('GetTelemetry should return instant telemetry frame via Unary RPC', (t, done) => {
-    client.getTelemetry({ orchestratorSecret: 'test-secret-123' }, validMetadata, (err: any, response: any) => {
+    client.getTelemetry({ orchestrator_secret: 'test-secret-123', orchestratorSecret: 'test-secret-123' }, validMetadata, (err: any, response: any) => {
       assert.ifError(err);
-      assert.ok(response.hasOwnProperty('webrtcStatus'));
-      assert.ok(response.hasOwnProperty('singboxVersion'));
-      assert.ok(response.hasOwnProperty('awgActivePeers'));
-      assert.ok(response.hasOwnProperty('awgVersion'));
-      assert.ok(response.hasOwnProperty('awgStatus'));
-      assert.ok(response.hasOwnProperty('awgToolsVersion'));
-      assert.ok(response.hasOwnProperty('awgGoVersion'));
-      assert.strictEqual(typeof response.singboxVersion, 'string');
-      assert.strictEqual(typeof response.awgActivePeers, 'number');
-      assert.strictEqual(typeof response.awgVersion, 'string');
-      assert.strictEqual(typeof response.awgStatus, 'string');
-      assert.strictEqual(typeof response.awgToolsVersion, 'string');
-      assert.strictEqual(typeof response.awgGoVersion, 'string');
-      assert.strictEqual(typeof response.cpuUsage, 'number');
+      const webrtcStat = response.webrtc_status || response.webrtcStatus;
+      const sbVer = response.singbox_version || response.singboxVersion;
+      const awgPeers = response.awg_active_peers ?? response.awgActivePeers;
+      const awgVer = response.awg_version || response.awgVersion;
+      const awgStat = response.awg_status || response.awgStatus;
+      const awgToolsVer = response.awg_tools_version || response.awgToolsVersion;
+      const awgGoVer = response.awg_go_version || response.awgGoVersion;
+
+      assert.ok(webrtcStat !== undefined, 'webrtc_status must be present');
+      assert.ok(sbVer !== undefined, 'singbox_version must be present');
+      assert.ok(awgPeers !== undefined, 'awg_active_peers must be present');
+      assert.ok(awgVer !== undefined, 'awg_version must be present');
+      assert.ok(awgStat !== undefined, 'awg_status must be present');
+      assert.ok(awgToolsVer !== undefined, 'awg_tools_version must be present');
+      assert.ok(awgGoVer !== undefined, 'awg_go_version must be present');
+
+      assert.strictEqual(typeof sbVer, 'string');
+      assert.strictEqual(typeof awgPeers, 'number');
+      assert.strictEqual(typeof awgVer, 'string');
+      assert.strictEqual(typeof awgStat, 'string');
+      assert.strictEqual(typeof awgToolsVer, 'string');
+      assert.strictEqual(typeof awgGoVer, 'string');
+      assert.strictEqual(typeof (response.cpu_usage ?? response.cpuUsage), 'number');
       assert.strictEqual(typeof response.memUsage, 'number');
       assert.strictEqual(typeof response.activeConnections, 'number');
       assert.strictEqual(typeof response.systemLogs, 'string');
@@ -632,18 +650,18 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     client.getAgentInfo({}, new grpc.Metadata(), (err: any, response: any) => {
       try {
         assert.ifError(err);
-        const hash = response.protoContractHash || response.proto_contract_hash;
-        const version = response.agentVersion || response.agent_version;
+        const hash = response.proto_contract_hash;
+        const version = response.agent_version;
 
-        assert.ok(hash, 'protoContractHash must be present');
+        assert.ok(hash, 'proto_contract_hash must be present');
         assert.strictEqual(typeof hash, 'string');
-        assert.strictEqual(hash.length, 64, `protoContractHash length must be 64, got ${hash.length} (${hash})`);
+        assert.strictEqual(hash.length, 64, `proto_contract_hash length must be 64, got ${hash.length} (${hash})`);
         assert.match(hash, /^[a-f0-9]{64}$/);
 
-        assert.ok(version, 'agentVersion must be present');
-        assert.notStrictEqual(hash, version, 'protoContractHash and agentVersion must not be equal');
-        assert.notStrictEqual(hash.length, version.length, 'protoContractHash length (64) must not equal agentVersion length');
-        assert.strictEqual(response.protoContractSource || response.proto_contract_source, 'canonical-json');
+        assert.ok(version, 'agent_version must be present');
+        assert.notStrictEqual(hash, version, 'proto_contract_hash and agent_version must not be equal');
+        assert.notStrictEqual(hash.length, version.length, 'proto_contract_hash length (64) must not equal agent_version length');
+        assert.strictEqual(response.proto_contract_source, 'canonical-json');
 
         // Проверяем детерминированность вызова computeProtoContractHash
         const hash1 = computeProtoContractHash();

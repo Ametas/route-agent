@@ -67,7 +67,7 @@ export function computeProtoContractHash(targetProtoPath: string = PROTO_PATH): 
   }
 
   const packageDefinition = protoLoader.loadSync(targetProtoPath, {
-    keepCase: false,
+    keepCase: true,
     longs: String,
     enums: String,
     defaults: true,

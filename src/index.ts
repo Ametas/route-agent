@@ -29,7 +29,7 @@ const logger = pino({ level: 'info' });
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-  keepCase: false,
+  keepCase: true,
   longs: String,
   enums: String,
   defaults: true,

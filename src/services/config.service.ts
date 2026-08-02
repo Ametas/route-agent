@@ -64,7 +64,8 @@ export async function applyConfigHandler(
   }
 
   try {
-    const configObj = JSON.parse(call.request.configJson);
+    const rawConfig = call.request.configJson || call.request.config_json;
+    const configObj = JSON.parse(rawConfig);
     const syntaxCheck = await validateSingBoxConfig(configObj);
     
     if (!syntaxCheck.valid) {
