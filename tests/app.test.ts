@@ -23,11 +23,19 @@ const tempAwgQuickBinaryPath = path.join(tempDir, 'awg-quick');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
 const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
 
+// Фикстурные mTLS-сертификаты для тестов. С тех пор, как агент отказывается стартовать
+// без валидных сертификатов (см. security-аудит), даже "обычный" пайплайн-тест обязан
+// поднимать сервер в mTLS-режиме — insecure-режима у агента больше не существует.
+const fixtureCertsDir = path.join(__dirname, 'fixtures', 'certs');
+
 // Конфигурируем тестовое окружение до загрузки модулей
 process.env.NODE_ENV = 'test';
 process.env.PORT = '8082';
 process.env.HOST = '127.0.0.1';
 process.env.EGRESS_CONTROL_SECRET = 'test-secret-123';
+process.env.CA_CERT_PATH = path.join(fixtureCertsDir, 'ca.crt');
+process.env.AGENT_CERT_PATH = path.join(fixtureCertsDir, 'agent.crt');
+process.env.AGENT_KEY_PATH = path.join(fixtureCertsDir, 'agent.key');
 process.env.SINGBOX_CONFIG_PATH = tempConfigPath;
 process.env.SINGBOX_BINARY_PATH = tempBinaryPath;
 process.env.CADDYFILE_PATH = tempCaddyfilePath;
@@ -42,7 +50,7 @@ process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
 // Импортируем наш скомпилированный gRPC сервер для инициализации биндинга
-const { startServer } = await import('../src/index.js');
+const { startServer, getGrpcServerCredentials } = await import('../src/index.js');
 
 const PROTO_PATH = path.resolve(process.cwd(), 'proto/agent.proto');
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, { keepCase: false });
@@ -55,10 +63,13 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
   const server = await startServer();
 
-  // Создаем нативный клиент для тестов
+  // Создаем нативный mTLS-клиент для тестов (сервер больше не поднимает insecure-режим)
+  const caCert = await fs.readFile(path.join(fixtureCertsDir, 'ca.crt'));
+  const clientCert = await fs.readFile(path.join(fixtureCertsDir, 'client.crt'));
+  const clientKey = await fs.readFile(path.join(fixtureCertsDir, 'client.key'));
   const client = new EgressAgentService(
     '127.0.0.1:8082',
-    grpc.credentials.createInsecure()
+    grpc.credentials.createSsl(caCert, clientKey, clientCert)
   );
 
   const validMetadata = new grpc.Metadata();
@@ -874,6 +885,67 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
           done(e);
         }
       });
+    });
+  });
+
+  await t.test('getGrpcServerCredentials refuses to start without valid mTLS material (no insecure fallback)', async (t) => {
+    const { config } = await import('../src/config.js');
+
+    const originalCa = config.CA_CERT_PATH;
+    const originalCert = config.AGENT_CERT_PATH;
+    const originalKey = config.AGENT_KEY_PATH;
+
+    t.after(() => {
+      (config as any).CA_CERT_PATH = originalCa;
+      (config as any).AGENT_CERT_PATH = originalCert;
+      (config as any).AGENT_KEY_PATH = originalKey;
+    });
+
+    await t.test('Should throw (not fall back to insecure) when certificate files are missing', async () => {
+      const missingDir = path.join(tempDir, 'nonexistent-certs');
+      (config as any).CA_CERT_PATH = path.join(missingDir, 'ca.crt');
+      (config as any).AGENT_CERT_PATH = path.join(missingDir, 'agent.crt');
+      (config as any).AGENT_KEY_PATH = path.join(missingDir, 'agent.key');
+
+      await assert.rejects(
+        () => getGrpcServerCredentials(),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          assert.match(err.message, /mTLS certificates are required but unavailable/);
+          assert.match(err.message, /MISSING at/);
+          assert.match(err.message, /refuses to start/);
+          return true;
+        }
+      );
+    });
+
+    await t.test('Should throw (not fall back to insecure) when a cert path exists but cannot be read as a file', async () => {
+      const corruptDir = path.join(tempDir, 'corrupt-certs');
+      await fs.mkdir(corruptDir, { recursive: true });
+      const caPath = path.join(corruptDir, 'ca.crt');
+      const certPath = path.join(corruptDir, 'agent.crt');
+      // AGENT_KEY_PATH указывает на директорию: fs.stat находит "файл" (проходит проверку
+      // существования), но fs.readFile на директории бросает EISDIR — это должно всплыть
+      // как ошибка загрузки, а не тихий insecure-фоллбек
+      const keyPath = path.join(corruptDir, 'agent-key-is-a-dir');
+      await fs.mkdir(keyPath, { recursive: true });
+      await Promise.all([
+        fs.writeFile(caPath, 'not a real certificate'),
+        fs.writeFile(certPath, 'not a real certificate'),
+      ]);
+      (config as any).CA_CERT_PATH = caPath;
+      (config as any).AGENT_CERT_PATH = certPath;
+      (config as any).AGENT_KEY_PATH = keyPath;
+
+      await assert.rejects(
+        () => getGrpcServerCredentials(),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          assert.match(err.message, /mTLS certificates were found but failed to load/);
+          assert.match(err.message, /refuses to start/);
+          return true;
+        }
+      );
     });
   });
 

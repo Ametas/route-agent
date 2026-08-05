@@ -42,18 +42,26 @@ const agentPackage = protoDescriptor.agent;
 export let serverInstance: Server | null = null;
 
 /**
- * Инициализация gRPC ServerCredentials (mTLS с проверкой сертификатов или insecure fallback)
+ * Инициализация gRPC ServerCredentials со строгим mTLS.
+ *
+ * Security note: агент НЕ ИМЕЕТ insecure-фоллбека. Если CA/agent cert/agent key
+ * отсутствуют, недоступны для чтения, или их парсинг завершился ошибкой — функция
+ * бросает исключение и агент не стартует. Это осознанное решение: тихая деградация
+ * в ServerCredentials.createInsecure() означала, что x-orchestrator-secret уходил
+ * бы в открытом виде на каждый вызов (MITM => компрометация + replay секрета через
+ * полноценно авторизованное соединение). См. checkServerIdentity на стороне
+ * оркестратора — тот же принцип "fail closed", применённый здесь симметрично.
  */
-async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredentials; isMtls: boolean }> {
-  try {
-    const { CA_CERT_PATH, AGENT_CERT_PATH, AGENT_KEY_PATH } = config;
-    const [caExists, certExists, keyExists] = await Promise.all([
-      fs.stat(CA_CERT_PATH).then(() => true).catch(() => false),
-      fs.stat(AGENT_CERT_PATH).then(() => true).catch(() => false),
-      fs.stat(AGENT_KEY_PATH).then(() => true).catch(() => false),
-    ]);
+export async function getGrpcServerCredentials(): Promise<ServerCredentials> {
+  const { CA_CERT_PATH, AGENT_CERT_PATH, AGENT_KEY_PATH } = config;
+  const [caExists, certExists, keyExists] = await Promise.all([
+    fs.stat(CA_CERT_PATH).then(() => true).catch(() => false),
+    fs.stat(AGENT_CERT_PATH).then(() => true).catch(() => false),
+    fs.stat(AGENT_KEY_PATH).then(() => true).catch(() => false),
+  ]);
 
-    if (caExists && certExists && keyExists) {
+  if (caExists && certExists && keyExists) {
+    try {
       const [caCert, agentCert, agentKey] = await Promise.all([
         fs.readFile(CA_CERT_PATH),
         fs.readFile(AGENT_CERT_PATH),
@@ -61,25 +69,37 @@ async function getGrpcServerCredentials(): Promise<{ credentials: ServerCredenti
       ]);
 
       logger.info({ caPath: CA_CERT_PATH, certPath: AGENT_CERT_PATH }, '🔒 Enabling mTLS with strict client certificate verification');
-      return {
-        credentials: ServerCredentials.createSsl(caCert, [{ cert_chain: agentCert, private_key: agentKey }], true),
-        isMtls: true
-      };
+      return ServerCredentials.createSsl(caCert, [{ cert_chain: agentCert, private_key: agentKey }], true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      throw new Error(
+        `mTLS certificates were found but failed to load (CA: ${CA_CERT_PATH}, cert: ${AGENT_CERT_PATH}, ` +
+        `key: ${AGENT_KEY_PATH}). Underlying error: ${msg}. Agent refuses to start in an unencrypted/` +
+        `unauthenticated transport mode. Verify the certificate/key files are valid PEM material issued for ` +
+        `this node, or reissue them via the orchestrator install flow (re-run install.sh with a valid ` +
+        `--secret), then restart the route-agent service.`
+      );
     }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    logger.warn({ err: msg }, 'Failed to load mTLS certificates; falling back to insecure gRPC channel');
   }
 
-  logger.warn('⚠️ mTLS certificates not found or incomplete. Starting gRPC server in insecure mode');
-  return { credentials: ServerCredentials.createInsecure(), isMtls: false };
+  throw new Error(
+    `mTLS certificates are required but unavailable ` +
+    `(CA: ${caExists ? 'ok' : `MISSING at ${CA_CERT_PATH}`}, ` +
+    `cert: ${certExists ? 'ok' : `MISSING at ${AGENT_CERT_PATH}`}, ` +
+    `key: ${keyExists ? 'ok' : `MISSING at ${AGENT_KEY_PATH}`}). ` +
+    `Agent refuses to start in an unencrypted/unauthenticated transport mode instead of silently degrading ` +
+    `(x-orchestrator-secret must never travel in plaintext). Reissue node certificates via the orchestrator ` +
+    `install flow (re-run install.sh on this VPS with a valid --secret to re-enroll and receive fresh CA/` +
+    `agent cert+key), or manually place them at the CA_CERT_PATH/AGENT_CERT_PATH/AGENT_KEY_PATH configured ` +
+    `in .env, then restart the route-agent service.`
+  );
 }
 
 export async function startServer(): Promise<Server> {
   await sanitizeAwgToolsSymlink();
   await ensureAwgSystemdUnit();
   startAwgHealthCheckTimer();
-  const { credentials, isMtls } = await getGrpcServerCredentials();
+  const credentials = await getGrpcServerCredentials();
   return new Promise((resolve, reject) => {
     const serverOptions = {
       'grpc.keepalive_time_ms': 10000,
@@ -115,9 +135,8 @@ export async function startServer(): Promise<Server> {
         reject(err);
         return;
       }
-      const scheme = isMtls ? 'h2' : 'h2c';
       const protoHash = computeProtoContractHash();
-      logger.info({ protoHash, len: protoHash.length }, `🚀 gRPC Route Agent actively listening at ${scheme}://${config.HOST}:${port} (Proto Contract SHA256: ${protoHash})`);
+      logger.info({ protoHash, len: protoHash.length }, `🚀 gRPC Route Agent actively listening at h2://${config.HOST}:${port} (Proto Contract SHA256: ${protoHash})`);
       serverInstance = server;
       resolve(server);
     });
@@ -125,7 +144,9 @@ export async function startServer(): Promise<Server> {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  startServer().catch(() => {
+  startServer().catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.fatal({ err: msg }, '💥 Route Agent failed to start and is exiting; systemd (Restart=always) will retry, but this will loop until the underlying issue is fixed');
     process.exit(1);
   });
 }
