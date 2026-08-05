@@ -9,5 +9,12 @@ yarn-error.log*
 .eslintcache
 .DS_Store
 
+# IDEs / AI agent config
+.claude/
+CLAUDE.md
+GEMINI.md
+
 # Repomix
 repomix*
+repomix-output.*
+repomix.config.*
