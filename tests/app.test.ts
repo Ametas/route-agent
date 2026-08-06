@@ -22,6 +22,7 @@ const tempAwgToolsBinaryPath = path.join(tempDir, 'awg');
 const tempAwgQuickBinaryPath = path.join(tempDir, 'awg-quick');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
 const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
+const tempSingboxUnitPath = path.join(tempDir, 'sing-box.service');
 
 // Фикстурные mTLS-сертификаты для тестов. С тех пор, как агент отказывается стартовать
 // без валидных сертификатов (см. security-аудит), даже "обычный" пайплайн-тест обязан
@@ -46,6 +47,7 @@ process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
 process.env.AWG_QUICK_BINARY_PATH = tempAwgQuickBinaryPath;
 process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
 process.env.AWG_UNIT_FILE_PATH = tempAwgUnitPath;
+process.env.SINGBOX_UNIT_FILE_PATH = tempSingboxUnitPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -308,6 +310,69 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     // 2. Second call with unchanged content should return false without rewriting file or triggering daemon-reload
     const secondCallResult = await ensureAwgSystemdUnit(customTestUnitPath);
     assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
+  });
+
+  await t.test('ensureSingboxSystemdUnit idempotency check (mirrors ensureAwgSystemdUnit)', async () => {
+    const { ensureSingboxSystemdUnit } = await import('../src/utils/singbox.js');
+    const customTestUnitPath = path.join(tempDir, 'test-sing-box.service');
+    await fs.unlink(customTestUnitPath).catch(() => {});
+
+    const execCalls: string[] = [];
+    const spyExec = async (command: string) => {
+      execCalls.push(command);
+      return { stdout: '', stderr: '' };
+    };
+
+    // 1. Initial call on clean filesystem creates the file with expected content, unchanged
+    // from what install.sh used to embed verbatim.
+    const firstCallResult = await ensureSingboxSystemdUnit(customTestUnitPath, spyExec);
+    assert.strictEqual(firstCallResult, true, 'First call should create unit file');
+
+    const content = await fs.readFile(customTestUnitPath, 'utf-8');
+    assert.ok(content.includes('Description=sing-box service'));
+    assert.ok(content.includes('CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE'));
+    assert.ok(content.includes('AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE'));
+    assert.ok(content.includes(`ExecStart=${tempBinaryPath} run -c ${tempConfigPath}`));
+    assert.ok(content.includes('Restart=always'));
+    assert.ok(content.includes('RestartSec=5'));
+    assert.ok(content.includes(`ExecReload=/bin/sh -c "${tempBinaryPath} check -c ${tempConfigPath} && /bin/kill -HUP $MAINPID"`));
+    assert.ok(content.includes('WantedBy=multi-user.target'));
+
+    // 2. Second call with unchanged content should return false without rewriting the file or
+    // triggering daemon-reload. NODE_ENV=test already skips the daemon-reload exec internally,
+    // but we assert no exec call happened at all for either call, since the write itself is
+    // what would precede it, and no exec is expected either way at NODE_ENV=test.
+    const secondCallResult = await ensureSingboxSystemdUnit(customTestUnitPath, spyExec);
+    assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
+    assert.strictEqual(execCalls.length, 0, 'daemon-reload must not run under NODE_ENV=test');
+  });
+
+  await t.test('resolveSingboxReloadCommand should fall back to start when sing-box is not active', async () => {
+    const { resolveSingboxReloadCommand } = await import('../src/utils/singbox.js');
+
+    // Mocked systemctl is-active reporting the unit as active -> keep the configured reload.
+    const activeExec = async (command: string) => {
+      assert.strictEqual(command, 'systemctl is-active sing-box');
+      return { stdout: 'active\n', stderr: '' };
+    };
+    const activeCmd = await resolveSingboxReloadCommand(activeExec);
+    assert.strictEqual(activeCmd, process.env.RELOAD_COMMAND);
+
+    // Mocked systemctl is-active reporting the unit as inactive (resolved, not rejected) ->
+    // must fall back to start, not reload.
+    const inactiveExec = async (_command: string) => ({ stdout: 'inactive\n', stderr: '' });
+    const inactiveCmd = await resolveSingboxReloadCommand(inactiveExec);
+    assert.strictEqual(inactiveCmd, 'systemctl start sing-box');
+
+    // Real `systemctl is-active` rejects the promise (non-zero exit) for inactive/failed/unknown
+    // units -- must be treated the same way as an explicit "inactive" result above.
+    const rejectingExec = async (_command: string) => {
+      const err: any = new Error('Command failed: systemctl is-active sing-box\ninactive\n');
+      err.stdout = 'inactive\n';
+      throw err;
+    };
+    const rejectingCmd = await resolveSingboxReloadCommand(rejectingExec);
+    assert.strictEqual(rejectingCmd, 'systemctl start sing-box');
   });
 
   await t.test('getAwgInterfaceName and restartActiveAwgServices when unconfigured', async () => {

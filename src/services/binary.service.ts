@@ -9,6 +9,7 @@ import { execAsync, execFileAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
 import { invalidateSingboxVersionCache, invalidateAwgVersionCache } from '../utils/telemetry.js';
 import { restartActiveAwgServices } from '../utils/awg.js';
+import { ensureSingboxSystemdUnit } from '../utils/singbox.js';
 
 const logger = pino({ level: 'info' });
 
@@ -142,14 +143,32 @@ export async function uploadSingboxBinaryHandler(
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated sing-box binary');
       invalidateSingboxVersionCache();
 
+      // Юнит sing-box больше не создаётся заранее в install.sh — провижинится здесь, лениво,
+      // в момент первой (или любой последующей) реальной загрузки бинарника, зеркально
+      // паттерну AWG/Olcrtc. Делаем это ДО любой попытки systemctl start/reload для него.
+      const unitJustProvisioned = await ensureSingboxSystemdUnit();
+
       if (process.env.NODE_ENV !== 'test') {
-        try {
-          const reloadCmd = config.RELOAD_COMMAND || 'systemctl restart sing-box';
-          const { stdout, stderr } = await execAsync(reloadCmd);
-          if (stdout) logger.info({ stdout }, 'Restart/Reload after binary upgrade');
-          if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
-        } catch (err: any) {
-          logger.warn({ err: err.message }, 'Reload command failed after binary upgrade');
+        if (unitJustProvisioned) {
+          // Первый реальный вызов: юнит только что создан — поднимаем демон сразу с
+          // доставленным бинарником и placeholder-конфигом и переживаем перезагрузки.
+          try {
+            const { stdout, stderr } = await execAsync('systemctl enable --now sing-box');
+            if (stdout) logger.info({ stdout }, 'sing-box enabled and started after unit provisioning');
+            if (stderr) logger.warn({ stderr }, 'sing-box enable --now stderr');
+          } catch (err: any) {
+            logger.warn({ err: err.message }, 'Failed to enable/start sing-box after provisioning its systemd unit');
+          }
+        } else {
+          // Юнит уже актуален — sing-box уже управляется штатным ApplyConfig-путём (reload).
+          try {
+            const reloadCmd = config.RELOAD_COMMAND || 'systemctl restart sing-box';
+            const { stdout, stderr } = await execAsync(reloadCmd);
+            if (stdout) logger.info({ stdout }, 'Restart/Reload after binary upgrade');
+            if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
+          } catch (err: any) {
+            logger.warn({ err: err.message }, 'Reload command failed after binary upgrade');
+          }
         }
       }
 

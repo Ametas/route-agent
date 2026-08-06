@@ -54,29 +54,13 @@ ALL ALL=(ALL) NOPASSWD: /usr/sbin/ufw
 EOF
 chmod 0440 /etc/sudoers.d/route-agent-ufw
 
-# 3. Базовая заготовка для службы sing-box и AmneziaWG
+# 3. Базовая заготовка путей sing-box и AmneziaWG (без создания сервиса sing-box —
+# его systemd unit-файл провижинится лениво, идемпотентно, агентом самим (см.
+# ensureSingboxSystemdUnit в src/utils/singbox.ts) в момент первой реальной загрузки
+# бинарника sing-box от оркестратора, зеркально паттерну AWG/Olcrtc)
 mkdir -p /etc/sing-box /var/www/decoy /var/lib/caddy /etc/amnezia/amneziawg
 chmod 755 /var/lib/caddy || true
 echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
-
-cat << EOT > /etc/systemd/system/sing-box.service
-[Unit]
-Description=sing-box service
-After=network.target nss-lookup.target
-
-[Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=always
-RestartSec=5
-ExecReload=/bin/sh -c "/usr/local/bin/sing-box check -c /etc/sing-box/config.json && /bin/kill -HUP \$MAINPID"
-
-[Install]
-WantedBy=multi-user.target
-EOT
-
-systemctl daemon-reload
 
 # 4. Установка Node.js 22 LTS
 if ! command -v node &> /dev/null; then

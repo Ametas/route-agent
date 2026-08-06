@@ -45,6 +45,99 @@ export async function fixCaddyPermissions(
 }
 
 /**
+ * Идемпотентно создаёт или обновляет systemd unit-файл sing-box.
+ *
+ * Раньше unit статично прописывался в install.sh на этапе провижининга ноды — единственное
+ * из трёх доп. ядер (sing-box/AWG/Olcrtc), нарушавшее принятый в проекте паттерн: AWG
+ * (ensureAwgSystemdUnit, src/services/systemdUnit.service.ts) и Olcrtc (configureOlcrtcHandler,
+ * src/services/config.service.ts) оба создают свои unit-файлы лениво, в момент первой реальной
+ * команды от оркестратора, а не заранее в install.sh. Эта функция зеркалит
+ * ensureAwgSystemdUnit: пишет файл только если он отсутствует или его содержимое отличается
+ * от ожидаемого, daemon-reload выполняется только при реальном изменении.
+ *
+ * `overridePath`/`runExec` параметризованы только ради юнит-тестов; боевые вызовы
+ * (uploadSingboxBinaryHandler) используют значения по умолчанию.
+ */
+export async function ensureSingboxSystemdUnit(
+  overridePath?: string,
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<boolean> {
+  const unitPath = overridePath || config.SINGBOX_UNIT_FILE_PATH || '/etc/systemd/system/sing-box.service';
+  const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+  const configPath = config.SINGBOX_CONFIG_PATH || '/etc/sing-box/config.json';
+
+  // Содержимое перенесено дословно из install.sh — меняется только место/момент его записи.
+  const expectedContent = `[Unit]
+Description=sing-box service
+After=network.target nss-lookup.target
+
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ExecStart=${binaryPath} run -c ${configPath}
+Restart=always
+RestartSec=5
+ExecReload=/bin/sh -c "${binaryPath} check -c ${configPath} && /bin/kill -HUP $MAINPID"
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+  try {
+    const existingContent = await fs.readFile(unitPath, 'utf-8').catch(() => null);
+
+    if (existingContent === expectedContent) {
+      logger.debug({ path: unitPath }, 'sing-box systemd unit file is already up to date; skipping write and daemon-reload');
+      return false;
+    }
+
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(unitPath, expectedContent, 'utf-8');
+    logger.info({ path: unitPath }, 'Provisioned/updated sing-box systemd unit file');
+
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        await runExec('systemctl daemon-reload');
+        logger.info('Executed systemctl daemon-reload after updating sing-box systemd unit file');
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Failed to execute systemctl daemon-reload');
+      }
+    }
+
+    return true;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err: msg, path: unitPath }, 'Failed to ensure sing-box systemd unit file');
+    return false;
+  }
+}
+
+/**
+ * Defense-in-depth (не основной фикс, а дешёвая страховка): перед мягким reload'ом sing-box
+ * проверяет реальное состояние юнита. Юнит может существовать, но быть неактивным по причине,
+ * не связанной с provisioning'ом (краш процесса, исчерпанный лимит Restart=always и т.п.) —
+ * `systemctl reload` в этом случае ничего не поднимет, нужен `start`.
+ *
+ * `runExec` параметризован только ради юнит-теста; продовый вызов (из atomicApplyAndReload)
+ * использует значение по умолчанию.
+ */
+export async function resolveSingboxReloadCommand(
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<string> {
+  try {
+    const { stdout } = await runExec('systemctl is-active sing-box');
+    if (stdout.trim() === 'active') {
+      return config.RELOAD_COMMAND;
+    }
+  } catch {
+    // `systemctl is-active` завершается ненулевым кодом (и тем самым реджектит промис
+    // из promisify(exec)) для любого состояния, кроме "active" — inactive/failed/unknown
+    // юнит. Любой такой исход трактуем как "нужен start, а не reload".
+  }
+  return 'systemctl start sing-box';
+}
+
+/**
  * Вспомогательный метод локальной валидации синтаксиса sing-box перед его применением
  */
 export async function validateSingBoxConfig(configObj: object): Promise<{ valid: boolean; error?: string }> {
@@ -94,7 +187,14 @@ export async function atomicApplyAndReload(configObj: object): Promise<void> {
   // 3. Мягкий reload сервиса с откатом при ошибке
   if (process.env.NODE_ENV !== 'test' || process.env.RELOAD_COMMAND) {
     try {
-      const { stdout, stderr } = await execAsync(config.RELOAD_COMMAND);
+      // В боевом режиме подстраховываемся: юнит мог существовать, но быть неактивным
+      // по причине, не связанной с этим конкретным изменением конфига (см.
+      // resolveSingboxReloadCommand). В тестах поведение не меняем — используем
+      // config.RELOAD_COMMAND напрямую, как и раньше.
+      const reloadCmd = process.env.NODE_ENV !== 'test'
+        ? await resolveSingboxReloadCommand()
+        : config.RELOAD_COMMAND;
+      const { stdout, stderr } = await execAsync(reloadCmd);
       if (stdout) logger.info({ stdout }, 'Reload command stdout');
       if (stderr) logger.warn({ stderr }, 'Reload command stderr');
     } catch (err) {
