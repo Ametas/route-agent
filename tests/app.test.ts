@@ -1022,6 +1022,37 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(updatedContent, 'binary_content_v2');
     });
 
+    await t.test('fixCaddyPermissions should chown before chmod, and skip both if the dir does not exist', async () => {
+      const { fixCaddyPermissions } = await import('../src/utils/singbox.js');
+
+      // Существующая директория: обе команды должны выполниться, chown первой.
+      const existingDir = path.join(tempDir, 'fake_var_lib_caddy');
+      await fs.mkdir(existingDir, { recursive: true });
+
+      const calls: string[] = [];
+      const spyExec = async (command: string) => {
+        calls.push(command);
+        return { stdout: '', stderr: '' };
+      };
+
+      await fixCaddyPermissions(existingDir, spyExec);
+
+      assert.strictEqual(calls.length, 2, 'expected exactly one chown call and one chmod call');
+      assert.match(calls[0], /^chown -R caddy:caddy /, 'first command must be chown, not just chmod');
+      assert.ok(calls[0].includes(existingDir));
+      assert.match(calls[1], /^chmod -R 755 /);
+      assert.ok(calls[1].includes(existingDir));
+
+      // Несуществующая директория: exec вообще не должен вызываться.
+      const missingCalls: string[] = [];
+      const spyExecMissing = async (command: string) => {
+        missingCalls.push(command);
+        return { stdout: '', stderr: '' };
+      };
+      await fixCaddyPermissions(path.join(tempDir, 'does_not_exist_caddy_dir'), spyExecMissing);
+      assert.strictEqual(missingCalls.length, 0);
+    });
+
     await t.test('parseAwgVersionString, getAwgToolsVersion, and getAmneziaWgGoVersion logic', async () => {
       const { parseAwgVersionString, getAwgToolsVersion, getAmneziaWgGoVersion, getAwgVersion } = await import('../src/utils/telemetry.js');
 

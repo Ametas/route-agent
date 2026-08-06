@@ -7,14 +7,37 @@ import { execAsync, execFileAsync } from './exec.js';
 
 const logger = pino({ level: 'info' });
 
+const CADDY_LIB_DIR = '/var/lib/caddy';
+
 /**
- * Гарантирует права на чтение сертификатов Caddy для ядра sing-box
+ * Гарантирует права на чтение сертификатов Caddy для ядра sing-box.
+ *
+ * Официальный apt-пакет caddy на Debian/Ubuntu всегда создаёт системного
+ * пользователя/группу `caddy` и раскладывает `/var/lib/caddy` под ним —
+ * это стандартное поведение пакета, а не особенность конкретной ноды,
+ * поэтому владелец захардкожен, а не определяется через `getent`/`id`
+ * (лишний exec и лишняя точка отказа ради значения, которое не варьируется
+ * на поддерживаемых дистрибутивах). chmod сам по себе не чинит выданный
+ * root:root каталог — процесс Caddy всегда работает от caddy:caddy
+ * (systemctl show caddy -p User -p Group), поэтому chown обязателен;
+ * chmod оставлен следом как дополнительная гарантия на случай, если
+ * владелец уже корректен, но биты доступа слишком строгие.
+ * chown -R рекурсивно переустанавливает владельца на всех уже существующих
+ * файлах/подкаталогах при каждом вызове, поэтому одного этого фикса
+ * достаточно, чтобы починить ранее испорченные ноды — без отдельной миграции.
+ *
+ * `dir`/`runExec` параметризованы только ради юнит-тестов (см. tests/app.test.ts);
+ * все боевые вызовы используют значения по умолчанию.
  */
-export async function fixCaddyPermissions(): Promise<void> {
+export async function fixCaddyPermissions(
+  dir: string = CADDY_LIB_DIR,
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<void> {
   try {
-    const caddyDirExists = await fs.stat('/var/lib/caddy').then(() => true).catch(() => false);
+    const caddyDirExists = await fs.stat(dir).then(() => true).catch(() => false);
     if (caddyDirExists) {
-      await execAsync('chmod -R 755 /var/lib/caddy || true');
+      await runExec(`chown -R caddy:caddy ${dir} || true`);
+      await runExec(`chmod -R 755 ${dir} || true`);
     }
   } catch (err: any) {
     logger.warn({ err: err.message }, 'Failed to adjust Caddy certificates permissions');
