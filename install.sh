@@ -12,12 +12,16 @@ SECRET=""
 PORT="8081"
 REPO="https://github.com/Ametas/route-agent.git"
 AGENT_DIR="/opt/route-agent"
+DOMAIN=""
+DECOY_PORT="8443"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --secret) SECRET="$2"; shift ;;
         --port) PORT="$2"; shift ;;
         --repo) REPO="$2"; shift ;;
+        --domain) DOMAIN="$2"; shift ;;
+        --decoy-port) DECOY_PORT="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -145,4 +149,8 @@ systemctl daemon-reload
 systemctl enable route-agent
 systemctl restart route-agent
 
-echo "🎉 Route Agent initialized successfully on port $PORT! Awaiting Orchestrator binary push..."
+if [ -n "$DOMAIN" ]; then
+  echo "🎉 Route Agent initialized successfully on port $PORT (domain: $DOMAIN, decoy port: $DECOY_PORT)! Awaiting Orchestrator binary push..."
+else
+  echo "🎉 Route Agent initialized successfully on port $PORT! Awaiting Orchestrator binary push..."
+fi
