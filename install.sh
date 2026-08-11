@@ -88,8 +88,10 @@ TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
 SWAP_ACTIVE=$(swapon --show 2>/dev/null || true)
 SWAP_IN_FSTAB=$(grep -Es '^[^#]*\bswap\b' /etc/fstab || true)
 
-if [ "$TOTAL_RAM_MB" -lt 1900 ] && [ -z "$SWAP_ACTIVE" ] && [ -z "$SWAP_IN_FSTAB" ]; then
-  echo "📦 Low RAM detected (${TOTAL_RAM_MB}MB) and no swap configured — creating 2G swapfile..."
+echo "ℹ️ Detected RAM: ${TOTAL_RAM_MB}MB"
+
+if [ -z "$SWAP_ACTIVE" ] && [ -z "$SWAP_IN_FSTAB" ]; then
+  echo "📦 No swap configured — creating 2G swapfile..."
   (
     set -e
     fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048
@@ -101,12 +103,29 @@ if [ "$TOTAL_RAM_MB" -lt 1900 ] && [ -z "$SWAP_ACTIVE" ] && [ -z "$SWAP_IN_FSTAB
     fi
   ) || echo "⚠️ Swapfile creation failed, continuing without swap (this may cause OOM on the build step below)."
 else
-  echo "✅ Sufficient RAM (${TOTAL_RAM_MB}MB) or swap already present — skipping swapfile creation."
+  echo "✅ Swap already present — skipping swapfile creation."
 fi
 
 # 6. Клонирование и запуск агента
+# Идемпотентность: если AGENT_DIR уже существует (например, после прерванной
+# предыдущей попытки установки), НЕ пропускаем синхронизацию кода молча —
+# иначе повторный запуск install.sh будет пересобирать устаревший чекаут и
+# "фикс не применяется после повторного запуска" (см. реальный инцидент).
+# Зеркалируем точную git-идиому из selfUpdateHandler (src/services/system.service.ts):
+# git fetch --all && git reset --hard @{u} && git clean -fd
 if [ ! -d "$AGENT_DIR" ]; then
   git clone "$REPO" "$AGENT_DIR"
+elif [ -d "$AGENT_DIR/.git" ]; then
+  echo "🔄 $AGENT_DIR already exists — syncing to latest upstream commit..."
+  (
+    cd "$AGENT_DIR"
+    git fetch --all
+    git reset --hard @{u}
+    git clean -fd
+  )
+else
+  echo "❌ Error: $AGENT_DIR already exists but is not a git repository (missing .git). Refusing to overwrite it — please inspect/remove it manually and re-run install.sh."
+  exit 1
 fi
 cd "$AGENT_DIR"
 
