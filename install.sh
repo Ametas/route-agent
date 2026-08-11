@@ -70,12 +70,21 @@ chmod 755 /var/lib/caddy || true
 echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
 
 # 4. Установка Node.js 22 LTS
-if ! command -v node &> /dev/null; then
+# Проверяем не только node, но и npm: на боксах, где уже стоит сторонний ПО
+# (например, remnanode), в PATH может обнаружиться "голый" node-бинарник без
+# npm рядом — тогда этот блок молча пропускался бы, а npm ci ниже падал бы с
+# "npm: command not found" (реальный инцидент).
+if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
   mkdir -p /etc/apt/keyrings
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
   apt-get update
   apt-get install -y nodejs
+fi
+
+if ! command -v npm &> /dev/null; then
+  echo "❌ Error: npm is still not on PATH after installing nodejs (found: node=$(command -v node || echo 'not found'), npm=$(command -v npm || echo 'not found')). A conflicting node binary earlier in \$PATH is likely shadowing the nodesource install — inspect \$PATH and remove/reorder the conflicting entry manually."
+  exit 1
 fi
 
 # 5. Провижининг swap-файла на малопамятных VPS
