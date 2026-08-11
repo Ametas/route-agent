@@ -6,7 +6,7 @@ import pino from 'pino';
 import { config } from '../config.js';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
-import { validateSafeCamouflagePath } from '../utils/caddy.js';
+import { validateSafeCamouflagePath, fixXraySocketPermissions } from '../utils/caddy.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
@@ -137,6 +137,7 @@ export async function configureCaddyHandler(
     await fs.writeFile(caddyfilePath, finalCaddyfile, 'utf-8');
 
     await fixCaddyPermissions();
+    await fixXraySocketPermissions();
 
     if (process.env.NODE_ENV !== 'test') {
       // 1. Предварительная валидация конфига самим бинарником Caddy

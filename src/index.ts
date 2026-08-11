@@ -19,6 +19,7 @@ import {
   sanitizeAwgToolsSymlink
 } from './services/binary.service.js';
 import { ensureAwgSystemdUnit } from './services/systemdUnit.service.js';
+import { fixXraySocketPermissions } from './utils/caddy.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
 import { startAwgHealthCheckTimer } from './utils/telemetry.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
@@ -98,6 +99,7 @@ export async function getGrpcServerCredentials(): Promise<ServerCredentials> {
 export async function startServer(): Promise<Server> {
   await sanitizeAwgToolsSymlink();
   await ensureAwgSystemdUnit();
+  await fixXraySocketPermissions();
   startAwgHealthCheckTimer();
   const credentials = await getGrpcServerCredentials();
   return new Promise((resolve, reject) => {

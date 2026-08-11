@@ -1149,6 +1149,55 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(missingCalls.length, 0);
     });
 
+    await t.test('fixXraySocketPermissions should chmod 666 only sockets that exist, and never throw', async () => {
+      const { fixXraySocketPermissions } = await import('../src/utils/caddy.js');
+
+      const existingSocketPath = path.join(tempDir, 'fake_vless-xhttp.sock');
+      const missingSocketPath = path.join(tempDir, 'fake_vless-grpc.sock');
+      await fs.writeFile(existingSocketPath, '');
+      await fs.rm(missingSocketPath, { force: true }).catch(() => {});
+
+      // 1. Существующий сокет -> ровно один chmod 666 на него; отсутствующий -> exec не вызывается.
+      const calls: string[] = [];
+      const spyExec = async (command: string) => {
+        calls.push(command);
+        return { stdout: '', stderr: '' };
+      };
+
+      await fixXraySocketPermissions([existingSocketPath, missingSocketPath], spyExec);
+
+      assert.strictEqual(calls.length, 1, 'expected exactly one chmod call, only for the existing socket');
+      assert.strictEqual(calls[0], `chmod 666 ${existingSocketPath}`);
+
+      // 2. Ни один путь не существует -> exec вообще не должен вызываться, ошибок нет.
+      const missingCalls: string[] = [];
+      const spyExecAllMissing = async (command: string) => {
+        missingCalls.push(command);
+        return { stdout: '', stderr: '' };
+      };
+      await fixXraySocketPermissions([missingSocketPath], spyExecAllMissing);
+      assert.strictEqual(missingCalls.length, 0);
+
+      // 3. exec бросает на первом пути -> функция не бросает, продолжает и пытается второй путь.
+      const secondExistingSocketPath = path.join(tempDir, 'fake_vless-grpc_2.sock');
+      await fs.writeFile(secondExistingSocketPath, '');
+
+      const failingCalls: string[] = [];
+      const spyExecFailingFirst = async (command: string) => {
+        failingCalls.push(command);
+        if (command.includes(existingSocketPath)) {
+          throw new Error('simulated chmod failure');
+        }
+        return { stdout: '', stderr: '' };
+      };
+
+      await assert.doesNotReject(
+        fixXraySocketPermissions([existingSocketPath, secondExistingSocketPath], spyExecFailingFirst)
+      );
+      assert.strictEqual(failingCalls.length, 2, 'expected the remaining path to still be attempted after a failure');
+      assert.strictEqual(failingCalls[1], `chmod 666 ${secondExistingSocketPath}`);
+    });
+
     await t.test('parseAwgVersionString, getAwgToolsVersion, and getAmneziaWgGoVersion logic', async () => {
       const { parseAwgVersionString, getAwgToolsVersion, getAmneziaWgGoVersion, getAwgVersion } = await import('../src/utils/telemetry.js');
 
