@@ -826,18 +826,23 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     await new Promise<void>((resolve) => mockServer.listen(mockPort, resolve));
 
-    t.after(() => {
+    t.after(async () => {
       mockServer.close();
       delete process.env.OLCRTC_PORT;
       delete process.env.TEST_WEBRTC_CHECK;
+      // Не оставляем фиктивный бинарник olcrtc-manager на диске между блоками тестов
+      await fs.unlink(tempOlcrtcManagerPath).catch(() => {});
     });
 
-    await t.test('Should return panel_dead if server does not respond or times out', (t, done) => {
+    // Гарантируем отсутствие бинарника на диске (не полагаемся на порядок предыдущих тестов)
+    await fs.unlink(tempOlcrtcManagerPath).catch(() => {});
+
+    await t.test('Should return not_installed if olcrtc-manager binary is not present on disk', (t, done) => {
       shouldFail = true;
       const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
       stream.on('data', (data: any) => {
         try {
-          assert.strictEqual(data.webrtcStatus, 'panel_dead');
+          assert.strictEqual(data.webrtcStatus, 'not_installed');
           stream.destroy();
           done();
         } catch (err) {
@@ -847,6 +852,29 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       });
       stream.on('error', () => {});
     });
+
+    // Бинарник теперь "установлен" (файл существует), но панель недоступна/не отвечает
+    await fs.mkdir(path.dirname(tempOlcrtcManagerPath), { recursive: true });
+    await fs.writeFile(tempOlcrtcManagerPath, '');
+
+    await t.test('Should return unavailable if binary exists but server does not respond or times out', (t, done) => {
+      shouldFail = true;
+      const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
+      stream.on('data', (data: any) => {
+        try {
+          assert.strictEqual(data.webrtcStatus, 'unavailable');
+          stream.destroy();
+          done();
+        } catch (err) {
+          stream.destroy();
+          done(err);
+        }
+      });
+      stream.on('error', () => {});
+    });
+
+    // Явно поддерживаем существование бинарника для succes-path тестов ниже (не полагаемся на порядок)
+    await fs.writeFile(tempOlcrtcManagerPath, '');
 
     await t.test('Should return no_active_tunnels if running_count is 0 but there are active users', (t, done) => {
       shouldFail = false;
@@ -864,6 +892,9 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       });
       stream.on('error', () => {});
     });
+
+    // Явно поддерживаем существование бинарника (не полагаемся на порядок)
+    await fs.writeFile(tempOlcrtcManagerPath, '');
 
     await t.test('Should return nominal if running_count > 0 or there are no active users', (t, done) => {
       shouldFail = false;

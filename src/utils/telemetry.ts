@@ -108,6 +108,12 @@ export async function getWebRtcStatus(): Promise<string> {
     return 'nominal';
   }
 
+  const managerBin = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
+  const managerExists = await fs.stat(managerBin).then(() => true).catch(() => false);
+  if (!managerExists) {
+    return 'not_installed';
+  }
+
   const port = process.env.OLCRTC_PORT ? parseInt(process.env.OLCRTC_PORT, 10) : 8888;
   const url = `http://127.0.0.1:${port}/api/state`;
 
@@ -143,7 +149,7 @@ export async function getWebRtcStatus(): Promise<string> {
     
     return 'nominal';
   } catch (err) {
-    return 'panel_dead';
+    return 'unavailable';
   }
 }
 
