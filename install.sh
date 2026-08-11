@@ -8,6 +8,10 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Отключаем интерактивные диалоги apt (needrestart/unattended-upgrades могут
+# повесить установку ожиданием ввода пользователя на некоторых образах)
+export DEBIAN_FRONTEND=noninteractive
+
 SECRET=""
 PORT="8081"
 REPO="https://github.com/Ametas/route-agent.git"
@@ -74,7 +78,33 @@ if ! command -v node &> /dev/null; then
   apt-get install -y nodejs
 fi
 
-# 5. Клонирование и запуск агента
+# 5. Провижининг swap-файла на малопамятных VPS
+# npm ci / npm run build (tsup -> esbuild) может спровоцировать всплеск потребления
+# памяти, из-за которого OOM-killer иногда убивает sshd/PTY-сессию вместо реального
+# виновника — внешне это выглядит как внезапное закрытие SSH-сессии. Добавляем
+# swap-файл на боксах с малым объёмом RAM, если swap ещё не настроен.
+echo "💾 Checking RAM and swap..."
+TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
+SWAP_ACTIVE=$(swapon --show 2>/dev/null || true)
+SWAP_IN_FSTAB=$(grep -Es '^[^#]*\bswap\b' /etc/fstab || true)
+
+if [ "$TOTAL_RAM_MB" -lt 1900 ] && [ -z "$SWAP_ACTIVE" ] && [ -z "$SWAP_IN_FSTAB" ]; then
+  echo "📦 Low RAM detected (${TOTAL_RAM_MB}MB) and no swap configured — creating 2G swapfile..."
+  (
+    set -e
+    fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    if ! grep -Es '^[^#]*\bswap\b' /etc/fstab > /dev/null; then
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+  ) || echo "⚠️ Swapfile creation failed, continuing without swap (this may cause OOM on the build step below)."
+else
+  echo "✅ Sufficient RAM (${TOTAL_RAM_MB}MB) or swap already present — skipping swapfile creation."
+fi
+
+# 6. Клонирование и запуск агента
 if [ ! -d "$AGENT_DIR" ]; then
   git clone "$REPO" "$AGENT_DIR"
 fi
