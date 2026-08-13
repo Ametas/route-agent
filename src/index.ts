@@ -24,6 +24,7 @@ import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetr
 import { startAwgHealthCheckTimer } from './utils/telemetry.js';
 import { manageFirewallHandler } from './services/firewall.service.js';
 import { selfUpdateHandler, getAgentInfoHandler } from './services/system.service.js';
+import { runNetworkDiagnosticHandler } from './services/networkDiagnostic.service.js';
 import { computeProtoContractHash } from './services/protoContract.service.js';
 
 const logger = pino({ level: 'info' });
@@ -125,7 +126,8 @@ export async function startServer(): Promise<Server> {
       configureAwg: configureAwgHandler,
       manageFirewall: manageFirewallHandler,
       selfUpdate: selfUpdateHandler,
-      getAgentInfo: getAgentInfoHandler
+      getAgentInfo: getAgentInfoHandler,
+      runNetworkDiagnostic: runNetworkDiagnosticHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

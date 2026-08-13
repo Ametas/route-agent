@@ -39,7 +39,7 @@ fi
 # 1. Установка системных зависимостей и подключение репозитория Caddy
 echo "📦 Installing system packages and Caddy repository..."
 apt-get update
-apt-get install -y iptables iproute2 ufw git curl unzip debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
+apt-get install -y iptables iproute2 ufw git curl unzip mtr-tiny debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
 
 if ! command -v caddy &> /dev/null; then
   echo "📥 Adding Caddy official apt repository..."

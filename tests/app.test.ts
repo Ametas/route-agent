@@ -752,6 +752,180 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  await t.test('RunNetworkDiagnostic should block requests with invalid metadata tokens', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.runNetworkDiagnostic({ targets: ['example.com'] }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      // Empty repeated fields decode as `undefined` on the wire with this test client's
+      // proto-loader config (no `defaults: true`), not `[]` -- tolerate both.
+      assert.strictEqual((response.results ?? []).length, 0);
+      done();
+    });
+  });
+
+  await t.test('RunNetworkDiagnostic should reject an unsafe/flag-like target without crashing the whole call', (t, done) => {
+    client.runNetworkDiagnostic({ targets: ['-oPonFire', 'also bad target'] }, validMetadata, (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true, 'overall success must be true even though every target was rejected');
+        assert.strictEqual(response.results.length, 2);
+
+        const first = response.results[0];
+        assert.strictEqual(first.target, '-oPonFire');
+        assert.strictEqual(first.reachable, false);
+        assert.ok(first.error.includes('Invalid or unsafe target'));
+        assert.strictEqual((first.lossyHops ?? first.lossy_hops ?? []).length, 0);
+
+        const second = response.results[1];
+        assert.strictEqual(second.target, 'also bad target');
+        assert.strictEqual(second.reachable, false);
+        assert.ok(second.error.includes('Invalid or unsafe target'));
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('RunNetworkDiagnostic should gracefully degrade to reachable:false when the mtr binary is missing (ENOENT)', (t, done) => {
+    // mtr is not installed in this dev/test sandbox, and real packet-loss data is
+    // inherently non-deterministic anyway -- ENOENT is the deterministic, environment-
+    // independent negative path: it reproduces identically whether or not mtr happens
+    // to be installed on the machine running this test.
+    client.runNetworkDiagnostic({ targets: ['8.8.8.8'] }, validMetadata, (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true, 'a single unreachable/erroring target must not flip overall success to false');
+        assert.strictEqual(response.results.length, 1);
+
+        const result = response.results[0];
+        assert.strictEqual(result.target, '8.8.8.8');
+        assert.strictEqual(result.reachable, false);
+        assert.ok(result.error, 'error message must be populated for the failed target');
+        assert.strictEqual((result.lossyHops ?? result.lossy_hops ?? []).length, 0);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('RunNetworkDiagnostic should isolate per-target failures: one bad target must not abort remaining targets', (t, done) => {
+    client.runNetworkDiagnostic({ targets: ['-bad-flag-like-target', '1.1.1.1', 'valid-hostname.example'] }, validMetadata, (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.strictEqual(response.results.length, 3, 'all three targets must produce a result, in order, despite the first being rejected and the rest failing on missing mtr');
+
+        assert.strictEqual(response.results[0].target, '-bad-flag-like-target');
+        assert.strictEqual(response.results[0].reachable, false);
+        assert.ok(response.results[0].error.includes('Invalid or unsafe target'));
+
+        assert.strictEqual(response.results[1].target, '1.1.1.1');
+        assert.strictEqual(response.results[1].reachable, false);
+        assert.ok(response.results[1].error);
+
+        assert.strictEqual(response.results[2].target, 'valid-hostname.example');
+        assert.strictEqual(response.results[2].reachable, false);
+        assert.ok(response.results[2].error);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('RunNetworkDiagnostic should treat an empty targets list as a trivial success', (t, done) => {
+    client.runNetworkDiagnostic({ targets: [] }, validMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, true);
+      assert.strictEqual((response.results ?? []).length, 0);
+      done();
+    });
+  });
+
+  await t.test('parseMtrJsonReport and isValidDiagnosticTarget pure-logic unit tests', async () => {
+    const { parseMtrJsonReport, isValidDiagnosticTarget } = await import('../src/services/networkDiagnostic.service.js');
+
+    // Reachable target: last hub resolves to a real host, no loss anywhere.
+    const cleanReport = JSON.stringify({
+      report: {
+        hubs: [
+          { count: 1, host: '192.168.1.1', 'Loss%': 0.0, Snt: 10, Avg: 0.5 },
+          { count: 2, host: '8.8.8.8', 'Loss%': 0.0, Snt: 10, Avg: 12.3 }
+        ]
+      }
+    });
+    const cleanResult = parseMtrJsonReport(cleanReport);
+    assert.strictEqual(cleanResult.reachable, true);
+    assert.strictEqual(cleanResult.lossPercent, 0);
+    assert.strictEqual(cleanResult.avgLatencyMs, 12.3);
+    assert.deepStrictEqual(cleanResult.lossyHops, []);
+
+    // Unreachable target: last hub is the "???" sentinel (no reply at all).
+    const unreachableReport = JSON.stringify({
+      report: {
+        hubs: [
+          { count: 1, host: '192.168.1.1', 'Loss%': 0.0, Snt: 10, Avg: 0.5 },
+          { count: 2, host: '???', 'Loss%': 100.0, Snt: 10, Avg: 0.0 }
+        ]
+      }
+    });
+    const unreachableResult = parseMtrJsonReport(unreachableReport);
+    assert.strictEqual(unreachableResult.reachable, false);
+    assert.strictEqual(unreachableResult.lossPercent, 100);
+    assert.strictEqual(unreachableResult.lossyHops.length, 1);
+    assert.strictEqual(unreachableResult.lossyHops[0].hopNumber, 2);
+    assert.strictEqual(unreachableResult.lossyHops[0].address, '???');
+    assert.strictEqual(unreachableResult.lossyHops[0].lossPercent, 100);
+
+    // Lossy intermediate hop but destination itself is reachable: only the lossy hop
+    // must be included in lossyHops, not every hop (deliberate payload-size decision).
+    const partialLossReport = JSON.stringify({
+      report: {
+        hubs: [
+          { count: 1, host: '192.168.1.1', 'Loss%': 0.0, Snt: 10, Avg: 0.5 },
+          { count: 2, host: 'flaky-router.example', 'Loss%': 20.0, Snt: 10, Avg: 5.2 },
+          { count: 3, host: '1.1.1.1', 'Loss%': 0.0, Snt: 10, Avg: 8.1 }
+        ]
+      }
+    });
+    const partialLossResult = parseMtrJsonReport(partialLossReport);
+    assert.strictEqual(partialLossResult.reachable, true);
+    assert.strictEqual(partialLossResult.lossPercent, 0);
+    assert.strictEqual(partialLossResult.lossyHops.length, 1);
+    assert.strictEqual(partialLossResult.lossyHops[0].hopNumber, 2);
+    assert.strictEqual(partialLossResult.lossyHops[0].address, 'flaky-router.example');
+    assert.strictEqual(partialLossResult.lossyHops[0].lossPercent, 20);
+    assert.strictEqual(partialLossResult.lossyHops[0].avgLatencyMs, 5.2);
+
+    // Malformed / missing hubs must throw (caught by the handler's own try/catch, not here).
+    assert.throws(() => parseMtrJsonReport('not json'), /Failed to parse mtr JSON output/);
+    assert.throws(() => parseMtrJsonReport(JSON.stringify({ report: {} })), /did not contain any hubs/);
+    assert.throws(() => parseMtrJsonReport(JSON.stringify({ report: { hubs: [] } })), /did not contain any hubs/);
+
+    // Target validation: plausible hostnames/IPs accepted, flag-like/unsafe strings rejected.
+    assert.strictEqual(isValidDiagnosticTarget('8.8.8.8'), true);
+    assert.strictEqual(isValidDiagnosticTarget('example.com'), true);
+    assert.strictEqual(isValidDiagnosticTarget('2001:db8::1'), true);
+    assert.strictEqual(isValidDiagnosticTarget('sub.domain-name.example.com'), true);
+    assert.strictEqual(isValidDiagnosticTarget('-oSomeFlag'), false, 'leading dash must be rejected (mtr would parse it as a flag)');
+    assert.strictEqual(isValidDiagnosticTarget('--report-cycles'), false);
+    assert.strictEqual(isValidDiagnosticTarget(''), false);
+    assert.strictEqual(isValidDiagnosticTarget('   '), false);
+    assert.strictEqual(isValidDiagnosticTarget('has a space'), false);
+    assert.strictEqual(isValidDiagnosticTarget('rm;-rf'), false);
+    assert.strictEqual(isValidDiagnosticTarget('$(whoami)'), false);
+    assert.strictEqual(isValidDiagnosticTarget(null as any), false);
+    assert.strictEqual(isValidDiagnosticTarget(undefined as any), false);
+    assert.strictEqual(isValidDiagnosticTarget(123 as any), false);
+    assert.strictEqual(isValidDiagnosticTarget('a'.repeat(254)), false, 'over-length hostnames must be rejected');
+  });
+
   await t.test('computeProtoContractHash should change hash when field number or type is modified', async () => {
     clearProtoContractHashCache();
     const baseHash = computeProtoContractHash();
