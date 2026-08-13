@@ -17,6 +17,7 @@ service EgressAgentService {
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
   rpc GetAgentInfo (AgentInfoRequest) returns (AgentInfoResponse);
+  rpc RunNetworkDiagnostic (NetworkDiagnosticRequest) returns (NetworkDiagnosticResponse);
 }
 
 message ConfigPayload {
@@ -160,5 +161,32 @@ message AgentInfoResponse {
   string proto_contract_hash = 1;
   string agent_version = 2;
   string proto_contract_source = 3;
+}
+
+message NetworkDiagnosticRequest {
+  string orchestrator_secret = 1;
+  repeated string targets = 2;
+}
+
+message NetworkDiagnosticHop {
+  uint32 hop_number = 1;
+  string address = 2;
+  double loss_percent = 3;
+  double avg_latency_ms = 4;
+}
+
+message NetworkDiagnosticTargetResult {
+  string target = 1;
+  bool reachable = 2;
+  double loss_percent = 3;
+  double avg_latency_ms = 4;
+  repeated NetworkDiagnosticHop lossy_hops = 5;
+  string error = 6;
+}
+
+message NetworkDiagnosticResponse {
+  bool success = 1;
+  string message = 2;
+  repeated NetworkDiagnosticTargetResult results = 3;
 }
 
