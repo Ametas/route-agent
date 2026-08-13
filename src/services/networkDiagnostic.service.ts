@@ -170,24 +170,28 @@ export async function runNetworkDiagnosticHandler(
   const rawTargets = call.request?.targets;
   const targets: unknown[] = Array.isArray(rawTargets) ? rawTargets : [];
 
-  const results: any[] = [];
-  for (const rawTarget of targets) {
-    if (!isValidDiagnosticTarget(rawTarget)) {
-      const label = typeof rawTarget === 'string' ? rawTarget : String(rawTarget ?? '');
-      logger.warn({ target: label }, 'Rejected invalid/unsafe RunNetworkDiagnostic target');
-      results.push(
-        buildTargetResultPayload(
+  // Run all targets concurrently, not sequentially — each mtr invocation can take up to
+  // MTR_TIMEOUT_MS (45s) on its own; running N targets one after another (as this used to) made
+  // the whole RPC take up to N * MTR_TIMEOUT_MS, which blew straight through the orchestrator's
+  // own client-side deadline (GrpcNetworkDiagnosticClient.DEADLINE_MS) for anything beyond a
+  // single target. Concurrent probing caps the wall-clock cost at ~MTR_TIMEOUT_MS regardless of
+  // target count. Each target is still fully isolated (diagnoseTarget never throws), so
+  // Promise.all here can't let one bad target take down the others.
+  const results: any[] = await Promise.all(
+    targets.map((rawTarget) => {
+      if (!isValidDiagnosticTarget(rawTarget)) {
+        const label = typeof rawTarget === 'string' ? rawTarget : String(rawTarget ?? '');
+        logger.warn({ target: label }, 'Rejected invalid/unsafe RunNetworkDiagnostic target');
+        return buildTargetResultPayload(
           label,
           { reachable: false, lossPercent: 0, avgLatencyMs: 0, lossyHops: [] },
           'Invalid or unsafe target string.'
-        )
-      );
-      continue;
-    }
+        );
+      }
 
-    const target = rawTarget.trim();
-    results.push(await diagnoseTarget(target));
-  }
+      return diagnoseTarget(rawTarget.trim());
+    })
+  );
 
   const reachableCount = results.filter((r) => r.reachable).length;
   logger.info({ total: targets.length, reachable: reachableCount }, 'RunNetworkDiagnostic completed');
