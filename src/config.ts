@@ -13,6 +13,10 @@ const configSchema = z.object({
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy'),
+  // No default on purpose: unset on regular egress nodes (apt Caddy on $PATH stays authoritative
+  // for `caddy validate`/reload there), only set on Xeon-ring nodes after the custom
+  // caddy-dns/cloudflare-plugin binary is uploaded — see configureCaddyHandler's `|| 'caddy'` fallback.
+  CADDY_BINARY_PATH: z.string().optional(),
   OLCRTC_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc'),
   OLCRTC_MANAGER_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-manager'),
   AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awg0.conf'),

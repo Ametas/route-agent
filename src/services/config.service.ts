@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
 import { validateSafeCamouflagePath, fixXraySocketPermissions } from '../utils/caddy.js';
+import { getCaddyCertPaths } from '../utils/certStorage.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
@@ -107,7 +108,15 @@ export async function configureCaddyHandler(
     camouflage_path,
     camouflageHtml,
     camouflage_html,
-    htmlContent
+    htmlContent,
+    cloudflareApiToken,
+    cloudflare_api_token,
+    extraCertPem,
+    extra_cert_pem,
+    extraKeyPem,
+    extra_key_pem,
+    extraCertDomain,
+    extra_cert_domain,
   } = call.request;
 
   try {
@@ -122,6 +131,39 @@ export async function configureCaddyHandler(
     if (finalCamouflageHtml && typeof finalCamouflageHtml === 'string' && finalCamouflageHtml.trim().length > 0) {
       await fs.mkdir(finalCamouflagePath, { recursive: true });
       await fs.writeFile(path.join(finalCamouflagePath, 'index.html'), finalCamouflageHtml, 'utf-8');
+    }
+
+    // Xeon-ring nodes only — egress nodes never send this field. Written to the EnvironmentFile
+    // the Caddy systemd override references (see ensureCaddyCustomBinaryOverride), never inlined
+    // into caddyfileContent itself. Must land BEFORE the Caddyfile write below: Caddy resolves
+    // `{env.CF_API_TOKEN}` placeholders at config-load/validate time too, not just at runtime.
+    const finalCloudflareToken = cloudflareApiToken || cloudflare_api_token;
+    if (finalCloudflareToken && typeof finalCloudflareToken === 'string' && finalCloudflareToken.trim().length > 0) {
+      const cfEnvPath = '/etc/caddy/cloudflare.env';
+      await fs.mkdir(path.dirname(cfEnvPath), { recursive: true });
+      await fs.writeFile(cfEnvPath, `CF_API_TOKEN=${finalCloudflareToken}\n`, { encoding: 'utf-8', mode: 0o600 });
+      await fs.chmod(cfEnvPath, 0o600).catch(() => {});
+    }
+
+    // Egress nodes only — a wildcard cert/key relayed from a Xeon front by the orchestrator
+    // (courier flow, see GetManagedCertificate), for static (non-ACME) use in a ring-relayed
+    // site block. Written into the SAME on-disk layout Caddy's own ACME storage uses (see
+    // certStorage.ts) so EgressSingBoxGenerator's existing certificate_path/key_path
+    // construction on the orchestrator side needs no special-casing for this domain.
+    const finalExtraCertPem = extraCertPem || extra_cert_pem;
+    const finalExtraKeyPem = extraKeyPem || extra_key_pem;
+    const finalExtraCertDomain = extraCertDomain || extra_cert_domain;
+    if (
+      finalExtraCertPem && typeof finalExtraCertPem === 'string' && finalExtraCertPem.trim().length > 0 &&
+      finalExtraKeyPem && typeof finalExtraKeyPem === 'string' && finalExtraKeyPem.trim().length > 0 &&
+      finalExtraCertDomain && typeof finalExtraCertDomain === 'string' && finalExtraCertDomain.trim().length > 0
+    ) {
+      const { certPath, keyPath } = getCaddyCertPaths(finalExtraCertDomain);
+      await fs.mkdir(path.dirname(certPath), { recursive: true });
+      await fs.writeFile(certPath, finalExtraCertPem, 'utf-8');
+      await fs.writeFile(keyPath, finalExtraKeyPem, { encoding: 'utf-8', mode: 0o600 });
+      await fs.chmod(keyPath, 0o600).catch(() => {});
+      logger.info({ domain: finalExtraCertDomain, certPath }, 'Wrote relayed wildcard cert/key for ring-relayed site block');
     }
 
     const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
@@ -141,8 +183,12 @@ export async function configureCaddyHandler(
 
     if (process.env.NODE_ENV !== 'test') {
       // 1. Предварительная валидация конфига самим бинарником Caddy
+      // CADDY_BINARY_PATH задан только на Xeon-ring нодах (кастомная сборка с caddy-dns/cloudflare,
+      // без которого `tls { dns cloudflare ... }` не распарсится) — на обычных egress-нодах не
+      // задан вовсе, поведение не меняется (bare `caddy` с $PATH, как и раньше).
+      const caddyBin = config.CADDY_BINARY_PATH || 'caddy';
       try {
-        await execAsync(`caddy validate --config "${caddyfilePath}"`);
+        await execAsync(`${caddyBin} validate --config "${caddyfilePath}"`);
       } catch (valErr: any) {
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
@@ -187,6 +233,47 @@ export async function configureCaddyHandler(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err: msg }, 'Failed to configure Caddy');
+    return callback(null, { success: false, message: msg });
+  }
+}
+
+/**
+ * RPC Обработчик GetManagedCertificate — читает PEM-содержимое сертификата, реально выпущенного
+ * и хранимого локальным Caddy (certmagic on-disk storage), для указанного домена. Используется
+ * оркестратором как courier-шаг: забрать wildcard-сертификат, выпущенный кастомным Caddy на
+ * Xeon-ring ноде через DNS-01, и переслать его на egress-ноды (см. ConfigureCaddy's
+ * extra_cert_pem/extra_key_pem). Только чтение — не выпускает и не изменяет сертификаты.
+ */
+export async function getManagedCertificateHandler(
+  call: ServerUnaryCall<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  if (!authenticateCall(call)) {
+    logger.warn('Unauthorized GetManagedCertificate request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+  }
+
+  const { domain } = call.request;
+  if (!domain || typeof domain !== 'string' || domain.trim().length === 0) {
+    return callback(null, { success: false, message: 'Missing domain parameter.' });
+  }
+
+  try {
+    const { certPath, keyPath } = getCaddyCertPaths(domain);
+    const [fullchainPem, privateKeyPem] = await Promise.all([
+      fs.readFile(certPath, 'utf-8'),
+      fs.readFile(keyPath, 'utf-8'),
+    ]);
+
+    return callback(null, {
+      success: true,
+      message: 'OK',
+      fullchainPem,
+      privateKeyPem,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg, domain }, 'Managed certificate not found or unreadable (issuance may still be in progress)');
     return callback(null, { success: false, message: msg });
   }
 }

@@ -9,12 +9,13 @@ import * as fs from 'fs/promises';
 import path from 'path';
 import pino from 'pino';
 import { config } from './config.js';
-import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configureOlcrtcHandler } from './services/config.service.js';
-import { 
-  uploadSingboxBinaryHandler, 
-  uploadOlcrtcBinaryHandler, 
-  uploadAwgToolsBinaryHandler, 
-  uploadAwgGoBinaryHandler, 
+import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configureOlcrtcHandler, getManagedCertificateHandler } from './services/config.service.js';
+import {
+  uploadSingboxBinaryHandler,
+  uploadOlcrtcBinaryHandler,
+  uploadAwgToolsBinaryHandler,
+  uploadAwgGoBinaryHandler,
+  uploadCaddyBinaryHandler,
   upgradeSingboxHandler,
   sanitizeAwgToolsSymlink
 } from './services/binary.service.js';
@@ -121,13 +122,15 @@ export async function startServer(): Promise<Server> {
       uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
       uploadAwgToolsBinary: uploadAwgToolsBinaryHandler,
       uploadAwgGoBinary: uploadAwgGoBinaryHandler,
+      uploadCaddyBinary: uploadCaddyBinaryHandler,
       configureCaddy: configureCaddyHandler,
       configureOlcrtc: configureOlcrtcHandler,
       configureAwg: configureAwgHandler,
       manageFirewall: manageFirewallHandler,
       selfUpdate: selfUpdateHandler,
       getAgentInfo: getAgentInfoHandler,
-      runNetworkDiagnostic: runNetworkDiagnosticHandler
+      runNetworkDiagnostic: runNetworkDiagnosticHandler,
+      getManagedCertificate: getManagedCertificateHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

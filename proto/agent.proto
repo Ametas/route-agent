@@ -3,21 +3,56 @@ syntax = "proto3";
 package agent;
 
 service EgressAgentService {
+  // Unary RPC to upload and safely reload sing-box configuration
   rpc ApplyConfig (ConfigPayload) returns (ConfigResponse);
+
+  // Server Streaming RPC to continuously receive real-time node telemetry
   rpc StreamTelemetry (TelemetryRequest) returns (stream TelemetryResponse);
+
+  // Unary RPC to get immediate single snapshot telemetry
   rpc GetTelemetry (TelemetryRequest) returns (TelemetryResponse);
+
+  // Unary RPC to trigger sing-box binary upgrade on the node
   rpc UpgradeSingbox (UpgradePayload) returns (UpgradeResponse);
+
+  // Unary RPC to configure Olcrtc (WebRTC) daemon
   rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
+
+  // Unary RPC to trigger agent self-update from repository
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
+
+  // Client Streaming RPC to stream binary payload to the node agent
   rpc UploadSingboxBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
-  rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Client Streaming RPC to stream AWG Tools (awg) binary to the node agent
   rpc UploadAwgToolsBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Client Streaming RPC to stream AWG Go Core (amneziawg-go) binary to the node agent
   rpc UploadAwgGoBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Client Streaming RPC to stream a custom-built Caddy binary (caddy-dns/cloudflare plugin) to the node agent — Xeon-ring nodes only
+  rpc UploadCaddyBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Unary RPC for AmneziaWG3 service management
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
+
+  // Unary RPC to configure Caddy (TLS certificates manager)
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
+
+  // Client Streaming RPC to stream Olcrtc (WebRTC) binary to the node agent
+  rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Unary RPC for dynamic firewall management on node
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
+
+  // Unary RPC to query agent version & protocol contract hash
   rpc GetAgentInfo (AgentInfoRequest) returns (AgentInfoResponse);
   rpc RunNetworkDiagnostic (NetworkDiagnosticRequest) returns (NetworkDiagnosticResponse);
+
+  // Unary RPC to read a Caddy-managed certificate's PEM content off disk (Xeon-ring wildcard
+  // cert courier: orchestrator polls this after DNS-01 issuance, then relays the result to
+  // every egress node behind that front via ConfigureCaddy's extra_cert_pem/extra_key_pem)
+  rpc GetManagedCertificate (CertificateRequest) returns (CertificateResponse);
 }
 
 message ConfigPayload {
@@ -49,11 +84,30 @@ message TelemetryResponse {
 }
 
 message UpgradePayload {
-  string version = 1;
-  string download_url = 2;
+  string version = 1;      // e.g. "1.13.14"
+  string download_url = 2; // Прямая ссылка на tar.gz
 }
 
 message UpgradeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message OlcrtcConfigPayload {
+  bool enabled = 1;
+  string user = 2;
+  string password = 3;
+  uint32 port = 4;
+}
+
+message OlcrtcConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message SelfUpdatePayload {}
+
+message SelfUpdateResponse {
   bool success = 1;
   string message = 2;
 }
@@ -71,44 +125,21 @@ message UploadBinaryResponse {
   string message = 2;
 }
 
-message CaddyConfigPayload {
-  string caddyfile_content = 1;
-  string camouflage_path = 2;
-  string camouflage_html = 3;
-}
-
-message CaddyConfigResponse {
-  bool success = 1;
-  string message = 2;
-}
-
-message OlcrtcConfigPayload {
-  bool enabled = 1;
-  string user = 2;
-  string password = 3;
-  uint32 port = 4;
-}
-
-message OlcrtcConfigResponse {
-  bool success = 1;
-  string message = 2;
-}
-
 message AwgPeer {
   string public_key = 1;
   string preshared_key = 2;
-  string allowed_ips = 3;
+  string allowed_ips = 3; // "100.64.0.15/32, fd00:a001::15/128"
 }
 
 message AwgConfigPayload {
   bool enabled = 1;
-  uint32 port = 2;
+  uint32 port = 2;                     // e.g. 51820
   string server_private_key = 3;
   string server_public_key = 4;
-  string address_v4 = 5;
-  string address_v6 = 6;
-
-  // AWG3 параметры обфускации
+  string address_v4 = 5;               // "100.64.0.1/16"
+  string address_v6 = 6;               // "fd00:a001::1/64"
+  
+  // AWG3 Obfuscation Parameters
   uint32 jc = 7;
   uint32 jmin = 8;
   uint32 jmax = 9;
@@ -122,8 +153,8 @@ message AwgConfigPayload {
   string h4 = 17;
   string header_protection_key = 18;
 
-  repeated AwgPeer peers = 19;
-  string ipv6_mode = 20; // "dual-stack" | "ipv4-only" | "trap-ipv6"
+  repeated AwgPeer peers = 19;         // Список активных разрешенных пиров
+  string ipv6_mode = 20;               // "dual-stack" | "ipv4-only" | "trap-ipv6"
   string i1 = 21;
   string i2 = 22;
   string i3 = 23;
@@ -132,6 +163,39 @@ message AwgConfigPayload {
 }
 
 message AwgConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CaddyConfigPayload {
+  string caddyfile_content = 1;
+  string camouflage_path = 2;
+  string camouflage_html = 3;
+  // Cloudflare API token (Zone:DNS:Edit) for DNS-01 wildcard cert issuance — Xeon-ring nodes
+  // only, written by the agent to an EnvironmentFile referenced by the Caddy systemd override,
+  // never inlined into caddyfile_content itself.
+  string cloudflare_api_token = 4;
+  // Wildcard cert/key PEM relayed from a Xeon front (via GetManagedCertificate) for static
+  // (non-ACME) use on egress nodes' own Caddy — written directly into the same certBase path
+  // tree EgressSingBoxGenerator already reads from for TUIC/Hysteria2.
+  string extra_cert_pem = 5;
+  string extra_key_pem = 6;
+  string extra_cert_domain = 7;
+}
+
+message CertificateRequest {
+  string orchestrator_secret = 1;
+  string domain = 2;
+}
+
+message CertificateResponse {
+  bool success = 1;
+  string message = 2;
+  string fullchain_pem = 3;
+  string private_key_pem = 4;
+}
+
+message CaddyConfigResponse {
   bool success = 1;
   string message = 2;
 }
@@ -146,13 +210,6 @@ message FirewallResponse {
   string message = 2;
 }
 
-message SelfUpdatePayload {}
-
-message SelfUpdateResponse {
-  bool success = 1;
-  string message = 2;
-}
-
 message AgentInfoRequest {
   string orchestrator_secret = 1;
 }
@@ -163,11 +220,16 @@ message AgentInfoResponse {
   string proto_contract_source = 3;
 }
 
+// Orchestrator supplies the target list (common external anchors) so the same set of hosts is
+// probed from every node — that's what makes it possible to spot a shared upstream/segment issue
+// by comparing results across nodes centrally, instead of each node picking its own targets.
 message NetworkDiagnosticRequest {
   string orchestrator_secret = 1;
   repeated string targets = 2;
 }
 
+// Only hops that actually show loss are included (see networkDiagnostic.service.ts on the agent
+// side) — keeps the response compact instead of shipping a full per-hop mtr report over the wire.
 message NetworkDiagnosticHop {
   uint32 hop_number = 1;
   string address = 2;
@@ -189,4 +251,3 @@ message NetworkDiagnosticResponse {
   string message = 2;
   repeated NetworkDiagnosticTargetResult results = 3;
 }
-

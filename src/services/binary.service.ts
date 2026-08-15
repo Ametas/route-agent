@@ -10,6 +10,7 @@ import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
 import { invalidateSingboxVersionCache, invalidateAwgVersionCache } from '../utils/telemetry.js';
 import { restartActiveAwgServices } from '../utils/awg.js';
 import { ensureSingboxSystemdUnit } from '../utils/singbox.js';
+import { ensureCaddyCustomBinaryOverride } from '../utils/caddy.js';
 
 const logger = pino({ level: 'info' });
 
@@ -683,6 +684,112 @@ export async function uploadAwgGoBinaryHandler(
 
   call.on('error', (err) => {
     logger.error({ err: err.message }, 'Error in UploadAwgGoBinary stream');
+    cleanup();
+  });
+  call.on('cancelled', cleanup);
+}
+
+/**
+ * RPC Обработчик UploadCaddyBinary (клиентский стрим RPC для загрузки кастомно собранного
+ * Caddy с плагином caddy-dns/cloudflare — только для Xeon-ring узлов, egress-ноды продолжают
+ * использовать apt-Caddy и этот RPC никогда не получают).
+ */
+export async function uploadCaddyBinaryHandler(
+  call: ServerReadableStream<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  const metadataSecret = extractSecretFromMetadata(call);
+  let secretVerified = verifySecret(metadataSecret);
+  let isAborted = false;
+
+  const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const tempPath = `/tmp/caddy_custom_${uniqueId}.tmp`;
+  let targetVersion = 'unknown';
+  let bytesWritten = 0;
+  let fileStream: ReturnType<typeof createWriteStream> | null = null;
+
+  call.on('data', (data: any) => {
+    if (isAborted) return;
+
+    if (!secretVerified) {
+      if (verifySecret(data?.orchestratorSecret || data?.orchestrator_secret)) {
+        secretVerified = true;
+      }
+    }
+
+    if (!secretVerified) {
+      isAborted = true;
+      logger.warn('Unauthorized UploadCaddyBinary attempt rejected');
+      try {
+        callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
+      } catch {}
+      call.destroy(new Error('PermissionDenied: Invalid orchestrator secret token.'));
+      return;
+    }
+
+    if (data.version) {
+      targetVersion = data.version;
+    }
+    if (data.chunk && data.chunk.length > 0) {
+      if (!fileStream) {
+        fileStream = createWriteStream(tempPath);
+      }
+      const buf = Buffer.from(data.chunk);
+      fileStream.write(buf);
+      bytesWritten += buf.length;
+    }
+  });
+
+  call.on('end', async () => {
+    if (isAborted) return;
+
+    if (fileStream) {
+      await new Promise<void>((resolve) => fileStream!.end(resolve));
+    }
+
+    if (!secretVerified || bytesWritten === 0) {
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: 'No valid binary data received or unauthorized.' });
+    }
+
+    try {
+      const targetPath = config.CADDY_BINARY_PATH || '/usr/local/bin/caddy-custom';
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.chmod(tempPath, 0o755);
+
+      await replaceBinaryAtomically(tempPath, targetPath);
+      await fs.unlink(tempPath).catch(() => {});
+
+      logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated custom Caddy binary');
+
+      // UploadCaddyBinary is only ever invoked for Xeon-ring nodes (regular egress nodes never
+      // receive this RPC at all), so it's safe to switch the systemd unit over to the custom
+      // binary right here — idempotent (no-op if the override already matches).
+      let overrideMsg = '';
+      if (process.env.NODE_ENV !== 'test') {
+        await ensureCaddyCustomBinaryOverride();
+        overrideMsg = ' and systemd override provisioned';
+      }
+
+      return callback(null, {
+        success: true,
+        message: `Custom Caddy binary version ${targetVersion} successfully updated${overrideMsg}`
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      logger.error({ err: msg }, 'Failed to apply uploaded custom Caddy binary');
+      await fs.unlink(tempPath).catch(() => {});
+      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
+    }
+  });
+
+  const cleanup = () => {
+    if (fileStream) fileStream.end();
+    fs.unlink(tempPath).catch(() => {});
+  };
+
+  call.on('error', (err) => {
+    logger.error({ err: err.message }, 'Error in UploadCaddyBinary stream');
     cleanup();
   });
   call.on('cancelled', cleanup);

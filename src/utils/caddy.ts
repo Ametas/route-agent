@@ -2,8 +2,53 @@ import path from 'path';
 import * as fs from 'fs/promises';
 import pino from 'pino';
 import { execAsync } from './exec.js';
+import { config } from '../config.js';
 
 const logger = pino({ level: 'info' });
+
+const CADDY_SYSTEMD_OVERRIDE_PATH = '/etc/systemd/system/caddy.service.d/override.conf';
+const CADDY_CLOUDFLARE_ENV_PATH = '/etc/caddy/cloudflare.env';
+
+/**
+ * Провижинит systemd drop-in override, переключающий apt-owned юнит `caddy.service` на кастомно
+ * собранный бинарник (caddy-dns/cloudflare, нужен для DNS-01 wildcard-сертификата). Никогда не
+ * трогает сам unit-файл apt-пакета — только добавляет override рядом (пустой `ExecStart=`
+ * обязателен, сбрасывает исходный ExecStart перед переопределением, иначе systemd просто
+ * добавит вторую директиву поверх первой). `EnvironmentFile=-...` (с минусом) — файл с
+ * Cloudflare API-токеном может ещё не существовать на момент провижининга override (доставляется
+ * отдельным шагом через ConfigureCaddy), минус говорит systemd не падать, если файла пока нет.
+ *
+ * Вызывается только явно при сидировании Xeon-ring ноды (XeonService.seedNewXeonNode) — обычные
+ * egress-ноды этот путь никогда не затрагивают, agent сам не знает о роли ноды.
+ */
+export async function ensureCaddyCustomBinaryOverride(
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<boolean> {
+  const binaryPath = config.CADDY_BINARY_PATH || '/usr/local/bin/caddy-custom';
+
+  const expectedContent = `[Service]
+ExecStart=
+ExecStart=${binaryPath} run --environ --config ${config.CADDYFILE_PATH || '/etc/caddy/Caddyfile'}
+EnvironmentFile=-${CADDY_CLOUDFLARE_ENV_PATH}
+`;
+
+  const existingContent = await fs.readFile(CADDY_SYSTEMD_OVERRIDE_PATH, 'utf-8').catch(() => null);
+  if (existingContent === expectedContent) {
+    logger.debug({ path: CADDY_SYSTEMD_OVERRIDE_PATH }, 'Caddy systemd override is already up to date; skipping write and daemon-reload');
+    return false;
+  }
+
+  await fs.mkdir(path.dirname(CADDY_SYSTEMD_OVERRIDE_PATH), { recursive: true });
+  await fs.writeFile(CADDY_SYSTEMD_OVERRIDE_PATH, expectedContent, 'utf-8');
+  logger.info({ path: CADDY_SYSTEMD_OVERRIDE_PATH, binaryPath }, 'Provisioned/updated Caddy systemd override to use custom binary');
+
+  if (process.env.NODE_ENV !== 'test') {
+    await runExec('systemctl daemon-reload');
+    logger.info('Executed systemctl daemon-reload after updating Caddy systemd override');
+  }
+
+  return true;
+}
 
 const ALLOWED_CAMOUFLAGE_DIRS = [
   path.resolve('/var/www'),
