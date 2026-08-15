@@ -12,7 +12,16 @@ const configSchema = z.object({
   SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/sing-box.service'),
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
-  CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy'),
+  // The `|| systemctl restart caddy` fallback is load-bearing, not decorative: `reload` re-POSTs
+  // the Caddyfile to the ALREADY-RUNNING process via its admin API — it never re-reads
+  // EnvironmentFile= (see the Xeon-ring cloudflare.env note in caddy.ts), so a process that was
+  // first started before that file existed/had content stays permanently blind to CF_API_TOKEN no
+  // matter how many times it's reloaded. Only a full restart re-execs and re-reads the env fresh.
+  // This must be the schema default itself (not just a fallback string in config.service.ts) —
+  // z.string().default() only fires when the env var is entirely ABSENT, so whatever string lands
+  // here is unconditionally truthy and any `config.CADDY_RELOAD_COMMAND || '...with restart...'`
+  // fallback elsewhere is unreachable dead code.
+  CADDY_RELOAD_COMMAND: z.string().default('systemctl reload caddy || systemctl restart caddy'),
   // No default on purpose: unset on regular egress nodes (apt Caddy on $PATH stays authoritative
   // for `caddy validate`/reload there), only set on Xeon-ring nodes after the custom
   // caddy-dns/cloudflare-plugin binary is uploaded — see configureCaddyHandler's `|| 'caddy'` fallback.
@@ -37,3 +46,4 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+export { configSchema };

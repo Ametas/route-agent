@@ -210,8 +210,7 @@ export async function configureCaddyHandler(
 
       // 2. Мягкая перезагрузка службы после успешной валидации
       try {
-        const reloadCmd = config.CADDY_RELOAD_COMMAND || 'systemctl reload caddy || systemctl restart caddy';
-        await execAsync(reloadCmd);
+        await execAsync(config.CADDY_RELOAD_COMMAND);
       } catch (err: unknown) {
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});

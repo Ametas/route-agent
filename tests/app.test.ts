@@ -1357,6 +1357,22 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(typeof execFileAsync, 'function');
     });
 
+    await t.test('CADDY_RELOAD_COMMAND schema default includes the restart fallback, not just reload', async () => {
+      // Regression test: `reload` re-POSTs config to the ALREADY-RUNNING Caddy process via its
+      // admin API — it never re-reads EnvironmentFile=, so a process started before
+      // /etc/caddy/cloudflare.env existed/had content stays permanently blind to CF_API_TOKEN no
+      // matter how many times it's reloaded. Only a full restart re-execs and re-reads env fresh.
+      // z.string().default() only fires when the env var is entirely ABSENT from process.env, so
+      // the fallback MUST live in this schema default itself — a `config.CADDY_RELOAD_COMMAND ||
+      // '...with restart...'` fallback elsewhere (as config.service.ts used to have) is
+      // unreachable dead code, since the schema default already makes the value unconditionally
+      // truthy. Caught live in production: 5 consecutive reload failures on a Xeon-ring node never
+      // once triggered a restart, confirmed via the unchanged Caddy MainPID across every attempt.
+      const { configSchema } = await import('../src/config.js');
+      const parsed = configSchema.parse({ EGRESS_CONTROL_SECRET: 'test-secret-123' });
+      assert.strictEqual(parsed.CADDY_RELOAD_COMMAND, 'systemctl reload caddy || systemctl restart caddy');
+    });
+
     await t.test('replaceBinaryAtomically should atomically replace target file', async () => {
       const { replaceBinaryAtomically } = await import('../src/services/binary.service.js');
       const srcFile = path.join(tempDir, 'test_src_binary.tmp');
