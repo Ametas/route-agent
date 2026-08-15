@@ -6,7 +6,7 @@ import pino from 'pino';
 import { config } from '../config.js';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
-import { validateSafeCamouflagePath, fixXraySocketPermissions } from '../utils/caddy.js';
+import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary } from '../utils/caddy.js';
 import { getCaddyCertPaths } from '../utils/certStorage.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
@@ -183,10 +183,12 @@ export async function configureCaddyHandler(
 
     if (process.env.NODE_ENV !== 'test') {
       // 1. Предварительная валидация конфига самим бинарником Caddy
-      // CADDY_BINARY_PATH задан только на Xeon-ring нодах (кастомная сборка с caddy-dns/cloudflare,
-      // без которого `tls { dns cloudflare ... }` не распарсится) — на обычных egress-нодах не
-      // задан вовсе, поведение не меняется (bare `caddy` с $PATH, как и раньше).
-      const caddyBin = config.CADDY_BINARY_PATH || 'caddy';
+      // Резолвится по факту наличия файла на диске (resolveCaddyBinary), не по env-переменной —
+      // агент читает свой env один раз при старте, а кастомный бинарник появляется уже во время
+      // жизни процесса (uploadCaddyBinaryHandler), так что env-based резолюция никогда бы не
+      // сработала без рестарта самого агента. На обычных egress-нодах кастомного бинарника нет —
+      // поведение не меняется (bare `caddy` с $PATH, как и раньше).
+      const caddyBin = await resolveCaddyBinary();
       try {
         await execAsync(`${caddyBin} validate --config "${caddyfilePath}"`);
       } catch (valErr: any) {

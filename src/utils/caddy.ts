@@ -8,6 +8,28 @@ const logger = pino({ level: 'info' });
 
 const CADDY_SYSTEMD_OVERRIDE_PATH = '/etc/systemd/system/caddy.service.d/override.conf';
 const CADDY_CLOUDFLARE_ENV_PATH = '/etc/caddy/cloudflare.env';
+const DEFAULT_CADDY_CUSTOM_BINARY_PATH = '/usr/local/bin/caddy-custom';
+
+/**
+ * Resolves which `caddy` binary to invoke for `caddy validate`/CLI calls — checked on disk at
+ * CALL TIME, not read from an env var. CADDY_BINARY_PATH is set (if at all) in route-agent's own
+ * .env, loaded once at process start via dotenv; uploadCaddyBinaryHandler writing the custom
+ * binary to disk mid-lifetime has no way to make an already-running agent process see a new env
+ * var without restarting the AGENT itself (a much riskier operation than just restarting Caddy,
+ * since it'd have to survive tearing down its own gRPC response mid-flight). Checking existence
+ * on disk sidesteps that entirely — no agent restart needed, works immediately after
+ * uploadCaddyBinaryHandler's atomic write. Falls back to bare `caddy` (apt, on $PATH) when the
+ * custom binary isn't present, matching plain egress nodes' existing, unchanged behavior.
+ */
+export async function resolveCaddyBinary(): Promise<string> {
+  const customPath = config.CADDY_BINARY_PATH || DEFAULT_CADDY_CUSTOM_BINARY_PATH;
+  try {
+    await fs.access(customPath);
+    return customPath;
+  } catch {
+    return 'caddy';
+  }
+}
 
 /**
  * Провижинит systemd drop-in override, переключающий apt-owned юнит `caddy.service` на кастомно
@@ -34,7 +56,7 @@ export async function ensureCaddyCustomBinaryOverride(
   overridePath: string = CADDY_SYSTEMD_OVERRIDE_PATH,
   runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
 ): Promise<boolean> {
-  const binaryPath = config.CADDY_BINARY_PATH || '/usr/local/bin/caddy-custom';
+  const binaryPath = config.CADDY_BINARY_PATH || DEFAULT_CADDY_CUSTOM_BINARY_PATH;
 
   const expectedContent = `[Service]
 ExecStart=

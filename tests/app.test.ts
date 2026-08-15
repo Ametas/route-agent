@@ -354,6 +354,32 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(execCalls.length, 0, 'daemon-reload must not run under NODE_ENV=test');
   });
 
+  await t.test('resolveCaddyBinary falls back to bare "caddy" when the custom binary is not present on disk, and resolves the full path when it is', async () => {
+    const { resolveCaddyBinary } = await import('../src/utils/caddy.js');
+    const { config } = await import('../src/config.js');
+
+    const originalCaddyBinaryPath = (config as any).CADDY_BINARY_PATH;
+    const fakeCustomPath = path.join(tempDir, 'caddy-custom-fake');
+    (config as any).CADDY_BINARY_PATH = fakeCustomPath;
+
+    try {
+      await fs.unlink(fakeCustomPath).catch(() => {});
+      // Regression guard for the real prod bug: the agent's own env var is fixed at process
+      // start (dotenv, loaded once) but uploadCaddyBinaryHandler writes the custom binary to
+      // disk mid-lifetime — an env-var-only check would never see it without restarting the
+      // agent itself. resolveCaddyBinary must check disk presence at CALL time instead.
+      const beforeUpload = await resolveCaddyBinary();
+      assert.strictEqual(beforeUpload, 'caddy', 'must fall back to bare caddy before the custom binary exists on disk');
+
+      await fs.writeFile(fakeCustomPath, 'fake binary content');
+      const afterUpload = await resolveCaddyBinary();
+      assert.strictEqual(afterUpload, fakeCustomPath, 'must resolve to the full custom path once it exists on disk, no agent restart needed');
+    } finally {
+      (config as any).CADDY_BINARY_PATH = originalCaddyBinaryPath;
+      await fs.unlink(fakeCustomPath).catch(() => {});
+    }
+  });
+
   await t.test('ensureCaddyCustomBinaryOverride writes the expected drop-in and is idempotent on a second call', async () => {
     const { ensureCaddyCustomBinaryOverride } = await import('../src/utils/caddy.js');
     const overridePath = path.join(tempDir, 'caddy.service.d', 'override.conf');
