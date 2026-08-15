@@ -354,6 +354,36 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(execCalls.length, 0, 'daemon-reload must not run under NODE_ENV=test');
   });
 
+  await t.test('ensureCaddyCustomBinaryOverride writes the expected drop-in and is idempotent on a second call', async () => {
+    const { ensureCaddyCustomBinaryOverride } = await import('../src/utils/caddy.js');
+    const overridePath = path.join(tempDir, 'caddy.service.d', 'override.conf');
+    await fs.rm(path.dirname(overridePath), { recursive: true, force: true }).catch(() => {});
+
+    const execCalls: string[] = [];
+    const spyExec = async (command: string) => {
+      execCalls.push(command);
+      return { stdout: '', stderr: '' };
+    };
+
+    // Regression guard for a real prod incident: daemon-reload alone does NOT switch an
+    // already-running Type=notify unit onto the new ExecStart — only a full restart re-execs
+    // under it. The exec calls happen to be skipped entirely under NODE_ENV=test (same
+    // limitation ensureSingboxSystemdUnit's own test above already accepts), so this asserts
+    // the file CONTENT — the actual restart-vs-reload behavior is exercised by reading
+    // ensureCaddyCustomBinaryOverride's source, not re-derivable from a live systemd here.
+    const firstCallResult = await ensureCaddyCustomBinaryOverride(overridePath, spyExec);
+    assert.strictEqual(firstCallResult, true, 'First call should create the override file');
+
+    const content = await fs.readFile(overridePath, 'utf-8');
+    assert.ok(content.includes('ExecStart=\n'), 'must reset ExecStart before overriding it');
+    assert.ok(content.includes('caddy-custom'));
+    assert.ok(content.includes('EnvironmentFile=-/etc/caddy/cloudflare.env'));
+
+    const secondCallResult = await ensureCaddyCustomBinaryOverride(overridePath, spyExec);
+    assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
+    assert.strictEqual(execCalls.length, 0, 'daemon-reload/restart must not run under NODE_ENV=test');
+  });
+
   await t.test('resolveSingboxReloadCommand should fall back to start when sing-box is not active', async () => {
     const { resolveSingboxReloadCommand } = await import('../src/utils/singbox.js');
 
