@@ -81,9 +81,18 @@ export async function ensureCaddyCustomBinaryOverride(
 ): Promise<boolean> {
   const binaryPath = config.CADDY_BINARY_PATH || DEFAULT_CADDY_CUSTOM_BINARY_PATH;
 
+  const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
+  // ExecReload= must be reset+overridden too, same as ExecStart= — the apt unit's own
+  // ExecReload=/usr/bin/caddy reload ... otherwise stays live and `systemctl reload caddy`
+  // (CADDY_RELOAD_COMMAND's first attempt) keeps invoking the stock binary, which can't parse
+  // `tls { dns cloudflare ... }` — confirmed live: journalctl showed reload spawning bare
+  // `caddy[pid]`, not `caddy-custom[pid]`, failing with the exact "module not registered" error
+  // this whole override exists to fix.
   const expectedContent = `[Service]
 ExecStart=
-ExecStart=${binaryPath} run --environ --config ${config.CADDYFILE_PATH || '/etc/caddy/Caddyfile'}
+ExecStart=${binaryPath} run --environ --config ${caddyfilePath}
+ExecReload=
+ExecReload=${binaryPath} reload --config ${caddyfilePath} --force
 EnvironmentFile=-${CADDY_CLOUDFLARE_ENV_PATH}
 `;
 
