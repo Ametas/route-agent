@@ -380,6 +380,22 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     }
   });
 
+  await t.test('loadCaddyDnsProviderEnv parses KEY=value lines and returns {} when the file is missing', async () => {
+    const { loadCaddyDnsProviderEnv } = await import('../src/utils/caddy.js');
+    const envPath = path.join(tempDir, 'cloudflare.env');
+    await fs.unlink(envPath).catch(() => {});
+
+    // Regression guard: EnvironmentFile= in the systemd override only reaches processes systemd
+    // itself starts — an ad-hoc `caddy validate` spawned via execAsync never sees CF_API_TOKEN
+    // unless this is explicitly merged into that child process's own env.
+    const missing = await loadCaddyDnsProviderEnv(envPath);
+    assert.deepEqual(missing, {}, 'missing file must yield an empty object, not throw');
+
+    await fs.writeFile(envPath, '# comment\nCF_API_TOKEN=real-token-value\n\nEMPTY_LINE_ABOVE=ignored\n');
+    const parsed = await loadCaddyDnsProviderEnv(envPath);
+    assert.deepEqual(parsed, { CF_API_TOKEN: 'real-token-value', EMPTY_LINE_ABOVE: 'ignored' });
+  });
+
   await t.test('ensureCaddyCustomBinaryOverride writes the expected drop-in and is idempotent on a second call', async () => {
     const { ensureCaddyCustomBinaryOverride } = await import('../src/utils/caddy.js');
     const overridePath = path.join(tempDir, 'caddy.service.d', 'override.conf');

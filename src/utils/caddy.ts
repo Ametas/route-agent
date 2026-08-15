@@ -32,6 +32,29 @@ export async function resolveCaddyBinary(): Promise<string> {
 }
 
 /**
+ * Parses /etc/caddy/cloudflare.env (KEY=value, one per line — written by configureCaddyHandler)
+ * into a plain env object. `EnvironmentFile=` in the systemd override only applies to processes
+ * systemd itself starts (caddy.service's own ExecStart/ExecReload) — an ad-hoc `caddy validate`
+ * spawned directly from route-agent via execAsync is NOT one of those, so it never sees
+ * CF_API_TOKEN unless explicitly merged into that child process's own env (see
+ * configureCaddyHandler's validate call). Empty file/missing file both just yield `{}` — the
+ * `{env.CF_API_TOKEN}` placeholder in the Caddyfile then fails validation with a clear "API
+ * token appears invalid" error rather than silently doing something else.
+ */
+export async function loadCaddyDnsProviderEnv(envPath: string = CADDY_CLOUDFLARE_ENV_PATH): Promise<Record<string, string>> {
+  const content = await fs.readFile(envPath, 'utf-8').catch(() => '');
+  const env: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    env[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  }
+  return env;
+}
+
+/**
  * Провижинит systemd drop-in override, переключающий apt-owned юнит `caddy.service` на кастомно
  * собранный бинарник (caddy-dns/cloudflare, нужен для DNS-01 wildcard-сертификата). Никогда не
  * трогает сам unit-файл apt-пакета — только добавляет override рядом (пустой `ExecStart=`

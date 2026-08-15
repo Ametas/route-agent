@@ -6,7 +6,7 @@ import pino from 'pino';
 import { config } from '../config.js';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
-import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary } from '../utils/caddy.js';
+import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary, loadCaddyDnsProviderEnv } from '../utils/caddy.js';
 import { getCaddyCertPaths } from '../utils/certStorage.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
@@ -189,8 +189,13 @@ export async function configureCaddyHandler(
       // сработала без рестарта самого агента. На обычных egress-нодах кастомного бинарника нет —
       // поведение не меняется (bare `caddy` с $PATH, как и раньше).
       const caddyBin = await resolveCaddyBinary();
+      // EnvironmentFile= in the systemd override only applies to processes systemd itself starts
+      // (caddy.service's own ExecStart/ExecReload) — this ad-hoc `caddy validate` is spawned
+      // directly by route-agent via execAsync, so it never inherits CF_API_TOKEN unless merged
+      // into its own env explicitly. No-op (empty object) on plain egress nodes.
+      const cfEnv = await loadCaddyDnsProviderEnv();
       try {
-        await execAsync(`${caddyBin} validate --config "${caddyfilePath}"`);
+        await execAsync(`${caddyBin} validate --config "${caddyfilePath}"`, { env: { ...process.env, ...cfEnv } });
       } catch (valErr: any) {
         if (caddyfileExists) {
           await fs.copyFile(caddyBackupPath, caddyfilePath).catch(() => {});
