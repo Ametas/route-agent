@@ -69,9 +69,16 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
   const caCert = await fs.readFile(path.join(fixtureCertsDir, 'ca.crt'));
   const clientCert = await fs.readFile(path.join(fixtureCertsDir, 'client.crt'));
   const clientKey = await fs.readFile(path.join(fixtureCertsDir, 'client.key'));
+  // grpc.ssl_target_name_override: Node's TLS module now rejects an IP-literal SNI/servername
+  // outright ("Setting the TLS ServerName to an IP address is not permitted"), so the target
+  // string can't be the literal '127.0.0.1' used to dial. The fixture cert's SAN covers both
+  // IP:127.0.0.1 and DNS:localhost — overriding just the TLS handshake's name to 'localhost'
+  // (not the actual dial target, which stays 127.0.0.1) satisfies both that restriction and
+  // hostname verification, without depending on how this OS resolves the literal 'localhost'.
   const client = new EgressAgentService(
     '127.0.0.1:8082',
-    grpc.credentials.createSsl(caCert, clientKey, clientCert)
+    grpc.credentials.createSsl(caCert, clientKey, clientCert),
+    { 'grpc.ssl_target_name_override': 'localhost', 'grpc.default_authority': 'localhost' }
   );
 
   const validMetadata = new grpc.Metadata();
@@ -1120,7 +1127,10 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     await t.test('Valid client mTLS certificate should successfully communicate with agent', (t, done) => {
       const sslCreds = grpc.credentials.createSsl(caCert, clientKey, clientCert);
-      const mtlsClient = new EgressAgentService('127.0.0.1:8083', sslCreds);
+      const mtlsClient = new EgressAgentService('127.0.0.1:8083', sslCreds, {
+        'grpc.ssl_target_name_override': 'localhost',
+        'grpc.default_authority': 'localhost',
+      });
 
       const validMetadata = new grpc.Metadata();
       validMetadata.add('x-orchestrator-secret', 'test-secret-123');
@@ -1140,7 +1150,10 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     await t.test('Untrusted client mTLS certificate should be rejected during TLS handshake', (t, done) => {
       const badSslCreds = grpc.credentials.createSsl(caCert, untrustedKey, untrustedCert);
-      const badMtlsClient = new EgressAgentService('127.0.0.1:8083', badSslCreds);
+      const badMtlsClient = new EgressAgentService('127.0.0.1:8083', badSslCreds, {
+        'grpc.ssl_target_name_override': 'localhost',
+        'grpc.default_authority': 'localhost',
+      });
 
       const validMetadata = new grpc.Metadata();
       validMetadata.add('x-orchestrator-secret', 'test-secret-123');
