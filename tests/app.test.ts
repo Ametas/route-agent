@@ -822,6 +822,10 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       jc: 4,
       jmin: 40,
       jmax: 70,
+      s1: '113', s2: '87', s3: '0', s4: '0',
+      h1: '1234567890', h2: '2345678901', h3: '3456789012', h4: '4567890123',
+      headerProtectionKey: 'test-header-protection-key',
+      i1: 'i1-junk-payload', i2: 'i2-junk-payload', i3: '', i4: '', i5: '',
       peers: [
         { publicKey: 'frontpubkey1', allowedIps: '100.100.0.1/32', endpoint: '203.0.113.1:51821', persistentKeepalive: 25 },
         { publicKey: 'frontpubkey2', allowedIps: '100.100.0.2/32', endpoint: '203.0.113.2:51821', persistentKeepalive: 25 }
@@ -838,6 +842,16 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
         assert.ok(meshContent.includes('ListenPort = 51821'));
         assert.ok(meshContent.includes('Address = 100.100.0.4/16, fd00:a002::4/64'));
         assert.ok(meshContent.includes('Jc = 4'));
+        // Global mesh mimicry template fields (Task #39) — same [Interface]-level params as
+        // client-facing ConfigureAwg, must round-trip into the mesh interface's own config file.
+        assert.ok(meshContent.includes('S1 = 113'));
+        assert.ok(meshContent.includes('S4 = 0'));
+        assert.ok(meshContent.includes('H1 = 1234567890'));
+        assert.ok(meshContent.includes('H4 = 4567890123'));
+        assert.ok(meshContent.includes('HeaderProtectionKey = test-header-protection-key'));
+        assert.ok(meshContent.includes('I1 = i1-junk-payload'));
+        assert.ok(meshContent.includes('I2 = i2-junk-payload'));
+        assert.ok(!meshContent.includes('I3 ='), 'empty i3/i4/i5 must be omitted, not written as blank lines');
         assert.ok(meshContent.includes('PublicKey = frontpubkey1'));
         assert.ok(meshContent.includes('Endpoint = 203.0.113.1:51821'));
         assert.ok(meshContent.includes('PersistentKeepalive = 25'));

@@ -216,6 +216,26 @@ message MeshTunnelConfigPayload {
   uint32 jmax = 9;
 
   repeated MeshTunnelPeer peers = 10; // full mesh: every other provisioned node on the opposite side (front<->egress)
+
+  // H1-H4/S1-S4/I1-I5/HeaderProtectionKey — interface-level mimicry header/junk-size params.
+  // Unlike Jc/Jmin/Jmax these MUST match byte-for-byte across every node in the mesh (a single
+  // node's one awgmesh0 interface serves ALL peers on the opposite side at once, and these are
+  // [Interface]-scoped, not per-peer) — see meshTunnelOrchestrator.ts's global mesh template.
+  // Optional: empty string means "field omitted", matching AwgConfigPayload's own convention.
+  string s1 = 11;
+  string s2 = 12;
+  string s3 = 13;
+  string s4 = 14;
+  string h1 = 15;
+  string h2 = 16;
+  string h3 = 17;
+  string h4 = 18;
+  string header_protection_key = 19;
+  string i1 = 20;
+  string i2 = 21;
+  string i3 = 22;
+  string i4 = 23;
+  string i5 = 24;
 }
 
 message MeshTunnelConfigResponse {

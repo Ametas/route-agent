@@ -279,7 +279,10 @@ export async function configureMeshTunnelHandler(
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
 
-  const { privateKey, addressV4, addressV6, listenPort, jc, jmin, jmax, peers } = call.request;
+  const {
+    privateKey, addressV4, addressV6, listenPort, jc, jmin, jmax, peers,
+    s1, s2, s3, s4, h1, h2, h3, h4, headerProtectionKey, i1, i2, i3, i4, i5,
+  } = call.request;
 
   try {
     const meshConfigPath = config.MESH_AWG_CONFIG_PATH || '/etc/amnezia/amneziawg/awgmesh0.conf';
@@ -289,6 +292,12 @@ export async function configureMeshTunnelHandler(
     const cleanPrivateKey = sanitizeConfigInput(privateKey);
     const cleanAddressV4 = sanitizeConfigInput(addressV4);
     const cleanAddressV6 = sanitizeConfigInput(addressV6);
+    const cleanHeaderProtectionKey = sanitizeConfigInput(headerProtectionKey);
+    const cleanI1 = sanitizeConfigInput(i1);
+    const cleanI2 = sanitizeConfigInput(i2);
+    const cleanI3 = sanitizeConfigInput(i3);
+    const cleanI4 = sanitizeConfigInput(i4);
+    const cleanI5 = sanitizeConfigInput(i5);
 
     const addresses: string[] = [];
     if (cleanAddressV4) addresses.push(cleanAddressV4);
@@ -301,6 +310,26 @@ export async function configureMeshTunnelHandler(
     if (jc !== undefined && jc !== null) configContent += `Jc = ${jc}\n`;
     if (jmin !== undefined && jmin !== null) configContent += `Jmin = ${jmin}\n`;
     if (jmax !== undefined && jmax !== null) configContent += `Jmax = ${jmax}\n`;
+    // H1-H4/S1-S4/I1-I5/HeaderProtectionKey — global mesh mimicry template (meshTunnelOrchestrator.ts's
+    // getEffectiveMeshMimicryTemplate). Same [Interface]-level fields as ConfigureAwg
+    // (config.service.ts), written with the identical sanitize+omit-if-empty pattern. Unlike
+    // Address (a wg-quick-only directive `awg-quick strip` drops before `wg syncconf`), these are
+    // genuine wg/awg [Interface] parameters that DO get re-applied by `systemctl reload`'s
+    // `awg syncconf` — no extra identity-change detection needed for them.
+    if (s1 !== undefined && s1 !== null && s1 !== '') configContent += `S1 = ${sanitizeConfigInput(s1)}\n`;
+    if (s2 !== undefined && s2 !== null && s2 !== '') configContent += `S2 = ${sanitizeConfigInput(s2)}\n`;
+    if (s3 !== undefined && s3 !== null && s3 !== '') configContent += `S3 = ${sanitizeConfigInput(s3)}\n`;
+    if (s4 !== undefined && s4 !== null && s4 !== '') configContent += `S4 = ${sanitizeConfigInput(s4)}\n`;
+    if (h1 !== undefined && h1 !== null && h1 !== '') configContent += `H1 = ${sanitizeConfigInput(h1)}\n`;
+    if (h2 !== undefined && h2 !== null && h2 !== '') configContent += `H2 = ${sanitizeConfigInput(h2)}\n`;
+    if (h3 !== undefined && h3 !== null && h3 !== '') configContent += `H3 = ${sanitizeConfigInput(h3)}\n`;
+    if (h4 !== undefined && h4 !== null && h4 !== '') configContent += `H4 = ${sanitizeConfigInput(h4)}\n`;
+    if (cleanI1) configContent += `I1 = ${cleanI1}\n`;
+    if (cleanI2) configContent += `I2 = ${cleanI2}\n`;
+    if (cleanI3) configContent += `I3 = ${cleanI3}\n`;
+    if (cleanI4) configContent += `I4 = ${cleanI4}\n`;
+    if (cleanI5) configContent += `I5 = ${cleanI5}\n`;
+    if (cleanHeaderProtectionKey) configContent += `HeaderProtectionKey = ${cleanHeaderProtectionKey}\n`;
 
     let peerCount = 0;
     if (Array.isArray(peers)) {
