@@ -325,15 +325,33 @@ export async function configureMeshTunnelHandler(
     await fs.writeFile(meshConfigPath, configContent, 'utf-8');
 
     if (process.env.NODE_ENV !== 'test') {
+      // `systemctl reload` runs the unit's ExecReload (`awg syncconf %i <(awg-quick strip %i)`)
+      // — `awg-quick strip` (same as upstream wg-quick strip) drops `Address =` before handing
+      // the config to `wg syncconf`, because Address is a wg-quick-only directive, never applied
+      // by plain `wg`/`awg` — only `awg-quick up` calls `ip address add` for it. That means a
+      // PURE peer-list change is safe to `reload` (live resync, no interruption for unaffected
+      // peers' sessions), but any change to THIS node's own identity (its tunnel IP, i.e. a
+      // fresh/rotated allocation) would silently NOT take effect via reload — the config file on
+      // disk would show the new Address while `ip addr show` keeps the old one indefinitely.
+      // Detect this by comparing the currently-assigned address against the one we're about to
+      // write, and force a full down+up (`systemctl restart` — ExecStop then ExecStart on this
+      // Type=oneshot/RemainAfterExit unit, safe to call even when the interface isn't up yet,
+      // same as a plain `start`) whenever they differ or the interface doesn't exist yet.
       let interfaceExists = false;
+      let currentAddressV4: string | null = null;
       try {
-        await execAsync(`ip link show ${iface}`);
+        const { stdout } = await execAsync(`ip -4 addr show dev ${iface}`);
         interfaceExists = true;
+        const match = stdout.match(/inet\s+(\d+\.\d+\.\d+\.\d+)\//);
+        currentAddressV4 = match ? match[1] : null;
       } catch {
         interfaceExists = false;
       }
 
-      if (interfaceExists) {
+      const newAddressV4 = cleanAddressV4.split('/')[0] || null;
+      const identityUnchanged = interfaceExists && currentAddressV4 !== null && currentAddressV4 === newAddressV4;
+
+      if (identityUnchanged) {
         try {
           await execAsync(`systemctl reload ${unitName}`);
         } catch (err: any) {
@@ -352,13 +370,13 @@ export async function configureMeshTunnelHandler(
         }
       } else {
         try {
-          await execAsync(`systemctl start ${unitName}`);
-        } catch (startErr: any) {
-          const startMsg = (startErr.stderr || startErr.stdout || startErr.message || 'systemctl start error').trim();
-          logger.error({ err: startMsg }, `Failed to start mesh AWG service ${unitName}`);
+          await execAsync(`systemctl restart ${unitName}`);
+        } catch (restartErr: any) {
+          const restartMsg = (restartErr.stderr || restartErr.stdout || restartErr.message || 'systemctl restart error').trim();
+          logger.error({ err: restartMsg }, `Failed to (re)start mesh AWG service ${unitName} after identity change`);
           return callback(null, {
             success: false,
-            message: `Failed to start mesh tunnel service (${unitName}): ${startMsg}`
+            message: `Failed to apply new tunnel identity to mesh service (${unitName}): ${restartMsg}`
           });
         }
       }
