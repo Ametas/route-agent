@@ -19,6 +19,7 @@ import {
   upgradeSingboxHandler,
   sanitizeAwgToolsSymlink
 } from './services/binary.service.js';
+import { uploadMeshAwgKernelSourceHandler, configureMeshTunnelHandler } from './services/meshTunnel.service.js';
 import { ensureAwgSystemdUnit } from './services/systemdUnit.service.js';
 import { fixXraySocketPermissions } from './utils/caddy.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
@@ -126,6 +127,8 @@ export async function startServer(): Promise<Server> {
       configureCaddy: configureCaddyHandler,
       configureOlcrtc: configureOlcrtcHandler,
       configureAwg: configureAwgHandler,
+      uploadMeshAwgKernelSource: uploadMeshAwgKernelSourceHandler,
+      configureMeshTunnel: configureMeshTunnelHandler,
       manageFirewall: manageFirewallHandler,
       selfUpdate: selfUpdateHandler,
       getAgentInfo: getAgentInfoHandler,

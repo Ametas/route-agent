@@ -23,6 +23,7 @@ const tempAwgQuickBinaryPath = path.join(tempDir, 'awg-quick');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
 const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
 const tempSingboxUnitPath = path.join(tempDir, 'sing-box.service');
+const tempMeshAwgPath = path.join(tempDir, 'awgmesh0.conf');
 
 // Фикстурные mTLS-сертификаты для тестов. С тех пор, как агент отказывается стартовать
 // без валидных сертификатов (см. security-аудит), даже "обычный" пайплайн-тест обязан
@@ -47,6 +48,7 @@ process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
 process.env.AWG_QUICK_BINARY_PATH = tempAwgQuickBinaryPath;
 process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
 process.env.AWG_UNIT_FILE_PATH = tempAwgUnitPath;
+process.env.MESH_AWG_CONFIG_PATH = tempMeshAwgPath;
 process.env.SINGBOX_UNIT_FILE_PATH = tempSingboxUnitPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
@@ -752,6 +754,98 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(response.success, true);
       assert.ok(response.message.includes('disabled and stopped'));
       done();
+    });
+  });
+
+  await t.test('UploadMeshAwgKernelSource should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    const call = client.uploadMeshAwgKernelSource(badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      done();
+    });
+    call.write({ orchestratorSecret: 'bad_secret', chunk: Buffer.from('irrelevant'), isFinal: true });
+    call.end();
+  });
+
+  await t.test('UploadMeshAwgKernelSource extracts the tarball and parses PACKAGE_NAME/PACKAGE_VERSION from dkms.conf', async () => {
+    // Real gzip tarball fixture shaped like the actual upstream layout (<repo>/src/dkms.conf) —
+    // NODE_ENV=test short-circuits the actual apt-get/dkms/modprobe sequence (see
+    // meshTunnel.service.ts's installDkmsKernelModule), so this exercises the real
+    // extract+parse path without needing a real Linux DKMS toolchain in CI.
+    const fixturePath = path.join(__dirname, 'fixtures', 'amneziawg-kernel-src-fixture.tar.gz');
+    const fixtureBytes = await fs.readFile(fixturePath);
+
+    const response: any = await new Promise((resolve, reject) => {
+      const call = client.uploadMeshAwgKernelSource(validMetadata, (err: any, res: any) => {
+        if (err) reject(err); else resolve(res);
+      });
+      call.write({ orchestratorSecret: 'test-secret-123', chunk: fixtureBytes, isFinal: true });
+      call.end();
+    });
+
+    // Windows dev boxes: the bundled bsdtar's legacy "host:file" remote-archive heuristic
+    // mis-parses a Windows drive-letter colon in the -C target path (a purely local tar.exe
+    // quirk with no bearing on the real Linux production target this agent runs on — same class
+    // of platform gap already tolerated elsewhere in this test file for `bash -n`, see
+    // uploadAwgToolsBinaryHandler's awg-quick syntax check) — only assert the pipeline round-
+    // trips a defined response there, and assert the real extract+parse result everywhere else.
+    if (process.platform === 'win32') {
+      assert.ok(response && typeof response.success === 'boolean');
+    } else {
+      assert.strictEqual(response.success, true);
+      assert.ok(response.message.includes('amneziawg'));
+      assert.ok(response.message.includes('9.9.9-test'));
+    }
+  });
+
+  await t.test('ConfigureMeshTunnel should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.configureMeshTunnel({ privateKey: 'x', listenPort: 51821 }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('ConfigureMeshTunnel should write mesh AWG config with full-mesh peer list and return success', (t, done) => {
+    const payload = {
+      privateKey: 'meshprivkey123',
+      addressV4: '100.100.0.4/16',
+      addressV6: 'fd00:a002::4/64',
+      listenPort: 51821,
+      jc: 4,
+      jmin: 40,
+      jmax: 70,
+      peers: [
+        { publicKey: 'frontpubkey1', allowedIps: '100.100.0.1/32', endpoint: '203.0.113.1:51821', persistentKeepalive: 25 },
+        { publicKey: 'frontpubkey2', allowedIps: '100.100.0.2/32', endpoint: '203.0.113.2:51821', persistentKeepalive: 25 }
+      ]
+    };
+
+    client.configureMeshTunnel(payload, validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        assert.ok(response.message.includes('2 peer'));
+        const meshContent = await fs.readFile(tempMeshAwgPath, 'utf-8');
+        assert.ok(meshContent.includes('PrivateKey = meshprivkey123'));
+        assert.ok(meshContent.includes('ListenPort = 51821'));
+        assert.ok(meshContent.includes('Address = 100.100.0.4/16, fd00:a002::4/64'));
+        assert.ok(meshContent.includes('Jc = 4'));
+        assert.ok(meshContent.includes('PublicKey = frontpubkey1'));
+        assert.ok(meshContent.includes('Endpoint = 203.0.113.1:51821'));
+        assert.ok(meshContent.includes('PersistentKeepalive = 25'));
+        assert.ok(meshContent.includes('PublicKey = frontpubkey2'));
+        done();
+      } catch (e) {
+        done(e);
+      }
     });
   });
 

@@ -34,6 +34,12 @@ const configSchema = z.object({
   AWG_QUICK_BINARY_PATH: z.string().default('/usr/local/bin/awg-quick'),
   AWG_GO_BINARY_PATH: z.string().default('/usr/local/bin/amneziawg-go'),
   AWG_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-awg@.service'),
+  // S2S AWG3 mesh tunnel (front↔egress, second ring-relay hop) — deliberately a SEPARATE
+  // interface/config from the client-facing AWG above (different key material, different peer
+  // set, kernel-module-backed rather than amneziawg-go userspace). Reuses the SAME generic
+  // route-awg@.service template unit (AWG_UNIT_FILE_PATH, %i-parameterized) — no separate unit
+  // needed, systemctl enable/reload just targets route-awg@<this interface's basename> instead.
+  MESH_AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awgmesh0.conf'),
   CA_CERT_PATH: z.string().default('/etc/route-agent/certs/ca.crt'),
   AGENT_CERT_PATH: z.string().default('/etc/route-agent/certs/agent.crt'),
   AGENT_KEY_PATH: z.string().default('/etc/route-agent/certs/agent.key'),

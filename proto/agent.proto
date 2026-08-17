@@ -200,7 +200,9 @@ message MeshTunnelPeer {
 
 message MeshTunnelConfigPayload {
   string orchestrator_secret = 1;
-  string iface_name = 2;           // e.g. "awgmesh0" — deliberately distinct from the client-facing AWG interface
+  // No interface-name field, deliberately: same precedent as AwgConfigPayload (client-facing AWG)
+  // — the interface name is fixed node-side via config (MESH_AWG_CONFIG_PATH's basename, default
+  // "awgmesh0"), not orchestrator-supplied. One mesh tunnel per node, no need for per-call naming.
   string private_key = 3;
   string address_v4 = 4;           // "100.100.0.4/16"
   string address_v6 = 5;           // "fd00:a002::4/64"

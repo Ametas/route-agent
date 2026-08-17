@@ -12,6 +12,8 @@ import {
   getAwgToolsVersionCached,
   getAmneziaWgGoVersionCached,
   getAwgStatus,
+  getMeshAwgKernelStatusCached,
+  getMeshTunnelInterfaceStatus,
   CpuStats
 } from '../utils/telemetry.js';
 
@@ -82,7 +84,7 @@ export async function streamTelemetryHandler(
     if (isCleanedUp || call.destroyed) return;
 
     try {
-      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat] = await Promise.all([
+      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface] = await Promise.all([
         getCpuUsage(streamCpuStats),
         getMemoryUsage(),
         getConnectionCount(),
@@ -91,7 +93,9 @@ export async function streamTelemetryHandler(
         getAwgActivePeersCount(),
         getAwgToolsVersionCached(),
         getAmneziaWgGoVersionCached(),
-        getAwgStatus()
+        getAwgStatus(),
+        getMeshAwgKernelStatusCached(),
+        getMeshTunnelInterfaceStatus()
       ]);
       streamCpuStats = newStats;
 
@@ -110,7 +114,11 @@ export async function streamTelemetryHandler(
           awgVersion: awgToolsVer,
           awgStatus: awgStat,
           awgToolsVersion: awgToolsVer,
-          awgGoVersion: awgGoVer
+          awgGoVersion: awgGoVer,
+          meshAwgKernelStatus: meshKernel.status,
+          meshAwgKernelVersion: meshKernel.version,
+          meshTunnelInterfaceStatus: meshIface.status,
+          meshTunnelActivePeers: meshIface.activePeers
         });
       } catch {
         cleanup();
@@ -150,13 +158,17 @@ export async function getTelemetryHandler(
       awgVersion: 'unknown',
       awgStatus: 'unauthorized',
       awgToolsVersion: 'unknown',
-      awgGoVersion: 'unknown'
+      awgGoVersion: 'unknown',
+      meshAwgKernelStatus: 'unknown',
+      meshAwgKernelVersion: '',
+      meshTunnelInterfaceStatus: 'unknown',
+      meshTunnelActivePeers: 0
     });
   }
 
   try {
     let streamCpuStats: CpuStats = { idle: 0, total: 0 };
-    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat] = await Promise.all([
+    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface] = await Promise.all([
       getCpuUsage(streamCpuStats),
       getMemoryUsage(),
       getConnectionCount(),
@@ -165,7 +177,9 @@ export async function getTelemetryHandler(
       getAwgActivePeersCount(),
       getAwgToolsVersionCached(),
       getAmneziaWgGoVersionCached(),
-      getAwgStatus()
+      getAwgStatus(),
+      getMeshAwgKernelStatusCached(),
+      getMeshTunnelInterfaceStatus()
     ]);
 
     return callback(null, {
@@ -180,7 +194,11 @@ export async function getTelemetryHandler(
       awgVersion: awgToolsVer,
       awgStatus: awgStat,
       awgToolsVersion: awgToolsVer,
-      awgGoVersion: awgGoVer
+      awgGoVersion: awgGoVer,
+      meshAwgKernelStatus: meshKernel.status,
+      meshAwgKernelVersion: meshKernel.version,
+      meshTunnelInterfaceStatus: meshIface.status,
+      meshTunnelActivePeers: meshIface.activePeers
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -197,7 +215,11 @@ export async function getTelemetryHandler(
       awgVersion: 'error',
       awgStatus: 'error',
       awgToolsVersion: 'error',
-      awgGoVersion: 'error'
+      awgGoVersion: 'error',
+      meshAwgKernelStatus: 'error',
+      meshAwgKernelVersion: '',
+      meshTunnelInterfaceStatus: 'error',
+      meshTunnelActivePeers: 0
     });
   }
 }

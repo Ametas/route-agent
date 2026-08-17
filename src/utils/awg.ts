@@ -15,6 +15,16 @@ export function getAwgInterfaceName(): string {
   return name || 'awg0';
 }
 
+/**
+ * Mirror of getAwgInterfaceName for the S2S AWG3 mesh tunnel (front↔egress) — a separate
+ * interface from the client-facing AWG above, see MESH_AWG_CONFIG_PATH in config.ts.
+ */
+export function getMeshAwgInterfaceName(): string {
+  const configPath = config.MESH_AWG_CONFIG_PATH || '/etc/amnezia/amneziawg/awgmesh0.conf';
+  const name = path.basename(configPath, '.conf');
+  return name || 'awgmesh0';
+}
+
 export interface RestartAwgResult {
   reloaded: boolean;
   restartedUnits: string[];

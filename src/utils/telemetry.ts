@@ -362,7 +362,103 @@ export function invalidateAwgVersionCache(): void {
   lastAwgCheckTime = 0;
 }
 
-import { getAwgInterfaceName } from './awg.js';
+import { getAwgInterfaceName, getMeshAwgInterfaceName } from './awg.js';
+
+// --- S2S AWG3 mesh tunnel (front↔egress, second ring-relay hop) telemetry ---------------------
+// Deliberately NOT wired into checkAndHealAwgInterface's auto-restart loop below — this is our
+// own server-to-server infra tunnel, not a client-facing service; silently self-healing it could
+// mask a real connectivity problem an admin needs to see, unlike the client AWG case where
+// keeping paying users connected is the priority. Read-only status detection only.
+
+/**
+ * modinfo reads the on-disk/depmod module regardless of load state (distinct signal from lsmod),
+ * so "built_not_loaded" (module present but not currently active — e.g. right after a reboot
+ * before systemd-modules-load ran) is distinguishable from "not_installed" (DKMS never
+ * built/installed it at all). No proto change needed for either extra value — the wire field is a
+ * free string, not an enum.
+ */
+export async function getMeshAwgKernelStatus(): Promise<{ status: string; version: string }> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_MESH_AWG_KERNEL_STATUS !== undefined) {
+    return { status: process.env.TEST_MESH_AWG_KERNEL_STATUS, version: process.env.TEST_MESH_AWG_KERNEL_VERSION || '' };
+  }
+
+  let builtVersion = '';
+  try {
+    const { stdout } = await execAsync('modinfo amneziawg');
+    const match = stdout.match(/^version:\s*(\S+)/m);
+    builtVersion = match ? match[1] : '';
+  } catch {
+    return { status: 'not_installed', version: '' };
+  }
+
+  try {
+    await execAsync('lsmod | grep -w amneziawg');
+    return { status: 'loaded', version: builtVersion };
+  } catch {
+    return { status: 'built_not_loaded', version: builtVersion };
+  }
+}
+
+let cachedMeshAwgKernelStatus: { status: string; version: string } | null = null;
+let lastMeshAwgKernelCheckTime = 0;
+
+export async function getMeshAwgKernelStatusCached(): Promise<{ status: string; version: string }> {
+  const now = Date.now();
+  if (cachedMeshAwgKernelStatus && (now - lastMeshAwgKernelCheckTime < 60000)) {
+    return cachedMeshAwgKernelStatus;
+  }
+  cachedMeshAwgKernelStatus = await getMeshAwgKernelStatus();
+  lastMeshAwgKernelCheckTime = now;
+  return cachedMeshAwgKernelStatus;
+}
+
+export function invalidateMeshAwgKernelStatusCache(): void {
+  cachedMeshAwgKernelStatus = null;
+  lastMeshAwgKernelCheckTime = 0;
+}
+
+/**
+ * "absent" (interface doesn't exist at all) vs "up" (interface exists — kernel-module-backed
+ * AWG interfaces don't have a meaningful "down but configured" state the way systemd units do,
+ * since awg-quick down removes the interface entirely) — mirrors getAwgActivePeersCount's
+ * handshake-recency window (180s) for the active-peer count.
+ */
+export async function getMeshTunnelInterfaceStatus(): Promise<{ status: string; activePeers: number }> {
+  if (process.env.NODE_ENV === 'test' && process.env.TEST_MESH_TUNNEL_STATUS !== undefined) {
+    return {
+      status: process.env.TEST_MESH_TUNNEL_STATUS,
+      activePeers: parseInt(process.env.TEST_MESH_TUNNEL_ACTIVE_PEERS || '0', 10) || 0,
+    };
+  }
+
+  const iface = getMeshAwgInterfaceName();
+  try {
+    await execAsync(`ip link show ${iface}`);
+  } catch {
+    return { status: 'absent', activePeers: 0 };
+  }
+
+  try {
+    const { stdout } = await execAsync(`awg show ${iface} dump`);
+    const lines = stdout.trim().split('\n');
+    if (lines.length <= 1) return { status: 'up', activePeers: 0 };
+
+    const now = Math.floor(Date.now() / 1000);
+    let activePeers = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].trim().split(/\s+/);
+      if (parts.length >= 5) {
+        const latestHandshake = parseInt(parts[4], 10);
+        if (!isNaN(latestHandshake) && latestHandshake > 0 && (now - latestHandshake) <= 180) {
+          activePeers++;
+        }
+      }
+    }
+    return { status: 'up', activePeers };
+  } catch {
+    return { status: 'up', activePeers: 0 };
+  }
+}
 
 export interface AwgHealthState {
   lastCheckTime: number;
