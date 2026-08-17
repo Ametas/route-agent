@@ -42,6 +42,22 @@ service EgressAgentService {
   // Client Streaming RPC to stream Olcrtc (WebRTC) binary to the node agent
   rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
 
+  // Client Streaming RPC to stream the AmneziaWG kernel-module SOURCE tarball (S2S mesh tunnel,
+  // front↔egress, second ring-relay hop) to the node agent — fetched centrally by the
+  // orchestrator (never git-cloned by the node itself, see githubService.ts's
+  // ensureAwgKernelModuleSource — a RF-hosted node reaching github.com directly would recreate
+  // the exact SNI/IP DPI-visibility risk this whole tunnel exists to avoid). On the final chunk
+  // the agent extracts the tarball and builds it locally via DKMS against its own running
+  // kernel — a kernel module can't be cross-compiled centrally like the other Upload*Binary RPCs.
+  rpc UploadMeshAwgKernelSource (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
+  // Unary RPC to configure/reload the S2S AmneziaWG3 mesh-tunnel interface (front↔egress, second
+  // ring-relay hop) — distinct from ConfigureAwg (client-facing AWG service, different interface,
+  // different key material). Reuses the already-delivered awg/awg-quick tools (UploadAwgToolsBinary)
+  // — once the kernel module is loaded, awg-quick drives it directly via netlink, no separate
+  // userspace core needed for this interface.
+  rpc ConfigureMeshTunnel (MeshTunnelConfigPayload) returns (MeshTunnelConfigResponse);
+
   // Unary RPC for dynamic firewall management on node
   rpc ManageFirewall (FirewallPayload) returns (FirewallResponse);
 
@@ -81,6 +97,14 @@ message TelemetryResponse {
   string awg_status = 10;
   string awg_tools_version = 11;
   string awg_go_version = 12;
+
+  // S2S AWG3 mesh tunnel (front↔egress, second ring-relay hop) — read live off the node (dkms
+  // status/modinfo/wg show), never a persisted DB flag, same self-healing rationale as
+  // singbox_version/awg_tools_version above.
+  string mesh_awg_kernel_status = 13;      // "not_installed" | "loaded" | "error"
+  string mesh_awg_kernel_version = 14;
+  string mesh_tunnel_interface_status = 15; // "up" | "down" | "absent"
+  uint32 mesh_tunnel_active_peers = 16;
 }
 
 message UpgradePayload {
@@ -163,6 +187,36 @@ message AwgConfigPayload {
 }
 
 message AwgConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message MeshTunnelPeer {
+  string public_key = 1;
+  string allowed_ips = 2;          // "100.100.0.4/32, fd00:a002::4/128" — one /32(+/128) per peer, full mesh
+  string endpoint = 3;             // "203.0.113.5:51821" — peer's real public IP:port (this hop is NOT itself tunneled)
+  uint32 persistent_keepalive = 4;
+}
+
+message MeshTunnelConfigPayload {
+  string orchestrator_secret = 1;
+  string iface_name = 2;           // e.g. "awgmesh0" — deliberately distinct from the client-facing AWG interface
+  string private_key = 3;
+  string address_v4 = 4;           // "100.100.0.4/16"
+  string address_v6 = 5;           // "fd00:a002::4/64"
+  uint32 listen_port = 6;
+
+  // AWG3 obfuscation parameters — a single fixed set for the whole mesh (this is our own
+  // server-to-server traffic, not client-facing, so it doesn't need per-peer variety the way
+  // AwgConfigPayload's client mimicry does).
+  uint32 jc = 7;
+  uint32 jmin = 8;
+  uint32 jmax = 9;
+
+  repeated MeshTunnelPeer peers = 10; // full mesh: every other provisioned node on the opposite side (front<->egress)
+}
+
+message MeshTunnelConfigResponse {
   bool success = 1;
   string message = 2;
 }
