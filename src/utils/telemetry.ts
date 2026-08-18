@@ -1,5 +1,4 @@
 import * as fs from 'fs/promises';
-import http from 'http';
 import pino from 'pino';
 import { config } from '../config.js';
 import { execAsync, execFileAsync } from './exec.js';
@@ -67,87 +66,30 @@ export async function getConnectionCount(): Promise<number> {
 }
 
 /**
- * Выполняет локальный HTTP GET-запрос и возвращает распарсенный JSON
- */
-function getJson(url: string, timeoutMs = 3000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
-      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-        reject(new Error(`Status Code: ${res.statusCode}`));
-        return;
-      }
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      reject(err);
-    });
-
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      reject(new Error('Timeout'));
-    });
-  });
-}
-
-/**
- * Получает текущий статус WebRTC-слоя на основе опроса olcrtc-manager API
+ * Получает текущий статус WebRTC-слоя (olcrtc-agent-srv) — план `olcrtc-redesign.md`, "Новая
+ * архитектура: собственный слой". Заменяет старый опрос HTTP `/api/state` стороннего
+ * olcrtc-manager (которого больше нет) на прямую проверку бинаря + подсчёт реально запущенных
+ * per-instance systemd-юнитов (olcrtc-agent-srv@*), той же "exec+parse, live" философией, что
+ * singbox_version/awg_status. Детальная событийная телеметрия (сессии/трафик) идёт отдельным
+ * каналом — StreamOlcrtcEvents (olcrtc.service.ts), это поле остаётся грубым health-индикатором.
  */
 export async function getWebRtcStatus(): Promise<string> {
   if (process.env.NODE_ENV === 'test' && process.env.TEST_WEBRTC_CHECK !== 'true') {
     return 'nominal';
   }
 
-  const managerBin = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
-  const managerExists = await fs.stat(managerBin).then(() => true).catch(() => false);
-  if (!managerExists) {
+  const binPath = config.OLCRTC_AGENT_SRV_BINARY_PATH;
+  const binExists = await fs.stat(binPath).then(() => true).catch(() => false);
+  if (!binExists) {
     return 'not_installed';
   }
 
-  const port = process.env.OLCRTC_PORT ? parseInt(process.env.OLCRTC_PORT, 10) : 8888;
-  const url = `http://127.0.0.1:${port}/api/state`;
-
   try {
-    const data = await getJson(url, 1000);
-    
-    const runningCount = (data && typeof data.running_count === 'number') ? data.running_count : null;
-    
-    if (runningCount === 0) {
-      let activeUsers = 0;
-      if (data) {
-        if (typeof data.active_users === 'number') {
-          activeUsers = data.active_users;
-        } else if (typeof data.users_count === 'number') {
-          activeUsers = data.users_count;
-        } else if (typeof data.user_count === 'number') {
-          activeUsers = data.user_count;
-        } else if (typeof data.online_users === 'number') {
-          activeUsers = data.online_users;
-        } else if (typeof data.active_connections === 'number') {
-          activeUsers = data.active_connections;
-        } else if (typeof data.users === 'number') {
-          activeUsers = data.users;
-        } else if (Array.isArray(data.users)) {
-          activeUsers = data.users.length;
-        }
-      }
-      
-      if (activeUsers > 0) {
-        return 'no_active_tunnels';
-      }
-    }
-    
-    return 'nominal';
+    const { stdout } = await execAsync(
+      "systemctl list-units --type=service --state=running --no-legend 'olcrtc-agent-srv@*' | awk '{print $1}'"
+    );
+    const runningCount = stdout.split('\n').map((l) => l.trim()).filter(Boolean).length;
+    return runningCount === 0 ? 'no_active_tunnels' : 'nominal';
   } catch (err) {
     return 'unavailable';
   }

@@ -26,8 +26,14 @@ const configSchema = z.object({
   // for `caddy validate`/reload there), only set on Xeon-ring nodes after the custom
   // caddy-dns/cloudflare-plugin binary is uploaded — see configureCaddyHandler's `|| 'caddy'` fallback.
   CADDY_BINARY_PATH: z.string().optional(),
-  OLCRTC_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc'),
-  OLCRTC_MANAGER_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-manager'),
+  // olcrtc-agent-srv (план `olcrtc-redesign.md`, "Новая архитектура: собственный слой") — replaces
+  // the old OLCRTC_BINARY_PATH/OLCRTC_MANAGER_BINARY_PATH (third-party Olcrtc_manager admin
+  // daemon, no longer used at all: no HTTP admin surface, no Basic Auth, control is entirely via
+  // gRPC + local YAML/systemd, same shape as ConfigureMeshTunnel/AWG). One systemd unit INSTANCE
+  // per (user, node) — olcrtc-agent-srv@<user_short_uuid>.service, templated like AWG_UNIT_FILE_PATH.
+  OLCRTC_AGENT_SRV_BINARY_PATH: z.string().default('/usr/local/bin/olcrtc-agent-srv'),
+  OLCRTC_AGENT_SRV_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/olcrtc-agent-srv@.service'),
+  OLCRTC_AGENT_SRV_CONFIG_DIR: z.string().default('/etc/olcrtc-agent-srv'),
   AWG_CONFIG_PATH: z.string().default('/etc/amnezia/amneziawg/awg0.conf'),
   AWG_RELOAD_COMMAND: z.string().default('systemctl restart route-awg@awg0'),
   AWG_TOOLS_BINARY_PATH: z.string().default('/usr/local/bin/awg'),

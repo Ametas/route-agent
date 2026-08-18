@@ -15,8 +15,23 @@ service EgressAgentService {
   // Unary RPC to trigger sing-box binary upgrade on the node
   rpc UpgradeSingbox (UpgradePayload) returns (UpgradeResponse);
 
-  // Unary RPC to configure Olcrtc (WebRTC) daemon
-  rpc ConfigureOlcrtc (OlcrtcConfigPayload) returns (OlcrtcConfigResponse);
+  // Unary RPC to create/update one olcrtc instance's YAML config + systemd unit on the node —
+  // idempotent (same shape write + restart every time, matching ConfigureAwg/ConfigureMeshTunnel).
+  // Replaces the old ConfigureOlcrtc (proxied a third-party Olcrtc_manager admin daemon) — see plan
+  // `olcrtc-redesign.md`, "Новая архитектура: собственный слой": route-agent now runs
+  // olcrtc-agent-srv directly, one systemd unit per (user, node) instance, no admin HTTP surface.
+  rpc SyncOlcrtcInstance (OlcrtcInstanceConfigPayload) returns (OlcrtcInstanceConfigResponse);
+
+  // Unary RPC to stop+disable+remove one olcrtc instance's systemd unit + config.
+  rpc DeleteOlcrtcInstance (OlcrtcInstanceDeletePayload) returns (OlcrtcInstanceConfigResponse);
+
+  // Server Streaming RPC — one open stream per olcrtc-capable node, forwards every
+  // session_open/session_close/traffic/health event across ALL instances running on that node in
+  // real time, each event tagged with which instance/user it belongs to. Doesn't fit
+  // TelemetryResponse's flat per-node-scalar shape (event-driven/high-frequency, not a periodic
+  // snapshot) — mirrors StreamTelemetry's per-node-stream shape instead. Source: olcrtc-agent-srv's
+  // own stdout JSON lines (see that repo's events.go), tailed off each instance's systemd journal.
+  rpc StreamOlcrtcEvents (OlcrtcEventsRequest) returns (stream OlcrtcEvent);
 
   // Unary RPC to trigger agent self-update from repository
   rpc SelfUpdate (SelfUpdatePayload) returns (SelfUpdateResponse);
@@ -39,8 +54,9 @@ service EgressAgentService {
   // Unary RPC to configure Caddy (TLS certificates manager)
   rpc ConfigureCaddy (CaddyConfigPayload) returns (CaddyConfigResponse);
 
-  // Client Streaming RPC to stream Olcrtc (WebRTC) binary to the node agent
-  rpc UploadOlcrtcBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  // Client Streaming RPC to stream the olcrtc-agent-srv binary to the node agent — replaces the old
+  // UploadOlcrtcBinary (uploaded the third-party Olcrtc_manager binary, no longer used).
+  rpc UploadOlcrtcAgentSrvBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
 
   // Client Streaming RPC to stream the AmneziaWG kernel-module SOURCE tarball (S2S mesh tunnel,
   // front↔egress, second ring-relay hop) to the node agent — fetched centrally by the
@@ -117,16 +133,59 @@ message UpgradeResponse {
   string message = 2;
 }
 
-message OlcrtcConfigPayload {
-  bool enabled = 1;
-  string user = 2;
-  string password = 3;
-  uint32 port = 4;
+// One olcrtc instance = one running olcrtc-agent-srv systemd unit
+// (olcrtc-agent-srv@<user_short_uuid>.service) = one YAML config file — see plan doc, "Конфиг и
+// топология": the protocol itself doesn't multiplex multiple rooms in one process, so this is a
+// per-user, not per-node, unit of configuration.
+message OlcrtcInstanceConfigPayload {
+  string orchestrator_secret = 1;
+  string user_short_uuid = 2;   // identifies the systemd unit instance name
+  string carrier = 3;           // "jitsi" | "telemost" | "wbstream" | "none"
+  string transport = 4;         // "datachannel" | "vp8channel" | "seichannel" | "videochannel"
+  string room_id = 5;           // full room URL for jitsi (confirmed live 2026-08-18), room slug for wbstream/telemost
+  string crypto_key_hex = 6;    // 64 hex chars, generated centrally by the orchestrator
+  string dns = 7;                // e.g. "8.8.8.8:53"
+
+  // Optional transport-specific tuning — 0 means "field omitted, agent/upstream default applies".
+  uint32 vp8_fps = 8;
+  uint32 vp8_batch_size = 9;
+  uint32 sei_fps = 10;
+  uint32 sei_batch_size = 11;
+  uint32 sei_fragment_size = 12;
+  uint32 sei_ack_timeout_ms = 13;
 }
 
-message OlcrtcConfigResponse {
+message OlcrtcInstanceDeletePayload {
+  string orchestrator_secret = 1;
+  string user_short_uuid = 2;
+}
+
+message OlcrtcInstanceConfigResponse {
   bool success = 1;
   string message = 2;
+}
+
+message OlcrtcEventsRequest {
+  string orchestrator_secret = 1;
+}
+
+// Mirrors olcrtc-agent-srv's own events.go Event shape (that repo's stdout JSON lines) — fields not
+// relevant to a given type are simply left at their zero value, not modeled as a Go-style union, so
+// the wire shape stays a flat struct like every other message in this file.
+message OlcrtcEvent {
+  string user_short_uuid = 1;  // which instance/systemd unit this event came from
+  string type = 2;              // "session_open" | "session_close" | "traffic" | "health"
+  int64 timestamp = 3;
+  string session_id = 4;
+  // Client-self-reported, NOT cryptographically verified (confirmed by reading olcrtc's own
+  // internal/handshake — see plan doc, open question #1, closed 2026-08-18). Do not treat as an
+  // authenticated identity signal — session_id is the trustworthy (server-generated) identifier.
+  string device_id = 5;
+  string reason = 6;
+  string addr = 7;
+  uint64 bytes_in = 8;
+  uint64 bytes_out = 9;
+  string health_json = 10;      // raw JSON passthrough of upstream's HealthStatus, not re-modeled here
 }
 
 message SelfUpdatePayload {}

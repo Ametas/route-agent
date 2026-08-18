@@ -14,8 +14,9 @@ const tempDir = path.join(__dirname, 'temp');
 const tempConfigPath = path.join(tempDir, 'sing-box-config.json');
 const tempBinaryPath = path.join(tempDir, 'sing-box');
 const tempCaddyfilePath = path.join(tempDir, 'Caddyfile');
-const tempOlcrtcPath = path.join(tempDir, 'olcrtc');
-const tempOlcrtcManagerPath = path.join(tempDir, 'olcrtc-manager');
+const tempOlcrtcAgentSrvPath = path.join(tempDir, 'olcrtc-agent-srv');
+const tempOlcrtcAgentSrvUnitPath = path.join(tempDir, 'olcrtc-agent-srv@.service');
+const tempOlcrtcAgentSrvConfigDir = path.join(tempDir, 'olcrtc-agent-srv-config');
 const tempAwgPath = path.join(tempDir, 'awg0.conf');
 
 const tempAwgToolsBinaryPath = path.join(tempDir, 'awg');
@@ -41,8 +42,9 @@ process.env.AGENT_KEY_PATH = path.join(fixtureCertsDir, 'agent.key');
 process.env.SINGBOX_CONFIG_PATH = tempConfigPath;
 process.env.SINGBOX_BINARY_PATH = tempBinaryPath;
 process.env.CADDYFILE_PATH = tempCaddyfilePath;
-process.env.OLCRTC_BINARY_PATH = tempOlcrtcPath;
-process.env.OLCRTC_MANAGER_BINARY_PATH = tempOlcrtcManagerPath;
+process.env.OLCRTC_AGENT_SRV_BINARY_PATH = tempOlcrtcAgentSrvPath;
+process.env.OLCRTC_AGENT_SRV_UNIT_FILE_PATH = tempOlcrtcAgentSrvUnitPath;
+process.env.OLCRTC_AGENT_SRV_CONFIG_DIR = tempOlcrtcAgentSrvConfigDir;
 process.env.AWG_CONFIG_PATH = tempAwgPath;
 process.env.AWG_TOOLS_BINARY_PATH = tempAwgToolsBinaryPath;
 process.env.AWG_QUICK_BINARY_PATH = tempAwgQuickBinaryPath;
@@ -242,34 +244,37 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     call.end();
   });
 
-  await t.test('UploadOlcrtcBinary should upload olcrtc / olcrtc-manager binaries', (t, done) => {
-    const call = client.uploadOlcrtcBinary(validMetadata, async (err: any, response: any) => {
+  await t.test('UploadOlcrtcAgentSrvBinary should upload the olcrtc-agent-srv binary', (t, done) => {
+    const call = client.uploadOlcrtcAgentSrvBinary(validMetadata, async (err: any, response: any) => {
       try {
         assert.ifError(err);
         assert.strictEqual(response.success, true);
-        assert.ok(response.message.includes('olcrtc-manager'));
-        const exists = await fs.stat(tempOlcrtcManagerPath).then(() => true).catch(() => false);
+        assert.ok(response.message.includes('olcrtc-agent-srv'));
+        const exists = await fs.stat(tempOlcrtcAgentSrvPath).then(() => true).catch(() => false);
         assert.strictEqual(exists, true);
         done();
       } catch (e) {
         done(e);
       }
     });
-    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('olcrtc_mgr_chunk'), version: '1.0.0', targetBinary: 'olcrtc-manager', isFinal: true });
+    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('olcrtc_agent_srv_chunk'), version: '0.1.0', isFinal: true });
     call.end();
   });
 
-  await t.test('UploadOlcrtcBinary should sanitize path traversal targetBinary to olcrtc-manager fallback', (t, done) => {
-    const call = client.uploadOlcrtcBinary(validMetadata, async (err: any, response: any) => {
+  await t.test('UploadOlcrtcAgentSrvBinary should reject unauthorized uploads', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    const call = client.uploadOlcrtcAgentSrvBinary(badMetadata, (err: any, response: any) => {
       try {
         assert.ifError(err);
-        assert.strictEqual(response.success, true);
+        assert.strictEqual(response.success, false);
         done();
       } catch (e) {
         done(e);
       }
     });
-    call.write({ orchestratorSecret: 'test-secret-123', chunk: Buffer.from('path_traversal_test'), version: '1.0.0', targetBinary: '../../etc/malicious', isFinal: true });
+    call.write({ orchestratorSecret: 'wrong-secret', chunk: Buffer.from('nope'), version: '0.1.0', isFinal: true });
     call.end();
   });
 
@@ -318,6 +323,23 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     // 2. Second call with unchanged content should return false without rewriting file or triggering daemon-reload
     const secondCallResult = await ensureAwgSystemdUnit(customTestUnitPath);
+    assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
+  });
+
+  await t.test('ensureOlcrtcAgentSrvSystemdUnit idempotency check (mirrors ensureAwgSystemdUnit)', async () => {
+    const { ensureOlcrtcAgentSrvSystemdUnit } = await import('../src/services/olcrtc.service.js');
+    const customTestUnitPath = path.join(tempDir, 'test-olcrtc-agent-srv@.service');
+    await fs.unlink(customTestUnitPath).catch(() => {});
+
+    const firstCallResult = await ensureOlcrtcAgentSrvSystemdUnit(customTestUnitPath);
+    assert.strictEqual(firstCallResult, true, 'First call should create unit file');
+
+    const content = await fs.readFile(customTestUnitPath, 'utf-8');
+    assert.ok(content.includes('Description=olcrtc-agent-srv instance %i (managed by route-agent)'));
+    assert.ok(content.includes(`ExecStart=${tempOlcrtcAgentSrvPath} ${tempOlcrtcAgentSrvConfigDir}/%i.yaml`));
+    assert.ok(content.includes('Restart=always'));
+
+    const secondCallResult = await ensureOlcrtcAgentSrvSystemdUnit(customTestUnitPath);
     assert.strictEqual(secondCallResult, false, 'Second call with identical content must return false');
   });
 
@@ -641,25 +663,109 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  await t.test('ConfigureOlcrtc should block unauthorized requests', (t, done) => {
+  await t.test('SyncOlcrtcInstance should block unauthorized requests', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');
 
-    client.configureOlcrtc({ enabled: true, user: 'admin', password: 'pass', port: 8888 }, badMetadata, (err: any, response: any) => {
+    client.syncOlcrtcInstance({ userShortUuid: 'abc123', carrier: 'jitsi', transport: 'datachannel', roomId: 'https://meet.egovm.ru/x', cryptoKeyHex: '00'.repeat(32) }, badMetadata, (err: any, response: any) => {
       assert.ifError(err);
       assert.strictEqual(response.success, false);
       done();
     });
   });
 
-  await t.test('ConfigureOlcrtc should configure Olcrtc service when authorized', (t, done) => {
+  await t.test('SyncOlcrtcInstance should reject an unsafe/empty user_short_uuid', (t, done) => {
     const validMetadata = new grpc.Metadata();
     validMetadata.add('x-orchestrator-secret', 'test-secret-123');
 
-    client.configureOlcrtc({ enabled: true, user: 'admin', password: 'pass', port: 8888 }, validMetadata, (err: any, response: any) => {
+    client.syncOlcrtcInstance({ userShortUuid: '../../etc/passwd', carrier: 'jitsi', transport: 'datachannel', roomId: 'x', cryptoKeyHex: '00'.repeat(32) }, validMetadata, (err: any, response: any) => {
       assert.ifError(err);
-      assert.strictEqual(response.success, true);
+      assert.strictEqual(response.success, false);
       done();
+    });
+  });
+
+  await t.test('SyncOlcrtcInstance should write the expected YAML config when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const userShortUuid = 'test-user-1';
+    client.syncOlcrtcInstance({
+      userShortUuid, carrier: 'jitsi', transport: 'vp8channel',
+      roomId: 'https://meet.egovm.ru/testroom', cryptoKeyHex: '11'.repeat(32),
+      dns: '8.8.8.8:53', vp8Fps: 60, vp8BatchSize: 64,
+    }, validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        const configPath = path.join(tempOlcrtcAgentSrvConfigDir, `${userShortUuid}.yaml`);
+        const content = await fs.readFile(configPath, 'utf-8');
+        assert.match(content, /mode: srv/);
+        assert.match(content, /provider: jitsi/);
+        assert.match(content, /id: "https:\/\/meet\.egovm\.ru\/testroom"/);
+        assert.match(content, /key: "1{64}"/);
+        assert.match(content, /transport: vp8channel/);
+        assert.match(content, /fps: 60/);
+        assert.match(content, /batch_size: 64/);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('DeleteOlcrtcInstance should block unauthorized requests', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.deleteOlcrtcInstance({ userShortUuid: 'test-user-1' }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      done();
+    });
+  });
+
+  await t.test('DeleteOlcrtcInstance should remove the instance config file when authorized', (t, done) => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const userShortUuid = 'test-user-1';
+    const configPath = path.join(tempOlcrtcAgentSrvConfigDir, `${userShortUuid}.yaml`);
+
+    client.deleteOlcrtcInstance({ userShortUuid }, validMetadata, async (err: any, response: any) => {
+      try {
+        assert.ifError(err);
+        assert.strictEqual(response.success, true);
+        const exists = await fs.stat(configPath).then(() => true).catch(() => false);
+        assert.strictEqual(exists, false);
+        done();
+      } catch (e) {
+        done(e);
+      }
+    });
+  });
+
+  await t.test('StreamOlcrtcEvents should reject an unauthenticated stream', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      done(err);
+    };
+
+    const stream = client.streamOlcrtcEvents({}, badMetadata);
+    stream.on('data', () => {
+      finish(new Error('should not receive data on an unauthenticated stream'));
+    });
+    stream.on('error', (err: any) => {
+      assert.ok(err);
+      finish();
+    });
+    stream.on('end', () => {
+      finish(new Error('stream ended without an error for an unauthenticated call'));
     });
   });
 
@@ -1166,104 +1272,30 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(reorderedHash, originalHash, 'computeProtoContractHash must produce identical hash regardless of block or field declaration order in .proto');
   });
 
-  await t.test('WebRTC status check logic (mocking olcrtc-manager API)', async (t) => {
-    const http = await import('http');
-    
-    const mockPort = 18888;
-    process.env.OLCRTC_PORT = String(mockPort);
+  // getWebRtcStatus (utils/telemetry.ts) was rewritten alongside the olcrtc-manager removal — it
+  // no longer polls an HTTP API (that whole mechanism is gone), it checks the olcrtc-agent-srv
+  // binary's presence on disk and, when present, counts running olcrtc-agent-srv@* systemd units
+  // via `systemctl list-units`. Only the binary-presence branch (not_installed) is meaningfully
+  // testable cross-platform here — `systemctl` doesn't exist on a non-Linux dev/CI box, so the
+  // running-count branching (nominal/no_active_tunnels) isn't exercised by this suite, same as
+  // other systemctl-touching code paths elsewhere in this file that only run for real under
+  // `NODE_ENV !== 'test'` on an actual Linux node.
+  await t.test('WebRTC status check logic (olcrtc-agent-srv binary presence)', async (t) => {
     process.env.TEST_WEBRTC_CHECK = 'true';
 
-    let mockResponse: any = {};
-    let shouldFail = false;
-
-    const mockServer = http.createServer((req, res) => {
-      if (shouldFail) {
-        req.destroy();
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(mockResponse));
-    });
-
-    await new Promise<void>((resolve) => mockServer.listen(mockPort, resolve));
-
     t.after(async () => {
-      mockServer.close();
-      delete process.env.OLCRTC_PORT;
       delete process.env.TEST_WEBRTC_CHECK;
-      // Не оставляем фиктивный бинарник olcrtc-manager на диске между блоками тестов
-      await fs.unlink(tempOlcrtcManagerPath).catch(() => {});
+      await fs.unlink(tempOlcrtcAgentSrvPath).catch(() => {});
     });
 
     // Гарантируем отсутствие бинарника на диске (не полагаемся на порядок предыдущих тестов)
-    await fs.unlink(tempOlcrtcManagerPath).catch(() => {});
+    await fs.unlink(tempOlcrtcAgentSrvPath).catch(() => {});
 
-    await t.test('Should return not_installed if olcrtc-manager binary is not present on disk', (t, done) => {
-      shouldFail = true;
+    await t.test('Should return not_installed if olcrtc-agent-srv binary is not present on disk', (t, done) => {
       const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
       stream.on('data', (data: any) => {
         try {
           assert.strictEqual(data.webrtcStatus, 'not_installed');
-          stream.destroy();
-          done();
-        } catch (err) {
-          stream.destroy();
-          done(err);
-        }
-      });
-      stream.on('error', () => {});
-    });
-
-    // Бинарник теперь "установлен" (файл существует), но панель недоступна/не отвечает
-    await fs.mkdir(path.dirname(tempOlcrtcManagerPath), { recursive: true });
-    await fs.writeFile(tempOlcrtcManagerPath, '');
-
-    await t.test('Should return unavailable if binary exists but server does not respond or times out', (t, done) => {
-      shouldFail = true;
-      const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
-      stream.on('data', (data: any) => {
-        try {
-          assert.strictEqual(data.webrtcStatus, 'unavailable');
-          stream.destroy();
-          done();
-        } catch (err) {
-          stream.destroy();
-          done(err);
-        }
-      });
-      stream.on('error', () => {});
-    });
-
-    // Явно поддерживаем существование бинарника для succes-path тестов ниже (не полагаемся на порядок)
-    await fs.writeFile(tempOlcrtcManagerPath, '');
-
-    await t.test('Should return no_active_tunnels if running_count is 0 but there are active users', (t, done) => {
-      shouldFail = false;
-      mockResponse = { running_count: 0, active_users: 3 };
-      const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
-      stream.on('data', (data: any) => {
-        try {
-          assert.strictEqual(data.webrtcStatus, 'no_active_tunnels');
-          stream.destroy();
-          done();
-        } catch (err) {
-          stream.destroy();
-          done(err);
-        }
-      });
-      stream.on('error', () => {});
-    });
-
-    // Явно поддерживаем существование бинарника (не полагаемся на порядок)
-    await fs.writeFile(tempOlcrtcManagerPath, '');
-
-    await t.test('Should return nominal if running_count > 0 or there are no active users', (t, done) => {
-      shouldFail = false;
-      mockResponse = { running_count: 5, active_users: 3 };
-      const stream = client.streamTelemetry({ orchestratorSecret: 'test-secret-123' });
-      stream.on('data', (data: any) => {
-        try {
-          assert.strictEqual(data.webrtcStatus, 'nominal');
           stream.destroy();
           done();
         } catch (err) {

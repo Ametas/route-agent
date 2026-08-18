@@ -11,12 +11,10 @@ fi
 
 # Дефолтные порты для закрытия (если не переданы другие)
 PORT="8081"
-OLCRTC_PORT="8888"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --port) PORT="$2"; shift ;;
-        --olcrtc-port) OLCRTC_PORT="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -30,8 +28,14 @@ systemctl disable route-agent || true
 systemctl stop sing-box || true
 systemctl disable sing-box || true
 
-systemctl stop olcrtc || true
-systemctl disable olcrtc || true
+# olcrtc-agent-srv (план `olcrtc-redesign.md`) — one templated unit INSTANCE per user, not a single
+# fixed service name; stop/disable every currently-running instance before removing the template
+# unit file itself below. No UFW port to close here — the new design never opens one (control is
+# entirely gRPC + local systemd, no admin HTTP surface, unlike the old olcrtc-manager it replaces).
+for unit in $(systemctl list-units --type=service --all --no-legend 'olcrtc-agent-srv@*' 2>/dev/null | awk '{print $1}'); do
+  systemctl stop "$unit" || true
+  systemctl disable "$unit" || true
+done
 
 systemctl stop caddy || true
 systemctl disable caddy || true
@@ -52,10 +56,8 @@ if command -v ufw &> /dev/null; then
   ufw delete allow "$PORT"/tcp || true
   ufw delete allow "$PORT"/udp || true
 
-  echo "🔒 Closing WebRTC Olcrtc port $OLCRTC_PORT..."
-  ufw delete allow "$OLCRTC_PORT" || true
-  ufw delete allow "$OLCRTC_PORT"/tcp || true
-  ufw delete allow "$OLCRTC_PORT"/udp || true
+  # No olcrtc port to close — the new olcrtc-agent-srv design (план `olcrtc-redesign.md`) never
+  # opens a public port at all, unlike the old olcrtc-manager it replaces.
 
   echo "🔄 Reloading UFW rules..."
   ufw reload || true
@@ -69,7 +71,7 @@ rm -f /etc/sudoers.d/route-agent-ufw
 echo "📂 Purging systemd unit configurations..."
 rm -f /etc/systemd/system/route-agent.service
 rm -f /etc/systemd/system/sing-box.service
-rm -f /etc/systemd/system/olcrtc.service
+rm -f /etc/systemd/system/olcrtc-agent-srv@.service
 
 # Перезагружаем менеджер systemd, чтобы применить удаление юнитов
 systemctl daemon-reload
@@ -81,11 +83,11 @@ rm -rf /etc/route-agent
 rm -rf /etc/sing-box
 rm -rf /etc/caddy
 rm -rf /etc/amnezia/amneziawg
+rm -rf /etc/olcrtc-agent-srv
 rm -rf /var/www/decoy
 rm -f /usr/local/bin/sing-box
-rm -f /usr/local/bin/olcrtc
-rm -f /usr/local/bin/olcrtc-manager
-rm -f /tmp/sing-box.download /tmp/olcrtc.download /tmp/olcrtc-manager.download
+rm -f /usr/local/bin/olcrtc-agent-srv
+rm -f /tmp/sing-box.download
 
 # 5. Удаление Caddy и его ключей (если Caddy был установлен)
 if command -v caddy &> /dev/null; then

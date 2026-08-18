@@ -1,7 +1,6 @@
 import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import * as fs from 'fs/promises';
 import path from 'path';
-import http from 'http';
 import pino from 'pino';
 import { config } from '../config.js';
 import { execAsync } from '../utils/exec.js';
@@ -17,37 +16,6 @@ const logger = pino({ level: 'info' });
 function sanitizeConfigInput(val: string | number | undefined | null): string {
   if (val === undefined || val === null) return '';
   return String(val).replace(/[\r\n]/g, '').trim();
-}
-
-function getJson(url: string, timeoutMs = 3000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
-      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-        reject(new Error(`Status Code: ${res.statusCode}`));
-        return;
-      }
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      reject(err);
-    });
-
-    req.setTimeout(timeoutMs, () => {
-      req.destroy();
-      reject(new Error('Timeout'));
-    });
-  });
 }
 
 /**
@@ -284,126 +252,10 @@ export async function getManagedCertificateHandler(
   }
 }
 
-/**
- * RPC Обработчик ConfigureOlcrtc (настройка и управление службой olcrtc-manager)
- */
-export async function configureOlcrtcHandler(
-  call: ServerUnaryCall<any, any>,
-  callback: sendUnaryData<any>
-): Promise<void> {
-  const secretHeader = extractSecretFromMetadata(call);
-  if (!verifySecret(secretHeader)) {
-    logger.warn('Unauthorized ConfigureOlcrtc request blocked');
-    return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
-  }
-
-  const { enabled, user, password, port } = call.request;
-
-  try {
-    const servicePort = port || 8888;
-    const managerBin = config.OLCRTC_MANAGER_BINARY_PATH || '/usr/local/bin/olcrtc-manager';
-
-    if (!enabled) {
-      if (process.env.NODE_ENV !== 'test') {
-        try {
-          await execAsync('systemctl stop olcrtc || true');
-          await execAsync('systemctl disable olcrtc || true');
-        } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed to stop/disable olcrtc service');
-        }
-      }
-      return callback(null, {
-        success: true,
-        message: 'olcrtc service successfully disabled and stopped.'
-      });
-    }
-
-    if (process.env.NODE_ENV !== 'test') {
-      const managerExists = await fs.stat(managerBin).then(() => true).catch(() => false);
-      if (!managerExists) {
-        logger.warn({ path: managerBin }, 'olcrtc-manager binary is missing when configuring service');
-      }
-    }
-
-    const serviceContent = `[Unit]
-Description=OpenLibreCommunity WebRTC Manager Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=${managerBin} --port ${servicePort}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`;
-
-    const servicePath = '/etc/systemd/system/olcrtc.service';
-    await fs.mkdir(path.dirname(servicePath), { recursive: true }).catch(() => {});
-    await fs.writeFile(servicePath, serviceContent, 'utf-8');
-
-    if (process.env.NODE_ENV !== 'test') {
-      await execAsync('systemctl daemon-reload');
-      await execAsync('systemctl enable --now olcrtc');
-
-      // Открываем порт в UFW
-      if (await isUfwInstalled()) {
-        try {
-          await execAsync(`sudo ufw allow ${servicePort}`);
-          await execAsync('sudo ufw reload');
-        } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed to configure UFW port for olcrtc service');
-        }
-      }
-
-      if (user && password) {
-        const authMeUrl = `http://127.0.0.1:${servicePort}/api/auth/me`;
-        const setupUrl = `http://127.0.0.1:${servicePort}/api/auth/setup`;
-
-        for (let i = 0; i < 10; i++) {
-          try {
-            await getJson(authMeUrl, 1000);
-            break;
-          } catch {
-            await new Promise((res) => setTimeout(res, 500));
-          }
-        }
-
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const reqData = JSON.stringify({ user, password });
-            const req = http.request(setupUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(reqData)
-              }
-            }, (res) => {
-              res.resume();
-              resolve();
-            });
-            req.on('error', reject);
-            req.write(reqData);
-            req.end();
-          });
-        } catch (err: any) {
-          logger.warn({ err: err.message }, 'Failed to POST auth setup to olcrtc-manager');
-        }
-      }
-    }
-
-    return callback(null, {
-      success: true,
-      message: `olcrtc service configured and enabled on port ${servicePort}.`
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    logger.error({ err: msg }, 'Failed to configure Olcrtc service');
-    return callback(null, { success: false, message: `Olcrtc configuration error: ${msg}` });
-  }
-}
+// ConfigureOlcrtc removed — replaced by SyncOlcrtcInstance/DeleteOlcrtcInstance in
+// src/services/olcrtc.service.ts (план `olcrtc-redesign.md`). The third-party Olcrtc_manager admin
+// daemon this handler used to provision (with a public UFW-opened HTTP port and Basic Auth) is no
+// longer part of the architecture at all — see that file's header comment.
 
 /**
  * RPC Обработчик ConfigureAwg (дистанционная настройка и управление L3-интерфейсом AmneziaWG 3.0)

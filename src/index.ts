@@ -9,10 +9,9 @@ import * as fs from 'fs/promises';
 import path from 'path';
 import pino from 'pino';
 import { config } from './config.js';
-import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, configureOlcrtcHandler, getManagedCertificateHandler } from './services/config.service.js';
+import { applyConfigHandler, configureCaddyHandler, configureAwgHandler, getManagedCertificateHandler } from './services/config.service.js';
 import {
   uploadSingboxBinaryHandler,
-  uploadOlcrtcBinaryHandler,
   uploadAwgToolsBinaryHandler,
   uploadAwgGoBinaryHandler,
   uploadCaddyBinaryHandler,
@@ -20,6 +19,13 @@ import {
   sanitizeAwgToolsSymlink
 } from './services/binary.service.js';
 import { uploadMeshAwgKernelSourceHandler, configureMeshTunnelHandler } from './services/meshTunnel.service.js';
+import {
+  syncOlcrtcInstanceHandler,
+  deleteOlcrtcInstanceHandler,
+  streamOlcrtcEventsHandler,
+  uploadOlcrtcAgentSrvBinaryHandler,
+  ensureOlcrtcAgentSrvSystemdUnit
+} from './services/olcrtc.service.js';
 import { ensureAwgSystemdUnit } from './services/systemdUnit.service.js';
 import { fixXraySocketPermissions } from './utils/caddy.js';
 import { streamTelemetryHandler, getTelemetryHandler } from './services/telemetry.service.js';
@@ -102,6 +108,7 @@ export async function getGrpcServerCredentials(): Promise<ServerCredentials> {
 export async function startServer(): Promise<Server> {
   await sanitizeAwgToolsSymlink();
   await ensureAwgSystemdUnit();
+  await ensureOlcrtcAgentSrvSystemdUnit();
   await fixXraySocketPermissions();
   startAwgHealthCheckTimer();
   const credentials = await getGrpcServerCredentials();
@@ -120,12 +127,14 @@ export async function startServer(): Promise<Server> {
       getTelemetry: getTelemetryHandler,
       upgradeSingbox: upgradeSingboxHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
-      uploadOlcrtcBinary: uploadOlcrtcBinaryHandler,
+      uploadOlcrtcAgentSrvBinary: uploadOlcrtcAgentSrvBinaryHandler,
       uploadAwgToolsBinary: uploadAwgToolsBinaryHandler,
       uploadAwgGoBinary: uploadAwgGoBinaryHandler,
       uploadCaddyBinary: uploadCaddyBinaryHandler,
       configureCaddy: configureCaddyHandler,
-      configureOlcrtc: configureOlcrtcHandler,
+      syncOlcrtcInstance: syncOlcrtcInstanceHandler,
+      deleteOlcrtcInstance: deleteOlcrtcInstanceHandler,
+      streamOlcrtcEvents: streamOlcrtcEventsHandler,
       configureAwg: configureAwgHandler,
       uploadMeshAwgKernelSource: uploadMeshAwgKernelSourceHandler,
       configureMeshTunnel: configureMeshTunnelHandler,
