@@ -85,6 +85,18 @@ service EgressAgentService {
   // cert courier: orchestrator polls this after DNS-01 issuance, then relays the result to
   // every egress node behind that front via ConfigureCaddy's extra_cert_pem/extra_key_pem)
   rpc GetManagedCertificate (CertificateRequest) returns (CertificateResponse);
+
+  // Unary RPC to fetch per-user traffic deltas from sing-box's OWN local V2Ray-API-compatible
+  // stats service (experimental.v2ray_api, loopback-only — see egressSingbox.ts's generator and
+  // the tuic/hysteria2 inbound `users[].name` field, set to our own user uuid so sing-box's
+  // `user>>>{name}>>>traffic>>>uplink/downlink` counters map back to it directly). Route-agent
+  // reads the currently-applied sing-box config off disk to find the live listen address, dials
+  // it locally, and returns already-parsed per-user deltas — the orchestrator never talks to
+  // sing-box directly, and no new port is exposed publicly anywhere. Watcher v2 "Track B-lite"
+  // (2026-08-19) — a decoy-only, corroboration-gated traffic-anomaly signal for tuic/hy2Sb,
+  // mirroring Track A's Remnawave-bandwidth-stats signal for VLESS/hy2Rw. See watcher's own
+  // CLAUDE.md for the confidence/tier cap this must never exceed.
+  rpc GetSingBoxUserTraffic (SingBoxUserTrafficRequest) returns (SingBoxUserTrafficResponse);
 }
 
 message ConfigPayload {
@@ -385,4 +397,20 @@ message NetworkDiagnosticResponse {
   bool success = 1;
   string message = 2;
   repeated NetworkDiagnosticTargetResult results = 3;
+}
+
+message SingBoxUserTrafficRequest {
+  string orchestrator_secret = 1;
+}
+
+message SingBoxUserTrafficEntry {
+  string user_uuid = 1;
+  int64 uplink_bytes = 2;
+  int64 downlink_bytes = 3;
+}
+
+message SingBoxUserTrafficResponse {
+  bool success = 1;
+  string message = 2;
+  repeated SingBoxUserTrafficEntry entries = 3;
 }

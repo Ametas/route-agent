@@ -1045,6 +1045,63 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  // Watcher v2 "Track B-lite" (2026-08-19) — GetSingBoxUserTraffic RPC. No real sing-box process
+  // is available in this test environment, so these cover exactly what's testable without one:
+  // auth rejection, and the "v2ray_api not configured" / "configured but unreachable" fallback
+  // paths — both of which are the actual common case in production too (most nodes won't have
+  // tuic/hy2Sb configured at all). parseUserTrafficStats itself (the one genuinely interesting
+  // piece of parsing logic) gets its own direct unit coverage further below.
+  await t.test('GetSingBoxUserTraffic should block requests with invalid metadata tokens', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'bad_secret');
+
+    client.getSingBoxUserTraffic({}, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      assert.strictEqual((response.entries ?? []).length, 0);
+      done();
+    });
+  });
+
+  await t.test('GetSingBoxUserTraffic returns success with no entries when sing-box config has no v2ray_api block', async () => {
+    await fs.writeFile(tempConfigPath, JSON.stringify({ log: { level: 'info' } }), 'utf-8');
+
+    await new Promise<void>((resolve, reject) => {
+      client.getSingBoxUserTraffic({}, validMetadata, (err: any, response: any) => {
+        try {
+          assert.ifError(err);
+          assert.strictEqual(response.success, true);
+          assert.strictEqual((response.entries ?? []).length, 0);
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  });
+
+  await t.test('GetSingBoxUserTraffic fails gracefully (not a thrown error) when v2ray_api is configured but unreachable', async () => {
+    await fs.writeFile(
+      tempConfigPath,
+      JSON.stringify({ experimental: { v2ray_api: { listen: '127.0.0.1:1' } } }),
+      'utf-8'
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      client.getSingBoxUserTraffic({}, validMetadata, (err: any, response: any) => {
+        try {
+          assert.ifError(err, 'the RPC itself must always succeed at the transport level');
+          assert.strictEqual(response.success, false);
+          assert.strictEqual((response.entries ?? []).length, 0);
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  });
+
   await t.test('RunNetworkDiagnostic should block requests with invalid metadata tokens', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');
@@ -1646,6 +1703,64 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(await getAwgStatus(), 'inactive');
 
       delete process.env.TEST_AWG_STATUS;
+    });
+  });
+
+  // Watcher v2 "Track B-lite" (2026-08-19) — parseUserTrafficStats is the one genuinely
+  // interesting piece of logic in singboxStats.ts (the RPC-level tests above only cover the
+  // "no v2ray_api configured"/"unreachable" fallback paths, since no real sing-box process is
+  // available here). Pure function, no gRPC/fs involved — direct unit coverage.
+  await t.test('singboxStats.parseUserTrafficStats', async (t) => {
+    const { parseUserTrafficStats } = await import('../src/utils/singboxStats.js');
+
+    await t.test('aggregates uplink and downlink per user from separate stat entries', () => {
+      const result = parseUserTrafficStats([
+        { name: 'user>>>uuid-a>>>traffic>>>uplink', value: 100 },
+        { name: 'user>>>uuid-a>>>traffic>>>downlink', value: 200 },
+        { name: 'user>>>uuid-b>>>traffic>>>uplink', value: 50 },
+      ]);
+
+      assert.deepStrictEqual(result.get('uuid-a'), { uplinkBytes: 100, downlinkBytes: 200 });
+      assert.deepStrictEqual(result.get('uuid-b'), { uplinkBytes: 50, downlinkBytes: 0 });
+      assert.strictEqual(result.size, 2);
+    });
+
+    // The actual real-world wire shape (longs: String) — same class of bug already caught once
+    // on the orchestrator side (int64 arrives as a numeric STRING, never trust the TS type alone).
+    await t.test('handles string-typed int64 values (longs: String wire shape), not just numbers', () => {
+      const result = parseUserTrafficStats([
+        { name: 'user>>>uuid-c>>>traffic>>>uplink', value: '123456789' },
+        { name: 'user>>>uuid-c>>>traffic>>>downlink', value: '987654321' },
+      ]);
+
+      assert.deepStrictEqual(result.get('uuid-c'), { uplinkBytes: 123456789, downlinkBytes: 987654321 });
+    });
+
+    await t.test('ignores stat names that are not the user>>>{name}>>>traffic>>>{direction} shape', () => {
+      const result = parseUserTrafficStats([
+        { name: 'inbound>>>tuic-in-own>>>traffic>>>uplink', value: 999 },
+        { name: 'user>>>uuid-d>>>traffic>>>uplink', value: 10 },
+        { name: 'outbound>>>direct>>>traffic>>>downlink', value: 999 },
+        { name: 'not-even-the-right-shape', value: 999 },
+      ]);
+
+      assert.strictEqual(result.size, 1);
+      assert.deepStrictEqual(result.get('uuid-d'), { uplinkBytes: 10, downlinkBytes: 0 });
+    });
+
+    await t.test('ignores an unparseable (NaN) value without throwing or corrupting other entries', () => {
+      const result = parseUserTrafficStats([
+        { name: 'user>>>uuid-e>>>traffic>>>uplink', value: 'not-a-number' },
+        { name: 'user>>>uuid-f>>>traffic>>>uplink', value: 42 },
+      ]);
+
+      assert.strictEqual(result.has('uuid-e'), false);
+      assert.deepStrictEqual(result.get('uuid-f'), { uplinkBytes: 42, downlinkBytes: 0 });
+    });
+
+    await t.test('returns an empty map for an empty input array', () => {
+      const result = parseUserTrafficStats([]);
+      assert.strictEqual(result.size, 0);
     });
   });
 });
