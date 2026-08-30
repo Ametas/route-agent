@@ -116,6 +116,26 @@ service EgressAgentService {
   //     "real-IP-through-relay" entry in BACKLOG.md).
   // The two halves are therefore analysed separately and never need to be joined.
   rpc GetSingBoxConnections (SingBoxConnectionsRequest) returns (SingBoxConnectionsResponse);
+
+  // Unary RPC that brings the node's source-prefix rate limiting to the requested state and
+  // returns the drop counters observed BEFORE that change.
+  //
+  // Enforced with a tc INGRESS policer, not an egress shaper: a mark on an incoming packet does
+  // not carry over to the outgoing socket (sing-box terminates the connection and opens a new one
+  // to the destination — which is exactly why it has its own routing_mark). So a source-based
+  // limit applies to the "client -> us" leg, and that is enough: what a subscriber cannot push
+  // into us, it cannot push onward either.
+  //
+  // The drops are half the point, not a side effect. Measured on a live kernel under one and the
+  // same policer: cooperative TCP produced 122 drops in six seconds, a non-cooperative UDP flood
+  // produced 1,791,515 (99.76% of what it sent, while still sending at full speed). Four orders of
+  // magnitude apart — "keeps hammering despite loss" separates a flood from a large download by
+  // BEHAVIOUR rather than volume, and that can only be learned by applying back-pressure.
+  //
+  // Counters are read before re-applying because rebuilding the filters resets them. The agent
+  // therefore skips the rebuild entirely when the list, rate and burst are unchanged — otherwise
+  // every delivery would erase the very evidence the escalation decision rests on.
+  rpc ApplyTrafficThrottle (TrafficThrottleRequest) returns (TrafficThrottleResponse);
 }
 
 message ConfigPayload {
@@ -468,5 +488,35 @@ message SingBoxConnectionsResponse {
   string message = 2;
   repeated SingBoxConnection connections = 3;
 }
+
+message TrafficThrottleRequest {
+  string orchestrator_secret = 1;
+  // Source prefixes in CIDR form. An empty list clears the limit entirely.
+  repeated string prefixes = 2;
+  // tc rate spec, e.g. "8mbit".
+  string rate = 3;
+  // tc burst spec, e.g. "500k". Load-bearing, not a detail: measured on a live kernel, the same
+  // rate of 8mbit delivered between 4 and 11 Mbit/s of real TCP goodput depending on this value.
+  // Calibrate it on a real node — a veth pair has near-zero RTT and does not represent a real path.
+  string burst = 4;
+}
+
+message TrafficThrottleCounter {
+  string prefix = 1;
+  int64 sent_bytes = 2;
+  int64 sent_packets = 3;
+  int64 dropped_packets = 4;
+}
+
+message TrafficThrottleResponse {
+  bool success = 1;
+  string message = 2;
+  // False when the requested state already matched and the filters were left alone.
+  bool changed = 3;
+  int32 applied = 4;
+  // Read BEFORE any change, so they describe the period since the previous rebuild.
+  repeated TrafficThrottleCounter counters = 5;
+}
+
 
 
