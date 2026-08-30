@@ -116,24 +116,6 @@ service EgressAgentService {
   //     "real-IP-through-relay" entry in BACKLOG.md).
   // The two halves are therefore analysed separately and never need to be joined.
   rpc GetSingBoxConnections (SingBoxConnectionsRequest) returns (SingBoxConnectionsResponse);
-
-  // Unary RPC that writes the local rule-set file listing throttled source prefixes.
-  //
-  // A LOCAL file rather than a remote rule-set fetched by sing-box itself, deliberately:
-  // `RemoteRuleSet.StartContext` returns an error when the initial download fails and nothing is
-  // cached, and that error aborts sing-box startup — which would make the orchestrator a hard
-  // dependency of every node at boot, turning one outage of ours into a fleet-wide one.
-  // `LocalRuleSet` watches its file (fswatch) and reloads it on its own, so the list still changes
-  // hot, with no config reload and no dropped connections, and delivery rides the already
-  // mTLS-authenticated channel instead of an open HTTP fetch.
-  //
-  // The path is owned by route-agent, not carried in this message: creating files at a path named
-  // by an incoming document is a bad habit even on a trusted channel. Both sides simply know the
-  // same name, exactly as they both know this .proto.
-  //
-  // The agent skips the write when the content is byte-identical to what is already there —
-  // fswatch reloads on every write, so rewriting the same list would churn rule reloads for free.
-  rpc ApplyThrottledRuleSet (ThrottledRuleSetRequest) returns (ThrottledRuleSetResponse);
 }
 
 message ConfigPayload {
@@ -485,21 +467,6 @@ message SingBoxConnectionsResponse {
   bool success = 1;
   string message = 2;
   repeated SingBoxConnection connections = 3;
-}
-
-message ThrottledRuleSetRequest {
-  string orchestrator_secret = 1;
-  // Whole rule-set document as JSON. Must carry at least one rule: sing-box rejects an empty set,
-  // so "nothing is throttled" is expressed by a rule that can never match rather than by an empty
-  // list (see the orchestrator's buildThrottledRuleSet).
-  string content_json = 2;
-}
-
-message ThrottledRuleSetResponse {
-  bool success = 1;
-  string message = 2;
-  // False when the content already matched and the file was left untouched.
-  bool changed = 3;
 }
 
 

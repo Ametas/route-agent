@@ -8,7 +8,6 @@ import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../mi
 import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary, loadCaddyDnsProviderEnv } from '../utils/caddy.js';
 import { getCaddyCertPaths } from '../utils/certStorage.js';
 import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
-import { ensureThrottledRuleSetFile } from '../utils/throttledRuleSet.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
 
@@ -36,13 +35,6 @@ export async function applyConfigHandler(
   try {
     const rawConfig = call.request.configJson || call.request.config_json;
     const configObj = JSON.parse(rawConfig);
-
-    // ПЕРЕД проверкой, а не после. Конфиг ссылается на локальный rule-set со списком задушенных
-    // префиксов, а sing-box читает такой файл при создании и отвергает конфиг, если файла нет —
-    // то есть `sing-box check` не прошёл бы, применение откатилось, и нода молча осталась бы на
-    // старом конфиге. Порядком деплоя это не лечится: сам по себе файл появился бы только при
-    // первом вердикте о шейпинге, которого может не случиться никогда.
-    await ensureThrottledRuleSetFile();
 
     const syntaxCheck = await validateSingBoxConfig(configObj);
     
