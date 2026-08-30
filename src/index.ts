@@ -36,6 +36,7 @@ import { runNetworkDiagnosticHandler } from './services/networkDiagnostic.servic
 import { computeProtoContractHash } from './services/protoContract.service.js';
 import { getSingBoxUserTrafficHandler } from './services/singboxStats.service.js';
 import { getSingBoxConnectionsHandler } from './services/singboxConnections.service.js';
+import { applyThrottledRuleSetHandler } from './services/throttledRuleSet.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -146,7 +147,8 @@ export async function startServer(): Promise<Server> {
       runNetworkDiagnostic: runNetworkDiagnosticHandler,
       getManagedCertificate: getManagedCertificateHandler,
       getSingBoxUserTraffic: getSingBoxUserTrafficHandler,
-      getSingBoxConnections: getSingBoxConnectionsHandler
+      getSingBoxConnections: getSingBoxConnectionsHandler,
+      applyThrottledRuleSet: applyThrottledRuleSetHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);
