@@ -35,6 +35,7 @@ import { selfUpdateHandler, getAgentInfoHandler } from './services/system.servic
 import { runNetworkDiagnosticHandler } from './services/networkDiagnostic.service.js';
 import { computeProtoContractHash } from './services/protoContract.service.js';
 import { getSingBoxUserTrafficHandler } from './services/singboxStats.service.js';
+import { getSingBoxConnectionsHandler } from './services/singboxConnections.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -144,7 +145,8 @@ export async function startServer(): Promise<Server> {
       getAgentInfo: getAgentInfoHandler,
       runNetworkDiagnostic: runNetworkDiagnosticHandler,
       getManagedCertificate: getManagedCertificateHandler,
-      getSingBoxUserTraffic: getSingBoxUserTrafficHandler
+      getSingBoxUserTraffic: getSingBoxUserTrafficHandler,
+      getSingBoxConnections: getSingBoxConnectionsHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);
