@@ -97,6 +97,25 @@ service EgressAgentService {
   // mirroring Track A's Remnawave-bandwidth-stats signal for VLESS/hy2Rw. See watcher's own
   // CLAUDE.md for the confidence/tier cap this must never exceed.
   rpc GetSingBoxUserTraffic (SingBoxUserTrafficRequest) returns (SingBoxUserTrafficResponse);
+
+  // Unary RPC to fetch per-connection records from sing-box's OWN local Clash API
+  // (experimental.clash_api, loopback-only — see shared/utils/clashApi.ts for why this replaced
+  // the previous v2ray_api channel: `with_v2ray_api` is absent from official sing-box release
+  // builds, so a config carrying that block failed `sing-box check` outright).
+  //
+  // Route-agent reads the currently-applied sing-box config off disk to find the live
+  // external_controller address and secret, dials it locally and returns already-parsed records —
+  // the orchestrator never talks to sing-box directly and no new port is exposed publicly.
+  //
+  // ONE RPC serves BOTH node kinds, because the same agent runs on both. Which fields come back
+  // populated differs, and that difference is the point:
+  //   - egress node: `user` is set (tuic/hy2 inbounds put the authenticated user into
+  //     metadata.User) and `destination_*` is the real target;
+  //   - Xeon front: `user` is EMPTY — a blind SNI relay authenticates nobody — but `source_ip` is
+  //     the real client address, which the egress side can never see after the relay (see the
+  //     "real-IP-through-relay" entry in BACKLOG.md).
+  // The two halves are therefore analysed separately and never need to be joined.
+  rpc GetSingBoxConnections (SingBoxConnectionsRequest) returns (SingBoxConnectionsResponse);
 }
 
 message ConfigPayload {
@@ -414,3 +433,39 @@ message SingBoxUserTrafficResponse {
   string message = 2;
   repeated SingBoxUserTrafficEntry entries = 3;
 }
+
+message SingBoxConnectionsRequest {
+  string orchestrator_secret = 1;
+}
+
+// One record per connection as sing-box's Clash API reports it. Both live and recently-closed
+// connections are included (the Clash API keeps a closed-connection buffer), so short flows are
+// not lost between two polls of a periodic sweep.
+message SingBoxConnection {
+  // Authenticated inbound user. EMPTY on a Xeon front by design — see the RPC's own comment.
+  string user = 1;
+  // Real peer address as seen by THIS node. On a front that is the client; on an egress node
+  // behind the ring it is the front, not the client.
+  string source_ip = 2;
+  string destination_ip = 3;
+  // Sniffed destination domain when known; empty when the connection was routed by address alone.
+  string destination_domain = 4;
+  uint32 destination_port = 5;
+  // Bytes as counted for THIS connection. Upload is what the peer sent us (the subscriber's
+  // upload); download is what we sent back. Keeping them apart is load-bearing: a flood source
+  // uploads, a large legitimate download does not.
+  int64 upload_bytes = 6;
+  int64 download_bytes = 7;
+  string network = 8;
+  string inbound_tag = 9;
+  int64 started_at_unix_ms = 10;
+  // True for a record taken from the closed-connection buffer rather than the live set.
+  bool closed = 11;
+}
+
+message SingBoxConnectionsResponse {
+  bool success = 1;
+  string message = 2;
+  repeated SingBoxConnection connections = 3;
+}
+
