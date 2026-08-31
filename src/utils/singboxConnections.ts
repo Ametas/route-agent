@@ -23,6 +23,13 @@ const logger = pino({ level: 'info' });
  */
 
 export interface SingBoxConnectionRecord {
+  /**
+   * Идентификатор соединения из Clash API. Наружу по gRPC не уезжает — он нужен пер-юзерным
+   * счётчикам (utils/singboxStats.ts), которые считают приращение по каждому соединению между
+   * проходами. Без стабильного ключа отличить «то же соединение накачало ещё» от «появилось новое»
+   * невозможно, а на этом различии стоит весь подсчёт дельты.
+   */
+  id: string;
   user: string;
   sourceIp: string;
   destinationIp: string;
@@ -120,6 +127,7 @@ export function parseClashConnections(payload: unknown, closed: boolean): SingBo
   for (const raw of list as RawClashConnection[]) {
     const meta = raw?.metadata ?? {};
     records.push({
+      id: asString(raw?.id),
       user: asString(meta.user),
       sourceIp: asString(meta.sourceIP),
       destinationIp: asString(meta.destinationIP),

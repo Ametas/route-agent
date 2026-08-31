@@ -1,38 +1,24 @@
-import * as fs from 'fs/promises';
-import path from 'path';
-import {
-  credentials,
-  loadPackageDefinition,
-  Client as GrpcClient,
-} from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
-import pino from 'pino';
-import { config } from '../config.js';
+import { readClashApiEndpoint, fetchConnections, type SingBoxConnectionRecord } from './singboxConnections.js';
 
-const logger = pino({ level: 'info' });
-
-// Separate from proto/agent.proto's own protoLoader.loadSync call in src/index.ts — this is a
-// DIFFERENT gRPC target (sing-box's own local stats service, not our orchestrator<->agent
-// contract). Loaded lazily/once, not at module-import top level like agent.proto, since this repo
-// might run on a node with no tuic/hy2Sb configured at all (no v2ray_api listener to ever call).
-const STATS_PROTO_PATH = path.resolve(process.cwd(), 'proto/singbox-stats.proto');
-let statsPackageCache: any = null;
-
-function loadStatsPackage(): any {
-  if (statsPackageCache) return statsPackageCache;
-  // `longs: String` — same real gotcha already hit once on the orchestrator side (int64 `value`
-  // arrives as a numeric STRING off the wire, not a number; parseUserTrafficStats below always
-  // Number(...)s it, never trusts the TS type alone).
-  const packageDefinition = protoLoader.loadSync(STATS_PROTO_PATH, {
-    keepCase: false,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true,
-  });
-  statsPackageCache = loadPackageDefinition(packageDefinition) as any;
-  return statsPackageCache;
-}
+/**
+ * Пер-юзерные счётчики трафика sing-box поверх Clash API (2026-09-01).
+ *
+ * **Что здесь было раньше и почему это молча сломалось.** Модуль ходил в `experimental.v2ray_api`
+ * по gRPC. Оркестратор перестал эмитить этот блок (официальные сборки sing-box собираются без
+ * `with_v2ray_api`, и конфиг с ним не проходит даже `sing-box check`), но эта половина за ним не
+ * пошла: она продолжала искать в применённом конфиге `experimental.v2ray_api.listen`, не находила
+ * и отвечала «не настроено» — успешным ответом с пустым списком. То есть оркестратор каждые три
+ * минуты видел успешный проход, в котором ни у кого нет трафика. Ни ошибки, ни алерта. Подсистема
+ * выглядела рабочей и не работала.
+ *
+ * **Почему дельту приходится считать здесь.** v2ray_api отдавал приращение — его счётчики
+ * обнулялись при чтении. Оркестратор на это опирается: он берёт присланное число как трафик за
+ * ОДИН тик свипа и сравнивает с порогом всплеска. Clash API так не умеет, он отдаёт абсолютные
+ * байты по каждому живому и недавно закрытому соединению. Отдать их как есть значило бы, что порог
+ * всплеска начнёт срабатывать на накопленной сумме, а не на скорости — то есть на любом
+ * пользователе, который просто долго сидит. Поэтому приращение считается тут, а контракт RPC
+ * остаётся прежним.
+ */
 
 export interface SingBoxUserTrafficDelta {
   userUuid: string;
@@ -40,90 +26,104 @@ export interface SingBoxUserTrafficDelta {
   downlinkBytes: number;
 }
 
-/**
- * Reads the CURRENTLY-APPLIED sing-box config off disk (the same file atomicApplyAndReload in
- * utils/singbox.ts writes) and extracts `experimental.v2ray_api.listen` — deliberately not a
- * hardcoded/env-configured port shared between this repo and route-orchestrator: the port is
- * whatever the orchestrator's egressSingbox.ts generator chose for THIS node, and route-agent
- * already has the exact same config file locally as the single source of truth for it. Returns
- * null (not throw) when the block is missing — a node with no tuic/hy2Sb configured at all
- * legitimately never gets a v2ray_api listener.
- */
-export async function readLiveV2RayApiListenAddress(
-  configPath: string = config.SINGBOX_CONFIG_PATH
-): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(configPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    const listen = parsed?.experimental?.v2ray_api?.listen;
-    return typeof listen === 'string' && listen.trim() !== '' ? listen.trim() : null;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.debug({ err: msg }, 'Could not read live sing-box config to resolve v2ray_api listen address');
-    return null;
-  }
+/** Абсолютные счётчики одного соединения на момент прошлого прохода. */
+interface ConnectionTotals {
+  upload: number;
+  download: number;
 }
 
 /**
- * Stat names sing-box emits follow the same `user>>>{name}>>>traffic>>>uplink`/`downlink`
- * convention as upstream v2ray-core/xray-core — see stats.go on their side. `{name}` is exactly
- * the tuic/hysteria2 inbound `users[].name` value egressSingbox.ts sets to our own user uuid, so
- * no separate id-resolution step is needed here (unlike Remnawave's numeric userId elsewhere in
- * this project) — the name IS the uuid already.
+ * Предохранитель от роста памяти. На живой ноде число соединений в двух наборах Clash API
+ * (живые + буфер завершённых) на порядки меньше, так что это не рабочий предел, а потолок на
+ * случай, если что-то пойдёт не так.
  */
-export function parseUserTrafficStats(stats: { name: string; value: unknown }[]): Map<string, { uplinkBytes: number; downlinkBytes: number }> {
-  const byUser = new Map<string, { uplinkBytes: number; downlinkBytes: number }>();
+const MAX_TRACKED_CONNECTIONS = 100_000;
 
-  for (const stat of stats) {
-    const parts = stat.name.split('>>>');
-    if (parts.length !== 4 || parts[0] !== 'user' || parts[2] !== 'traffic') continue;
-    const userUuid = parts[1];
-    const direction = parts[3];
-    if (direction !== 'uplink' && direction !== 'downlink') continue;
+let lastTotals = new Map<string, ConnectionTotals>();
 
-    const value = Number(stat.value);
-    if (Number.isNaN(value)) continue;
+/**
+ * Был ли уже хоть один проход. До него базовой линии нет: соединения, открытые ДО старта агента,
+ * приходят с уже накопленными байтами, и посчитать их как приращение за один тик значило бы
+ * отрапортовать гигабайты за три минуты — ровно ложный всплеск на ровном месте.
+ */
+let primed = false;
 
-    const entry = byUser.get(userUuid) ?? { uplinkBytes: 0, downlinkBytes: 0 };
-    if (direction === 'uplink') entry.uplinkBytes += value;
-    else entry.downlinkBytes += value;
-    byUser.set(userUuid, entry);
+/**
+ * Считает приращение по каждому пользователю между двумя проходами.
+ *
+ * Чистая функция ради тестов: вся логика подсчёта здесь, вокруг остаётся только сеть.
+ *
+ * @param previous абсолютные счётчики с прошлого прохода
+ * @param isFirstPass на первом проходе возвращает нулевые дельты и только запоминает базовую линию
+ */
+export function computeUserTrafficDeltas(
+  records: SingBoxConnectionRecord[],
+  previous: Map<string, ConnectionTotals>,
+  isFirstPass: boolean
+): { deltas: SingBoxUserTrafficDelta[]; next: Map<string, ConnectionTotals> } {
+  const next = new Map<string, ConnectionTotals>();
+  const perUser = new Map<string, { uplinkBytes: number; downlinkBytes: number }>();
+
+  for (const record of records) {
+    // Без идентификатора нельзя связать запись с прошлым проходом, без пользователя — не к кому
+    // отнести трафик. И то, и другое — отбраковка, а не повод считать с нуля: посчитать с нуля
+    // здесь означало бы каждый проход заново записывать всю историю соединения как приращение.
+    if (record.id === '' || record.user === '') continue;
+
+    // Запоминаем ВСЁ, что видели в этом проходе, включая завершённые. Забывать закрытое сразу
+    // нельзя: Clash отдаёт буфер завершённых несколько проходов подряд, и забытое соединение на
+    // следующем проходе выглядело бы новым — его полные байты посчитались бы ещё раз. Записи,
+    // которых в этом проходе не было, просто не попадают в `next` и тем самым отпускаются.
+    if (next.size < MAX_TRACKED_CONNECTIONS) {
+      next.set(record.id, { upload: record.uploadBytes, download: record.downloadBytes });
+    }
+
+    if (isFirstPass) continue;
+
+    const prev = previous.get(record.id);
+    // Незнакомое соединение — целиком новое, его байты и есть приращение.
+    const prevUpload = prev?.upload ?? 0;
+    const prevDownload = prev?.download ?? 0;
+
+    // Отрицательного приращения быть не должно, но если счётчик уехал вниз (перезапуск sing-box с
+    // переиспользованным идентификатором), ноль честнее отрицательного числа, которое оркестратор
+    // вычтет из дневного накопителя.
+    const up = Math.max(0, record.uploadBytes - prevUpload);
+    const down = Math.max(0, record.downloadBytes - prevDownload);
+    if (up === 0 && down === 0) continue;
+
+    const acc = perUser.get(record.user) ?? { uplinkBytes: 0, downlinkBytes: 0 };
+    acc.uplinkBytes += up;
+    acc.downlinkBytes += down;
+    perUser.set(record.user, acc);
   }
 
-  return byUser;
+  const deltas = Array.from(perUser, ([userUuid, bytes]) => ({ userUuid, ...bytes }));
+  return { deltas, next };
+}
+
+/** Сбрасывает накопленное состояние. Только для тестов — в рантайме звать нечего. */
+export function resetTrafficDeltaState(): void {
+  lastTotals = new Map();
+  primed = false;
 }
 
 /**
- * Dials sing-box's own local StatsService (loopback-only, no auth — see readLiveV2RayApiListenAddress's
- * doc comment for why that's an acceptable posture here) and returns per-user traffic DELTAS since
- * the last successful query (`reset: true` — sing-box zeroes each matched counter atomically as
- * part of returning its value, so there's no cumulative state to track on either side; a missed
- * poll just means that window's bytes are lost, the same "probabilistic, not transactional" posture
- * this whole telemetry surface already has elsewhere in this project).
+ * Приращение трафика по пользователям с прошлого вызова.
+ *
+ * Возвращает `null`, когда Clash API на ноде не настроен — это не ошибка, а нормальное состояние
+ * ноды, на которую ещё не приезжал конфиг. Вызывающий отличает этот случай от пустого списка сам:
+ * `null` — «спросить негде», `[]` — «спросили, приращения нет».
  */
-export async function queryUserTrafficDeltas(listenAddress: string): Promise<SingBoxUserTrafficDelta[]> {
-  const statsPackage = loadStatsPackage();
-  const client = new statsPackage.experimental.v2rayapi.StatsService(
-    listenAddress,
-    credentials.createInsecure()
-  ) as GrpcClient & {
-    queryStats(
-      request: { patterns: string[]; reset: boolean; regexp: boolean },
-      callback: (err: Error | null, response: { stat: { name: string; value: unknown }[] }) => void
-    ): void;
-  };
+export async function queryUserTrafficDeltas(): Promise<SingBoxUserTrafficDelta[] | null> {
+  const endpoint = await readClashApiEndpoint();
+  if (!endpoint) return null;
 
-  try {
-    const response = await new Promise<{ stat: { name: string; value: unknown }[] }>((resolve, reject) => {
-      client.queryStats({ patterns: ['user>>>'], reset: true, regexp: false }, (err, res) => {
-        if (err) reject(err);
-        else resolve(res);
-      });
-    });
+  const records = await fetchConnections(endpoint);
+  const { deltas, next } = computeUserTrafficDeltas(records, lastTotals, !primed);
 
-    const byUser = parseUserTrafficStats(response.stat ?? []);
-    return Array.from(byUser.entries()).map(([userUuid, delta]) => ({ userUuid, ...delta }));
-  } finally {
-    client.close();
-  }
+  lastTotals = next;
+  primed = true;
+
+  return deltas;
 }

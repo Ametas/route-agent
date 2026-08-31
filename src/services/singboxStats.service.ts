@@ -1,7 +1,7 @@
 import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import pino from 'pino';
 import { authenticateCall } from '../middleware/auth.js';
-import { readLiveV2RayApiListenAddress, queryUserTrafficDeltas } from '../utils/singboxStats.js';
+import { queryUserTrafficDeltas } from '../utils/singboxStats.js';
 
 const logger = pino({ level: 'info' });
 
@@ -21,14 +21,18 @@ export async function getSingBoxUserTrafficHandler(
   }
 
   try {
-    const listenAddress = await readLiveV2RayApiListenAddress();
-    if (!listenAddress) {
-      // Not an error — a node with no tuic/hy2Sb configured (or not yet re-pushed with the
-      // v2ray_api block) legitimately has nothing to report here.
-      return callback(null, { success: true, message: 'v2ray_api not configured on this node', entries: [] });
+    const deltas = await queryUserTrafficDeltas();
+    if (deltas === null) {
+      // Не ошибка: на ноду ещё не приезжал конфиг с блоком clash_api, спрашивать негде.
+      //
+      // Отвечаем УСПЕХОМ с пустым списком — и это ровно та форма, из-за которой предыдущая версия
+      // модуля молча притворялась рабочей полгода: она попадала сюда ВСЕГДА, потому что искала
+      // блок, который оркестратор давно перестал эмитить. Сама форма ответа правильная (нода без
+      // конфига — не авария), опасна она тем, что неотличима от настоящей поломки. Поэтому текст
+      // сообщения называет конкретную причину, а не «не настроено»: если это снова начнёт
+      // приходить со всего флота, по строке будет видно, что именно не найдено.
+      return callback(null, { success: true, message: 'clash_api block absent from the applied sing-box config', entries: [] });
     }
-
-    const deltas = await queryUserTrafficDeltas(listenAddress);
     return callback(null, {
       success: true,
       message: 'OK',

@@ -1054,12 +1054,15 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  // Watcher v2 "Track B-lite" (2026-08-19) — GetSingBoxUserTraffic RPC. No real sing-box process
-  // is available in this test environment, so these cover exactly what's testable without one:
-  // auth rejection, and the "v2ray_api not configured" / "configured but unreachable" fallback
-  // paths — both of which are the actual common case in production too (most nodes won't have
-  // tuic/hy2Sb configured at all). parseUserTrafficStats itself (the one genuinely interesting
-  // piece of parsing logic) gets its own direct unit coverage further below.
+  // Watcher v2 "Track B-lite" — GetSingBoxUserTraffic RPC. Живого sing-box здесь нет, поэтому
+  // покрыто ровно то, что проверяется без него: отказ по токену и две ветки, где спросить нечего
+  // или некого. Сам подсчёт приращения — единственная содержательная логика — живёт в
+  // tests/singboxStats.test.ts.
+  //
+  // 2026-09-01: канал переведён с v2ray_api на Clash API. Прежние тесты этого места писали в
+  // конфиг блок `v2ray_api` и ждали, что агент его найдёт; менять в них имя блока было бы
+  // бессмысленно — они проверяли разбор формата имён статистики v2ray_api, которого больше нет
+  // вовсе. Заменены, а не переименованы.
   await t.test('GetSingBoxUserTraffic should block requests with invalid metadata tokens', (t, done) => {
     const badMetadata = new grpc.Metadata();
     badMetadata.add('x-orchestrator-secret', 'bad_secret');
@@ -1073,7 +1076,7 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  await t.test('GetSingBoxUserTraffic returns success with no entries when sing-box config has no v2ray_api block', async () => {
+  await t.test('GetSingBoxUserTraffic returns success with no entries when the config has no clash_api block', async () => {
     await fs.writeFile(tempConfigPath, JSON.stringify({ log: { level: 'info' } }), 'utf-8');
 
     await new Promise<void>((resolve, reject) => {
@@ -1090,10 +1093,13 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  await t.test('GetSingBoxUserTraffic fails gracefully (not a thrown error) when v2ray_api is configured but unreachable', async () => {
+  await t.test('GetSingBoxUserTraffic fails gracefully (not a thrown error) when clash_api is configured but unreachable', async () => {
+    // Порт 1 гарантированно никем не слушается — это ветка «блок есть, но sing-box не отвечает».
+    // Отличать её от «блока нет» обязательно: первое — авария на ноде, второе — норма для ноды,
+    // на которую ещё не приезжал конфиг.
     await fs.writeFile(
       tempConfigPath,
-      JSON.stringify({ experimental: { v2ray_api: { listen: '127.0.0.1:1' } } }),
+      JSON.stringify({ experimental: { clash_api: { external_controller: '127.0.0.1:1', secret: 'x' } } }),
       'utf-8'
     );
 
@@ -1715,63 +1721,11 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
-  // Watcher v2 "Track B-lite" (2026-08-19) — parseUserTrafficStats is the one genuinely
-  // interesting piece of logic in singboxStats.ts (the RPC-level tests above only cover the
-  // "no v2ray_api configured"/"unreachable" fallback paths, since no real sing-box process is
-  // available here). Pure function, no gRPC/fs involved — direct unit coverage.
-  await t.test('singboxStats.parseUserTrafficStats', async (t) => {
-    const { parseUserTrafficStats } = await import('../src/utils/singboxStats.js');
-
-    await t.test('aggregates uplink and downlink per user from separate stat entries', () => {
-      const result = parseUserTrafficStats([
-        { name: 'user>>>uuid-a>>>traffic>>>uplink', value: 100 },
-        { name: 'user>>>uuid-a>>>traffic>>>downlink', value: 200 },
-        { name: 'user>>>uuid-b>>>traffic>>>uplink', value: 50 },
-      ]);
-
-      assert.deepStrictEqual(result.get('uuid-a'), { uplinkBytes: 100, downlinkBytes: 200 });
-      assert.deepStrictEqual(result.get('uuid-b'), { uplinkBytes: 50, downlinkBytes: 0 });
-      assert.strictEqual(result.size, 2);
-    });
-
-    // The actual real-world wire shape (longs: String) — same class of bug already caught once
-    // on the orchestrator side (int64 arrives as a numeric STRING, never trust the TS type alone).
-    await t.test('handles string-typed int64 values (longs: String wire shape), not just numbers', () => {
-      const result = parseUserTrafficStats([
-        { name: 'user>>>uuid-c>>>traffic>>>uplink', value: '123456789' },
-        { name: 'user>>>uuid-c>>>traffic>>>downlink', value: '987654321' },
-      ]);
-
-      assert.deepStrictEqual(result.get('uuid-c'), { uplinkBytes: 123456789, downlinkBytes: 987654321 });
-    });
-
-    await t.test('ignores stat names that are not the user>>>{name}>>>traffic>>>{direction} shape', () => {
-      const result = parseUserTrafficStats([
-        { name: 'inbound>>>tuic-in-own>>>traffic>>>uplink', value: 999 },
-        { name: 'user>>>uuid-d>>>traffic>>>uplink', value: 10 },
-        { name: 'outbound>>>direct>>>traffic>>>downlink', value: 999 },
-        { name: 'not-even-the-right-shape', value: 999 },
-      ]);
-
-      assert.strictEqual(result.size, 1);
-      assert.deepStrictEqual(result.get('uuid-d'), { uplinkBytes: 10, downlinkBytes: 0 });
-    });
-
-    await t.test('ignores an unparseable (NaN) value without throwing or corrupting other entries', () => {
-      const result = parseUserTrafficStats([
-        { name: 'user>>>uuid-e>>>traffic>>>uplink', value: 'not-a-number' },
-        { name: 'user>>>uuid-f>>>traffic>>>uplink', value: 42 },
-      ]);
-
-      assert.strictEqual(result.has('uuid-e'), false);
-      assert.deepStrictEqual(result.get('uuid-f'), { uplinkBytes: 42, downlinkBytes: 0 });
-    });
-
-    await t.test('returns an empty map for an empty input array', () => {
-      const result = parseUserTrafficStats([]);
-      assert.strictEqual(result.size, 0);
-    });
-  });
+  // Здесь стоял блок тестов singboxStats.parseUserTrafficStats — разбор формата имён статистики
+  // v2ray_api (`user>>>{uuid}>>>traffic>>>{direction}`). Снят 2026-09-01 вместе с самой функцией:
+  // канал переведён на Clash API, где никакого формата имён нет — есть готовые Upload/Download на
+  // соединение. Содержательная логика теперь другая (подсчёт приращения между проходами) и живёт
+  // в отдельном файле tests/singboxStats.test.ts — этому набору она не нужна, она чистая.
 });
 
 
