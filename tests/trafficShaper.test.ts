@@ -90,7 +90,8 @@ filter protocol ipv6 pref 3 u32 chain 0 fh 802::800 order 2048 key ht 802 bkt 0 
 });
 
 describe('сравнение раскладок', () => {
-  const base = { interface: 'eth0', rate: '8mbit', burst: '500k', prefixes: ['a/24', 'b/24'] };
+  const entry = (prefix, rate = '8mbit', burst = '500k') => ({ prefix, rate, burst });
+  const base = { interface: 'eth0', entries: [entry('a/24'), entry('b/24')] };
 
   it('одинаковые раскладки не требуют пересборки', () => {
     // Пересборка ОБНУЛЯЕТ счётчики, а на них держится вся оценка «отступил или продолжает
@@ -102,14 +103,20 @@ describe('сравнение раскладок', () => {
     assert.equal(isSameThrottle(null, base), false);
   });
 
+  it('РАЗНЫЕ потолки у разных префиксов — обязательное свойство: у лестницы две ступени', () => {
+    // Мягкий потолок собирает улики, жёсткий выносится тому, кто сквозь него продолжил ломиться.
+    const twoTiers = { interface: 'eth0', entries: [entry('a/24', '5mbit'), entry('b/24', '1mbit')] };
+    assert.equal(isSameThrottle(twoTiers, twoTiers), true);
+  });
+
   it('смена потолка требует пересборки', () => {
-    assert.equal(isSameThrottle(base, { ...base, rate: '1mbit' }), false);
+    assert.equal(isSameThrottle(base, { ...base, entries: [entry('a/24', '1mbit'), entry('b/24')] }), false);
   });
 
   it('смена burst требует пересборки — это главный параметр, а не мелочь', () => {
     // Измерено: при одном и том же rate 8mbit реально принятое менялось с 4 до 11 Мбит/с в
     // зависимости от burst.
-    assert.equal(isSameThrottle(base, { ...base, burst: '2m' }), false);
+    assert.equal(isSameThrottle(base, { ...base, entries: [entry('a/24', '8mbit', '2m'), entry('b/24')] }), false);
   });
 
   it('смена интерфейса требует пересборки', () => {
@@ -117,10 +124,10 @@ describe('сравнение раскладок', () => {
   });
 
   it('другой ПОРЯДОК префиксов требует пересборки — от него зависит нумерация приоритетов', () => {
-    assert.equal(isSameThrottle(base, { ...base, prefixes: ['b/24', 'a/24'] }), false);
+    assert.equal(isSameThrottle(base, { ...base, entries: [entry('b/24'), entry('a/24')] }), false);
   });
 
   it('добавленный префикс требует пересборки', () => {
-    assert.equal(isSameThrottle(base, { ...base, prefixes: ['a/24', 'b/24', 'c/24'] }), false);
+    assert.equal(isSameThrottle(base, { ...base, entries: [entry('a/24'), entry('b/24'), entry('c/24')] }), false);
   });
 });

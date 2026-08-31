@@ -489,16 +489,25 @@ message SingBoxConnectionsResponse {
   repeated SingBoxConnection connections = 3;
 }
 
-message TrafficThrottleRequest {
-  string orchestrator_secret = 1;
-  // Source prefixes in CIDR form. An empty list clears the limit entirely.
-  repeated string prefixes = 2;
+message TrafficThrottleEntry {
+  // Source prefix in CIDR form.
+  string prefix = 1;
   // tc rate spec, e.g. "8mbit".
-  string rate = 3;
+  string rate = 2;
   // tc burst spec, e.g. "500k". Load-bearing, not a detail: measured on a live kernel, the same
   // rate of 8mbit delivered between 4 and 11 Mbit/s of real TCP goodput depending on this value.
   // Calibrate it on a real node — a veth pair has near-zero RTT and does not represent a real path.
-  string burst = 4;
+  string burst = 3;
+}
+
+message TrafficThrottleRequest {
+  string orchestrator_secret = 1;
+  // Per-prefix, not one ceiling for the whole list: the escalation ladder has two tiers (a soft
+  // ceiling that gathers evidence, a hard one for a source that kept hammering through it), and a
+  // tc policer is configured per filter anyway — so carrying one rate for everything would have
+  // made the executor unable to express what the ladder decides.
+  // An empty list clears the limit entirely.
+  repeated TrafficThrottleEntry entries = 2;
 }
 
 message TrafficThrottleCounter {

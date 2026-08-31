@@ -20,13 +20,18 @@ const logger = pino({ level: 'info' });
  * скорости). Разница в четыре порядка. «Продолжает ломиться, несмотря на потери» отличает флуд от
  * крупной закачки поведением, а не объёмом — и узнать это можно, только приложив обратное давление.
  *
+ * **Потолок задаётся НА ПРЕФИКС.** У лестницы эскалации две ступени: мягкий потолок, под которым
+ * собираются улики, и жёсткий — для того, кто сквозь мягкий продолжил ломиться. Полисер в `tc` и
+ * так настраивается на каждый фильтр отдельно, так что один потолок на весь список сделал бы
+ * исполнителя неспособным выразить то, что решает лестница.
+ *
  * **Почему без iptables.** `tc filter u32` умеет сопоставлять адрес источника сам, так что цепочка
- * с пометками не нужна вовсе: одно правило на префикс, все с одним и тем же действием полисера.
- * Меньше движущихся частей и ничего не трогается в файрволе ноды.
+ * с пометками не нужна вовсе: одно правило на префикс. Меньше движущихся частей, и файрвол ноды не
+ * трогается совсем.
  */
 
 /**
- * Куда агент записывает применённый список. Состояние принадлежит агенту, потому что счётчики
+ * Куда агент записывает применённую раскладку. Состояние принадлежит агенту, потому что счётчики
  * `tc` привязаны к приоритету фильтра, а не к тексту префикса, — сопоставить их обратно можно
  * только зная, что именно применялось.
  */
@@ -35,12 +40,17 @@ const STATE_FILE = '/etc/route-agent/traffic-throttle.json';
 /** Дескриптор ingress-qdisc'а. Значение фиксированное, так его принято адресовать в tc. */
 const INGRESS_HANDLE = 'ffff:';
 
-export interface ThrottleState {
-  interface: string;
+/** Один префикс со своим потолком. */
+export interface ThrottleEntry {
+  prefix: string;
   rate: string;
   burst: string;
+}
+
+export interface ThrottleState {
+  interface: string;
   /** Порядок значим: индекс + 1 — это `prio` фильтра, по которому потом читаются счётчики. */
-  prefixes: string[];
+  entries: ThrottleEntry[];
 }
 
 export interface ThrottleCounter {
@@ -71,11 +81,12 @@ export async function resolveClientFacingInterface(): Promise<string | null> {
  * Разбирает вывод `tc -s filter show`.
  *
  * Отделено от исполнения намеренно: это единственная часть с логикой, и проверять её надо на
- * настоящем выводе ядра, а не на живой ноде. Фикстура в тестах — дословный вывод из опыта в WSL2.
+ * настоящем выводе ядра. Существенно, что каждый фильтр печатает ТРИ строки с одним и тем же
+ * `pref`, и только после третьей идёт строка со счётчиками.
  *
- * Счётчики привязаны к `pref` фильтра, поэтому текст префикса приходит извне, из сохранённого
- * состояния: в самом выводе адрес лежит шестнадцатеричной маской, и восстанавливать из неё CIDR
- * значило бы завести второй, независимый способ ошибиться.
+ * Текст префикса приходит извне, из сохранённого состояния: в самом выводе адрес лежит
+ * шестнадцатеричной маской, и восстанавливать из неё CIDR значило бы завести второй, независимый
+ * способ ошибиться.
  */
 export function parseFilterCounters(output: string, prefixes: string[]): ThrottleCounter[] {
   const counters: ThrottleCounter[] = [];
@@ -123,23 +134,30 @@ async function writeState(state: ThrottleState): Promise<void> {
 
 /** Одинаковы ли раскладки — включая порядок, потому что от него зависит нумерация приоритетов. */
 export function isSameThrottle(a: ThrottleState | null, b: ThrottleState): boolean {
-  if (!a) return false;
+  if (!a || !Array.isArray(a.entries)) return false;
   return (
     a.interface === b.interface &&
-    a.rate === b.rate &&
-    a.burst === b.burst &&
-    a.prefixes.length === b.prefixes.length &&
-    a.prefixes.every((p, i) => p === b.prefixes[i])
+    a.entries.length === b.entries.length &&
+    a.entries.every(
+      (e, i) => e.prefix === b.entries[i].prefix && e.rate === b.entries[i].rate && e.burst === b.entries[i].burst
+    )
   );
+}
+
+/** Приводит раскладку к каноническому виду: сортировка по префиксу. */
+export function normalizeEntries(entries: ThrottleEntry[]): ThrottleEntry[] {
+  // Порядок задаём мы, а не отправитель: от него зависит нумерация приоритетов, а значит и то,
+  // как счётчики сопоставляются обратно с префиксами.
+  return [...entries].sort((x, y) => x.prefix.localeCompare(y.prefix));
 }
 
 /** Текущие счётчики. Читаются ДО применения — пересборка фильтров их обнуляет. */
 export async function readThrottleCounters(): Promise<ThrottleCounter[]> {
   const state = await readState();
-  if (!state || state.prefixes.length === 0) return [];
+  if (!state || !Array.isArray(state.entries) || state.entries.length === 0) return [];
   try {
     const { stdout } = await execFileAsync('tc', ['-s', 'filter', 'show', 'dev', state.interface, 'parent', INGRESS_HANDLE]);
-    return parseFilterCounters(stdout, state.prefixes);
+    return parseFilterCounters(stdout, state.entries.map((e) => e.prefix));
   } catch (err: unknown) {
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to read traffic-throttle counters');
     return [];
@@ -149,28 +167,25 @@ export async function readThrottleCounters(): Promise<ThrottleCounter[]> {
 /**
  * Приводит раскладку к заданной.
  *
- * Ничего не делает, если список, потолок и burst совпадают с уже применёнными. Это не только
- * экономия: пересборка фильтров ОБНУЛЯЕТ счётчики отброшенного, а на них держится вся оценка
- * «отступил или продолжает ломиться». Переставлять одно и то же значило бы стирать улику на каждой
- * доставке.
+ * Ничего не делает, если она совпадает с уже применённой. Это не только экономия: пересборка
+ * фильтров ОБНУЛЯЕТ счётчики отброшенного, а на них держится вся оценка «отступил или продолжает
+ * ломиться». Переставлять одно и то же значило бы стирать улику на каждой доставке.
  *
  * Пересборка идёт «снести все фильтры и разложить заново». На доли секунды между этими шагами
  * ограничение не действует — направление ошибки безопасное: кого-то на миг НЕ придушили, а не
  * придушили лишнего.
  */
 export async function applyThrottle(
-  prefixes: string[],
-  rate: string,
-  burst: string
+  entries: ThrottleEntry[]
 ): Promise<{ changed: boolean; applied: number; message: string }> {
   const iface = await resolveClientFacingInterface();
   if (!iface) {
     return { changed: false, applied: 0, message: 'No default-route interface found' };
   }
 
-  const desired: ThrottleState = { interface: iface, rate, burst, prefixes: [...prefixes].sort() };
+  const desired: ThrottleState = { interface: iface, entries: normalizeEntries(entries) };
   if (isSameThrottle(await readState(), desired)) {
-    return { changed: false, applied: desired.prefixes.length, message: 'Unchanged' };
+    return { changed: false, applied: desired.entries.length, message: 'Unchanged' };
   }
 
   // `replace` вместо `add`: qdisc может уже стоять с прошлого раза, и `add` на нём — ошибка.
@@ -180,25 +195,25 @@ export async function applyThrottle(
   });
 
   let applied = 0;
-  for (const [index, prefix] of desired.prefixes.entries()) {
-    const isV6 = prefix.includes(':');
+  for (const [index, entry] of desired.entries.entries()) {
+    const isV6 = entry.prefix.includes(':');
     try {
       await execFileAsync('tc', [
         'filter', 'add', 'dev', iface, 'parent', INGRESS_HANDLE,
         'protocol', isV6 ? 'ipv6' : 'ip',
         'prio', String(index + 1),
-        'u32', 'match', isV6 ? 'ip6' : 'ip', 'src', prefix,
-        'police', 'rate', rate, 'burst', burst, 'conform-exceed', 'drop/ok',
+        'u32', 'match', isV6 ? 'ip6' : 'ip', 'src', entry.prefix,
+        'police', 'rate', entry.rate, 'burst', entry.burst, 'conform-exceed', 'drop/ok',
       ]);
       applied += 1;
     } catch (err: unknown) {
       // Один неразобранный префикс не должен отменять всю раскладку — остальные всё равно нужны.
-      logger.warn({ err: err instanceof Error ? err.message : String(err), prefix }, 'Failed to install a throttle filter');
+      logger.warn({ err: err instanceof Error ? err.message : String(err), prefix: entry.prefix }, 'Failed to install a throttle filter');
     }
   }
 
   await writeState(desired);
-  logger.info({ iface, rate, burst, applied }, 'Traffic throttle applied');
+  logger.info({ iface, applied }, 'Traffic throttle applied');
   return { changed: true, applied, message: 'Applied' };
 }
 

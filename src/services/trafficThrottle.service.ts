@@ -24,25 +24,37 @@ export async function applyTrafficThrottleHandler(
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.', changed: false, applied: 0, counters: [] });
   }
 
-  const prefixes: string[] = Array.isArray(call.request?.prefixes) ? call.request.prefixes : [];
-  const rate = typeof call.request?.rate === 'string' ? call.request.rate.trim() : '';
-  const burst = typeof call.request?.burst === 'string' ? call.request.burst.trim() : '';
+  const raw: unknown = call.request?.entries;
+  const entries = (Array.isArray(raw) ? raw : [])
+    .map((e: any) => ({
+      prefix: typeof e?.prefix === 'string' ? e.prefix.trim() : '',
+      rate: typeof e?.rate === 'string' ? e.rate.trim() : '',
+      burst: typeof e?.burst === 'string' ? e.burst.trim() : '',
+    }))
+    .filter((e) => e.prefix !== '');
 
   try {
     const counters = await readThrottleCounters();
 
-    if (prefixes.length === 0) {
+    if (entries.length === 0) {
       await clearThrottle();
       return callback(null, { success: true, message: 'Cleared', changed: true, applied: 0, counters });
     }
 
-    if (!rate || !burst) {
-      // Отказываемся молча не ставить ограничение: без обеих величин полисер бессмыслен, а
-      // подставить «разумное» значение за оркестратора значило бы придушить кого-то наугад.
-      return callback(null, { success: false, message: 'Both rate and burst are required', changed: false, applied: 0, counters });
+    const incomplete = entries.filter((e) => !e.rate || !e.burst);
+    if (incomplete.length > 0) {
+      // Не подставляем «разумные» значения за оркестратора: придушить кого-то наугад хуже, чем
+      // отказаться и сказать об этом вслух.
+      return callback(null, {
+        success: false,
+        message: `Entries without rate/burst: ${incomplete.map((e) => e.prefix).join(', ')}`,
+        changed: false,
+        applied: 0,
+        counters,
+      });
     }
 
-    const result = await applyThrottle(prefixes, rate, burst);
+    const result = await applyThrottle(entries);
     return callback(null, {
       success: true,
       message: result.message,
