@@ -37,6 +37,7 @@ import { computeProtoContractHash } from './services/protoContract.service.js';
 import { getSingBoxUserTrafficHandler } from './services/singboxStats.service.js';
 import { getSingBoxConnectionsHandler } from './services/singboxConnections.service.js';
 import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.js';
+import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -148,7 +149,8 @@ export async function startServer(): Promise<Server> {
       getManagedCertificate: getManagedCertificateHandler,
       getSingBoxUserTraffic: getSingBoxUserTrafficHandler,
       getSingBoxConnections: getSingBoxConnectionsHandler,
-      applyTrafficThrottle: applyTrafficThrottleHandler
+      applyTrafficThrottle: applyTrafficThrottleHandler,
+      configureRearSingbox: configureRearSingboxHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

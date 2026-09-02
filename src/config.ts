@@ -11,6 +11,11 @@ const configSchema = z.object({
   SINGBOX_BINARY_PATH: z.string().default('/usr/local/bin/sing-box'),
   SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/sing-box.service'),
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
+  // Тыловой инстанс sing-box (WARP-выход + наблюдение за направлениями). Отдельный конфиг и
+  // отдельный юнит, но ТОТ ЖЕ бинарь, что у фронта: так UpgradeSingbox и SelfUpdate покрывают
+  // оба инстанса и не появляется версии, о которой никто не знает.
+  REAR_SINGBOX_CONFIG_PATH: z.string().default('/etc/sing-box/rear.json'),
+  REAR_SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-rear-singbox.service'),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   // The `|| systemctl restart caddy` fallback is load-bearing, not decorative: `reload` re-POSTs
   // the Caddyfile to the ALREADY-RUNNING process via its admin API — it never re-reads

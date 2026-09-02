@@ -28,6 +28,12 @@ systemctl disable route-agent || true
 systemctl stop sing-box || true
 systemctl disable sing-box || true
 
+# Тыловой sing-box (WARP-выход). Юнит создаётся АГЕНТОМ в рантайме по кнопке, а не этим
+# скриптом, поэтому здесь он только снимается — иначе после удаления агента на машине остался
+# бы включённый юнит, который systemd продолжал бы перезапускать.
+systemctl stop route-rear-singbox || true
+systemctl disable route-rear-singbox || true
+
 # olcrtc-agent-srv (план `olcrtc-redesign.md`) — one templated unit INSTANCE per user, not a single
 # fixed service name; stop/disable every currently-running instance before removing the template
 # unit file itself below. No UFW port to close here — the new design never opens one (control is
@@ -72,6 +78,9 @@ echo "📂 Purging systemd unit configurations..."
 rm -f /etc/systemd/system/route-agent.service
 rm -f /etc/systemd/system/sing-box.service
 rm -f /etc/systemd/system/olcrtc-agent-srv@.service
+rm -f /etc/systemd/system/route-rear-singbox.service
+# В конфиге тыла лежат ПРИВАТНЫЕ КЛЮЧИ WARP — оставлять его на снимаемой ноде нельзя.
+rm -f /etc/sing-box/rear.json
 
 # Перезагружаем менеджер systemd, чтобы применить удаление юнитов
 systemctl daemon-reload

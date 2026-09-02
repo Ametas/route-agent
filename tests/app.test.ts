@@ -24,6 +24,8 @@ const tempAwgQuickBinaryPath = path.join(tempDir, 'awg-quick');
 const tempAwgGoBinaryPath = path.join(tempDir, 'amneziawg-go');
 const tempAwgUnitPath = path.join(tempDir, 'route-awg@.service');
 const tempSingboxUnitPath = path.join(tempDir, 'sing-box.service');
+const tempRearConfigPath = path.join(tempDir, 'rear.json');
+const tempRearUnitPath = path.join(tempDir, 'route-rear-singbox.service');
 const tempMeshAwgPath = path.join(tempDir, 'awgmesh0.conf');
 
 // Фикстурные mTLS-сертификаты для тестов. С тех пор, как агент отказывается стартовать
@@ -61,6 +63,8 @@ process.env.AWG_GO_BINARY_PATH = tempAwgGoBinaryPath;
 process.env.AWG_UNIT_FILE_PATH = tempAwgUnitPath;
 process.env.MESH_AWG_CONFIG_PATH = tempMeshAwgPath;
 process.env.SINGBOX_UNIT_FILE_PATH = tempSingboxUnitPath;
+process.env.REAR_SINGBOX_CONFIG_PATH = tempRearConfigPath;
+process.env.REAR_SINGBOX_UNIT_FILE_PATH = tempRearUnitPath;
 process.env.RELOAD_COMMAND = 'echo "mock reload"';
 process.env.CADDY_RELOAD_COMMAND = 'echo "mock caddy reload"';
 
@@ -113,6 +117,93 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
       assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
       done();
     });
+  });
+
+
+  // --- ConfigureRearSingbox: тыловой инстанс sing-box (WARP-выход) ---------------------------
+  //
+  // Второй процесс sing-box на той же ноде, из ТОГО ЖЕ бинаря. Конфиг для него целиком собирает
+  // оркестратор: в нём приватные ключи WARP из его пула.
+
+  await t.test('ConfigureRearSingbox should block requests with invalid metadata tokens', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'malicious_token');
+
+    client.configureRearSingbox({ enabled: true, configJson: '{}' }, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('ConfigureRearSingbox should write the config and the unit when enabled', async () => {
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const payload = { log: { level: 'warn' }, inbounds: [], outbounds: [{ type: 'direct', tag: 'direct' }] };
+
+    const response: any = await new Promise((resolve, reject) => {
+      client.configureRearSingbox(
+        { enabled: true, config_json: JSON.stringify(payload), configJson: JSON.stringify(payload) },
+        validMetadata,
+        (err: any, res: any) => (err ? reject(err) : resolve(res))
+      );
+    });
+
+    assert.strictEqual(response.success, true);
+
+    const written = JSON.parse(await fs.readFile(tempRearConfigPath, 'utf-8'));
+    assert.deepStrictEqual(written, payload, 'конфиг тыла записан не тем, что прислал оркестратор');
+  });
+
+  await t.test('the rear unit runs the SAME sing-box binary as the front instance', async () => {
+    // Один бинарь на два инстанса — намеренно: так UpgradeSingbox и SelfUpdate покрывают оба, и
+    // не появляется второго пути установки, о версии которого никто не знает. Отдельный бинарь в
+    // ExecStart тихо развалил бы это свойство.
+    const unit = await fs.readFile(tempRearUnitPath, 'utf-8');
+
+    assert.ok(unit.includes(`ExecStart=${tempBinaryPath} run -c ${tempRearConfigPath}`), unit);
+    assert.ok(unit.includes('Restart=on-failure'));
+  });
+
+  await t.test('ConfigureRearSingbox should not rewrite the unit when nothing changed', async () => {
+    // Иначе каждый пуш конфига дёргал бы daemon-reload без причины (тот же приём, что в
+    // ensureAwgSystemdUnit).
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+    const before = (await fs.stat(tempRearUnitPath)).mtimeMs;
+
+    await new Promise((resolve, reject) => {
+      client.configureRearSingbox(
+        { enabled: true, configJson: JSON.stringify({ log: { level: 'warn' } }) },
+        validMetadata,
+        (err: any, res: any) => (err ? reject(err) : resolve(res))
+      );
+    });
+
+    assert.strictEqual((await fs.stat(tempRearUnitPath)).mtimeMs, before, 'unit переписан без изменений');
+  });
+
+  await t.test('ConfigureRearSingbox should remove the config and unit when disabled', async () => {
+    /**
+     * Конфиг удаляется вместе с инстансом не для чистоты: в нём лежат ПРИВАТНЫЕ КЛЮЧИ WARP.
+     * Оставить их на ноде, выведенной из пула, значило бы держать рабочий доступ к аккаунтам
+     * Cloudflare там, где он больше никому не нужен.
+     */
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const response: any = await new Promise((resolve, reject) => {
+      client.configureRearSingbox({ enabled: false, configJson: '' }, validMetadata, (err: any, res: any) =>
+        err ? reject(err) : resolve(res)
+      );
+    });
+
+    assert.strictEqual(response.success, true);
+    assert.strictEqual(response.running, false);
+    assert.strictEqual(await fs.stat(tempRearConfigPath).then(() => true).catch(() => false), false);
+    assert.strictEqual(await fs.stat(tempRearUnitPath).then(() => true).catch(() => false), false);
   });
 
   await t.test('ApplyConfig should return success if sing-box configuration syntax is valid', (t, done) => {
