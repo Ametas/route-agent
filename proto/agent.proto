@@ -136,6 +136,24 @@ service EgressAgentService {
   // therefore skips the rebuild entirely when the list, rate and burst are unchanged — otherwise
   // every delivery would erase the very evidence the escalation decision rests on.
   rpc ApplyTrafficThrottle (TrafficThrottleRequest) returns (TrafficThrottleResponse);
+  // Unary RPC that brings the node's REAR sing-box instance to the requested state.
+  //
+  // A SECOND sing-box process on the same node, alongside the front one that terminates
+  // subscribers. The front decides who may connect; the rear decides where their traffic goes —
+  // "stars" wrapped into Cloudflare WARP, "games" straight out — and doubles as the point where
+  // outbound direction is observed (its own Clash API, read the same way the front's already is,
+  // see GetSingBoxConnections).
+  //
+  // ONE BINARY, TWO UNITS. The rear reuses the sing-box binary already installed for the front,
+  // so UpgradeSingbox and SelfUpdate keep covering both and no second update path exists to drift.
+  // The consequence is a hard precondition: with no sing-box installed there is nothing to run,
+  // and the agent answers with skipped_reason instead of an error (the orchestrator does not even
+  // offer the button in that case).
+  //
+  // The agent MUST run `sing-box check` on config_json before applying it. Writing an invalid
+  // config and restarting would take down a working rear instance, and the branch that was
+  // flowing through WARP would stop rather than degrade.
+  rpc ConfigureRearSingbox (RearSingboxConfigPayload) returns (RearSingboxConfigResponse);
 }
 
 message ConfigPayload {
@@ -527,5 +545,25 @@ message TrafficThrottleResponse {
   repeated TrafficThrottleCounter counters = 5;
 }
 
+message RearSingboxConfigPayload {
+  string orchestrator_secret = 1;
+  // false — stop the instance and remove its unit. Deliberately part of this same RPC rather than
+  // a separate Delete: the orchestrator always knows the state it wants, and one idempotent call
+  // cannot leave the node in a state neither side asked for.
+  bool enabled = 2;
+  // Generated centrally (rearSingbox.ts), never assembled on the node: it carries WARP private
+  // keys from the orchestrator's pool, and which key belongs to which node is the orchestrator's
+  // bookkeeping alone.
+  string config_json = 3;
+}
 
-
+message RearSingboxConfigResponse {
+  bool success = 1;
+  string message = 2;
+  // State AFTER the call, read back from the unit rather than assumed from success.
+  bool running = 3;
+  // Set when the agent deliberately did nothing: "singbox_not_installed" (no binary to run a
+  // second instance from), "check_failed" (sing-box rejected config_json — the previous config is
+  // left running untouched). Empty when the requested state was applied.
+  string skipped_reason = 4;
+}
