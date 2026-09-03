@@ -86,6 +86,8 @@ export async function configureCaddyHandler(
     extra_key_pem,
     extraCertDomain,
     extra_cert_domain,
+    extraCertificates,
+    extra_certificates,
   } = call.request;
 
   try {
@@ -133,6 +135,38 @@ export async function configureCaddyHandler(
       await fs.writeFile(keyPath, finalExtraKeyPem, { encoding: 'utf-8', mode: 0o600 });
       await fs.chmod(keyPath, 0o600).catch(() => {});
       logger.info({ domain: finalExtraCertDomain, certPath }, 'Wrote relayed wildcard cert/key for ring-relayed site block');
+    }
+
+    /**
+     * ВСЕ кольцевые сертификаты разом — до того, как тронут Caddyfile.
+     *
+     * Появилось из живого отказа на чистой ноде (2026-09-03): Caddy проваливает конфиг ЦЕЛИКОМ на
+     * этапе provision, если хоть один указанный в нём файл отсутствует, и нода не получает НИ
+     * ОДНОГО сертификата. Доставка по одному оставляла окно, в котором Caddyfile уже ссылается на
+     * все кольцевые домены, а файлы лежат не все.
+     *
+     * Порядок здесь и есть лекарство: файлы пишутся раньше, чем Caddyfile будет записан и
+     * проверен ниже. Записанное одиночными полями выше не отменяется — тот же путь, та же форма.
+     */
+    const bulkCerts = (extraCertificates || extra_certificates) as
+      | Array<{ domain?: unknown; certPem?: unknown; cert_pem?: unknown; keyPem?: unknown; key_pem?: unknown }>
+      | undefined;
+    if (Array.isArray(bulkCerts)) {
+      for (const entry of bulkCerts) {
+        const domain = typeof entry?.domain === 'string' ? entry.domain.trim() : '';
+        const cert = typeof entry?.certPem === 'string' ? entry.certPem : (entry?.cert_pem as string | undefined);
+        const key = typeof entry?.keyPem === 'string' ? entry.keyPem : (entry?.key_pem as string | undefined);
+        // Неполную запись пропускаем молча: половина пары на диске хуже её отсутствия — Caddy
+        // упал бы уже на ней, а не на отсутствующем файле.
+        if (!domain || !cert?.trim() || !key?.trim()) continue;
+
+        const paths = getCaddyCertPaths(domain);
+        await fs.mkdir(path.dirname(paths.certPath), { recursive: true });
+        await fs.writeFile(paths.certPath, cert, 'utf-8');
+        await fs.writeFile(paths.keyPath, key, { encoding: 'utf-8', mode: 0o600 });
+        await fs.chmod(paths.keyPath, 0o600).catch(() => {});
+        logger.info({ domain, certPath: paths.certPath }, 'Wrote ring wildcard cert/key from the bulk relay');
+      }
     }
 
     const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
