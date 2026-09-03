@@ -78,6 +78,15 @@ WantedBy=multi-user.target
   }
 }
 
+/**
+ * Единственная форма конфига на диске. Вынесена отдельно, потому что её теперь ДВОЕ читателей —
+ * запись и сравнение, — и разойтись им нельзя: любое расхождение в форматировании превратило бы
+ * сравнение в вечное «отличается», то есть в перезапуск тыла на каждом пуше.
+ */
+function serializeRearConfig(configObj: object): string {
+  return JSON.stringify(configObj, null, 2);
+}
+
 /** Атомарная запись конфига тыла: временный файл рядом, затем rename. */
 async function writeRearConfig(configObj: object): Promise<void> {
   const target = rearConfigPath();
@@ -85,8 +94,23 @@ async function writeRearConfig(configObj: object): Promise<void> {
   const tmp = path.join(dir, `.rear.${Date.now()}_${crypto.randomUUID().slice(0, 8)}.tmp`);
 
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(tmp, JSON.stringify(configObj, null, 2), 'utf-8');
+  await fs.writeFile(tmp, serializeRearConfig(configObj), 'utf-8');
   await fs.rename(tmp, target);
+}
+
+/**
+ * Лежит ли на диске ровно этот конфиг.
+ *
+ * ЗАЧЕМ. Перезагрузка тыла не бесплатна: по SIGHUP sing-box закрывает инстанс целиком, и соединения
+ * рвутся. До этой проверки агент писал и перезагружал ВСЕГДА — даже когда оркестратор привозил
+ * байт в байт то же самое. Из-за этой цены оркестратору приходилось экономить на доставках, а
+ * экономия оборачивалась нодами, до которых свежие ключи не доезжали вовсе.
+ *
+ * Юнит рядом (`ensureRearUnit`) сравнивает себя ровно так же и ровно поэтому.
+ */
+async function rearConfigMatches(configObj: object): Promise<boolean> {
+  const existing = await fs.readFile(rearConfigPath(), 'utf-8').catch(() => null);
+  return existing !== null && existing === serializeRearConfig(configObj);
 }
 
 /**
@@ -112,7 +136,13 @@ export async function startAndReloadRear(
 
 /** Читаем состояние У ЮНИТА, а не выводим из того, что команда не упала. */
 async function isRearRunning(): Promise<boolean> {
-  if (process.env.NODE_ENV === 'test') return true;
+  /**
+   * В тестах `systemctl` закорочен, поэтому состояние юнита приходится задавать снаружи — иначе
+   * ветка «конфиг тот же, но тыл лежит» непроверяема вовсе: мутационный прогон показал, что
+   * выброшенная проверка живости не роняет ни одного теста. Тот же приём, что у `RELOAD_COMMAND`
+   * в `utils/singbox.ts`.
+   */
+  if (process.env.NODE_ENV === 'test') return process.env.REAR_TEST_INACTIVE !== '1';
   const { stdout } = await execAsync(`systemctl is-active ${rearUnitName()}`).catch(() => ({ stdout: '' }));
   return stdout.trim() === 'active';
 }
@@ -168,6 +198,26 @@ export async function configureRearSingboxHandler(
 
     const configObj = JSON.parse(rawConfig);
 
+    /**
+     * НИЧЕГО НЕ ИЗМЕНИЛОСЬ — НИЧЕГО НЕ ДЕЛАЕМ.
+     *
+     * Стоит ДО проверки синтаксиса намеренно: конфиг, который уже лежит на диске и под которым
+     * тыл работает, проверен самим фактом того, что он работает. Гонять на него `sing-box check`
+     * значило бы порождать процесс на каждом пуше ради заранее известного ответа.
+     *
+     * Юнит всё же приводим в порядок и в этой ветке: конфиг мог не измениться, а юнит — устареть
+     * (например, после смены пути к бинарю обновлением sing-box).
+     */
+    await ensureRearUnit();
+    if ((await rearConfigMatches(configObj)) && (await isRearRunning())) {
+      logger.info('Rear sing-box config unchanged and instance is up — skipping write and reload');
+      return callback(null, {
+        success: true,
+        message: 'Rear sing-box configuration already current — nothing to write or reload.',
+        running: true,
+      });
+    }
+
     const syntaxCheck = await validateSingBoxConfig(configObj);
     if (!syntaxCheck.valid) {
       logger.error({ err: syntaxCheck.error }, 'Rear sing-box config rejected by sing-box check');
@@ -180,7 +230,6 @@ export async function configureRearSingboxHandler(
     }
 
     await writeRearConfig(configObj);
-    await ensureRearUnit();
 
     if (process.env.NODE_ENV !== 'test') {
       await startAndReloadRear();
