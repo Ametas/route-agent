@@ -166,6 +166,14 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     assert.ok(unit.includes(`ExecStart=${tempBinaryPath} run -c ${tempRearConfigPath}`), unit);
     assert.ok(unit.includes('Restart=on-failure'));
+
+    // RELOAD-путь, и он повторяет форму фронтового юнита (`utils/singbox.ts`): проверка конфига
+    // ВНУТРИ перезагрузки, SIGHUP только при её успехе. Бесшовности SIGHUP не даёт — sing-box
+    // закрывает инстанс целиком, — но негодный конфиг при таком ExecReload не роняет тыл вовсе.
+    assert.ok(
+      unit.includes(`ExecReload=/bin/sh -c "${tempBinaryPath} check -c ${tempRearConfigPath} && /bin/kill -HUP $MAINPID"`),
+      unit
+    );
   });
 
   await t.test('ConfigureRearSingbox should not rewrite the unit when nothing changed', async () => {

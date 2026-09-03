@@ -38,6 +38,11 @@ function rearUnitName(): string {
 /**
  * Идемпотентно создаёт/обновляет unit тыла. Пишет только при отличии — иначе каждый пуш конфига
  * дёргал бы `daemon-reload` без всякой причины (тот же приём, что в `ensureAwgSystemdUnit`).
+ *
+ * `ExecReload` намеренно повторяет форму фронтового юнита (`utils/singbox.ts`): проверка конфига
+ * прямо в перезагрузке, и SIGHUP посылается ТОЛЬКО если она прошла. Своя, более простая форма
+ * (`kill -HUP` без проверки) у меня тут сначала и стояла — но проект уже решил эту задачу лучше, и
+ * заводить второй, более слабый вариант того же механизма незачем.
  */
 async function ensureRearUnit(): Promise<void> {
   const unitPath = rearUnitPath();
@@ -53,6 +58,7 @@ Type=simple
 ExecStart=${binary} run -c ${rearConfigPath()}
 Restart=on-failure
 RestartSec=5
+ExecReload=/bin/sh -c "${binary} check -c ${rearConfigPath()} && /bin/kill -HUP $MAINPID"
 
 [Install]
 WantedBy=multi-user.target
@@ -81,6 +87,27 @@ async function writeRearConfig(configObj: object): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(tmp, JSON.stringify(configObj, null, 2), 'utf-8');
   await fs.rename(tmp, target);
+}
+
+/**
+ * Поднимает юнит тыла и просит перечитать конфиг.
+ *
+ * RELOAD, а не restart. Бесшовности это не даёт — по SIGHUP sing-box закрывает инстанс целиком и
+ * пересоздаёт его, соединения рвутся одинаково (проверено по `cmd/sing-box/cmd_run.go` v1.14.0).
+ * Даёт другое: `ExecReload` этого юнита прогоняет `sing-box check` и посылает сигнал только при
+ * успехе, поэтому негодный конфиг оставляет тыл работать, а не роняет его.
+ *
+ * `runExec` параметром — по образцу `ensureSingboxSystemdUnit`: иначе выбор между reload и restart
+ * никак не проверить, все вызовы `systemctl` в тестовой среде закорочены. Мутационный прогон это и
+ * показал — подмена reload на restart не роняла ни одного теста.
+ */
+export async function startAndReloadRear(
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync
+): Promise<void> {
+  const unit = rearUnitName();
+  // `enable --now` и на первом включении, и на последующих: юнит уже включён — команда идемпотентна.
+  await runExec(`systemctl enable --now ${unit}`);
+  await runExec(`systemctl reload ${unit}`);
 }
 
 /** Читаем состояние У ЮНИТА, а не выводим из того, что команда не упала. */
@@ -156,10 +183,7 @@ export async function configureRearSingboxHandler(
     await ensureRearUnit();
 
     if (process.env.NODE_ENV !== 'test') {
-      // `enable --now` и на первом включении, и на последующих: юнит уже включён — команда
-      // идемпотентна, а перезапуск нужен всегда, потому что конфиг изменился.
-      await execAsync(`systemctl enable --now ${rearUnitName()}`);
-      await execAsync(`systemctl restart ${rearUnitName()}`);
+      await startAndReloadRear();
     }
 
     const running = await isRearRunning();
