@@ -16,6 +16,10 @@ const configSchema = z.object({
   // оба инстанса и не появляется версии, о которой никто не знает.
   REAR_SINGBOX_CONFIG_PATH: z.string().default('/etc/sing-box/rear.json'),
   REAR_SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-rear-singbox.service'),
+  // Как часто сторож проверяет, есть ли у тыла живые WARP-ключи, и переключает селектор на
+  // direct при их отсутствии. Часто и дёшево: один запрос по loopback к соседнему процессу.
+  // Смысл именно в скорости — оркестратор узнает ту же новость лишь через час.
+  REAR_WARP_GUARD_INTERVAL_MS: z.coerce.number().default(30_000),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   // The `|| systemctl restart caddy` fallback is load-bearing, not decorative: `reload` re-POSTs
   // the Caddyfile to the ALREADY-RUNNING process via its admin API — it never re-reads

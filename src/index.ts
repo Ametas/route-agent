@@ -39,6 +39,7 @@ import { getSingBoxConnectionsHandler } from './services/singboxConnections.serv
 import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.js';
 import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
 import { getWarpKeyHealthHandler } from './services/warpKeyHealth.service.js';
+import { startRearWarpGuard } from './services/rearWarpGuard.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -167,6 +168,18 @@ export async function startServer(): Promise<Server> {
       const protoHash = computeProtoContractHash();
       logger.info({ protoHash, len: protoHash.length }, `🚀 gRPC Route Agent actively listening at h2://${config.HOST}:${port} (Proto Contract SHA256: ${protoHash})`);
       serverInstance = server;
+
+      /**
+       * Сторож WARP-ветки тыла. Замена автофолбека, который был у балансировщика xray и которого у
+       * `urltest` в sing-box нет вовсе (см. `utils/rearWarpGuard.ts`).
+       *
+       * Живёт на АГЕНТЕ намеренно: отказ WARP во время недоступности оркестратора — как раз тот
+       * случай, когда фолбек нужен, а спросить некого. На ноде без тыла проход не делает ничего.
+       */
+      if (process.env.NODE_ENV !== 'test') {
+        startRearWarpGuard();
+      }
+
       resolve(server);
     });
   });
