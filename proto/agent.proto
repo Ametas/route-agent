@@ -154,6 +154,22 @@ service EgressAgentService {
   // config and restarting would take down a working rear instance, and the branch that was
   // flowing through WARP would stop rather than degrade.
   rpc ConfigureRearSingbox (RearSingboxConfigPayload) returns (RearSingboxConfigResponse);
+  // Unary RPC that reports the health of this node's WARP keys, read from the REAR sing-box's own
+  // local Clash API (experimental.clash_api, loopback-only — same channel and same rationale as
+  // GetSingBoxConnections, but pointed at the rear instance rather than the front one).
+  //
+  // THE MEASUREMENTS ARE NOT TAKEN HERE, AND THAT IS THE POINT. The rear config puts every WARP
+  // endpoint into a urltest group, so sing-box already probes each of them on its own schedule and
+  // keeps the result. Clash API's /proxies lists endpoints alongside outbounds and hands back that
+  // stored history, so the agent only reads what has already been measured — no extra traffic on a
+  // link the owner pays for by the byte. An empty history means the last probe FAILED: sing-box
+  // deletes the entry on error and stores one on success.
+  //
+  // What this can and cannot see: it detects a key that is unreachable or slow. It does NOT
+  // reliably detect a key Cloudflare has THROTTLED — throttling shows up as degraded throughput,
+  // and measuring throughput was ruled out as too expensive. Treat a healthy report as "the tunnel
+  // answers", not as "the key is at full speed".
+  rpc GetWarpKeyHealth (WarpKeyHealthRequest) returns (WarpKeyHealthResponse);
 }
 
 message ConfigPayload {
@@ -565,5 +581,33 @@ message RearSingboxConfigResponse {
   // Set when the agent deliberately did nothing: "singbox_not_installed" (no binary to run a
   // second instance from), "check_failed" (sing-box rejected config_json — the previous config is
   // left running untouched). Empty when the requested state was applied.
+  string skipped_reason = 4;
+}
+
+message WarpKeyHealthRequest {
+  string orchestrator_secret = 1;
+}
+
+message WarpKeyHealthEntry {
+  // The rear config's endpoint tag, which carries the orchestrator's own key id in full. It is the
+  // only thread tying a measurement back to a row in warp_keys, which is why it is not shortened.
+  string endpoint_tag = 1;
+  // False when the last probe failed (Clash API returned an empty history for this endpoint).
+  bool alive = 2;
+  // Round-trip milliseconds from the stored measurement. Meaningless when alive is false.
+  uint32 rtt_ms = 3;
+  // When that measurement was taken, NOT when this RPC ran — a stale timestamp is itself a signal
+  // that the rear instance stopped probing.
+  int64 measured_at_unix_ms = 4;
+}
+
+message WarpKeyHealthResponse {
+  bool success = 1;
+  string message = 2;
+  repeated WarpKeyHealthEntry entries = 3;
+  // Set when the agent deliberately reported nothing: "rear_not_running" (no rear instance on this
+  // node) or "clash_api_unreachable" (the instance is up but its API did not answer). Empty on a
+  // normal report, INCLUDING one with no entries at all — that case means the rear runs with no
+  // WARP endpoints, which is a real and expected state while the pool is still filling.
   string skipped_reason = 4;
 }

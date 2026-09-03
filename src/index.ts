@@ -38,6 +38,7 @@ import { getSingBoxUserTrafficHandler } from './services/singboxStats.service.js
 import { getSingBoxConnectionsHandler } from './services/singboxConnections.service.js';
 import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.js';
 import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
+import { getWarpKeyHealthHandler } from './services/warpKeyHealth.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -150,7 +151,8 @@ export async function startServer(): Promise<Server> {
       getSingBoxUserTraffic: getSingBoxUserTrafficHandler,
       getSingBoxConnections: getSingBoxConnectionsHandler,
       applyTrafficThrottle: applyTrafficThrottleHandler,
-      configureRearSingbox: configureRearSingboxHandler
+      configureRearSingbox: configureRearSingboxHandler,
+      getWarpKeyHealth: getWarpKeyHealthHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

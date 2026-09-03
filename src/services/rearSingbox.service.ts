@@ -135,7 +135,7 @@ export async function configureRearSingboxHandler(
         success: false,
         message: 'sing-box is not installed on this node — nothing to run a rear instance from.',
         running: false,
-        skipped_reason: 'singbox_not_installed',
+        skippedReason: 'singbox_not_installed',
       });
     }
 
@@ -148,7 +148,7 @@ export async function configureRearSingboxHandler(
         success: false,
         message: `Rejected by Node Agent: invalid rear sing-box syntax. Error: ${syntaxCheck.error}`,
         running: await isRearRunning(),
-        skipped_reason: 'check_failed',
+        skippedReason: 'check_failed',
       });
     }
 

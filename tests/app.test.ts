@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import * as http from 'node:http';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { computeProtoContractHash, clearProtoContractHashCache, getCanonicalSchemaFromPackageDef } from '../src/services/protoContract.service.js';
@@ -204,6 +205,126 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(response.running, false);
     assert.strictEqual(await fs.stat(tempRearConfigPath).then(() => true).catch(() => false), false);
     assert.strictEqual(await fs.stat(tempRearUnitPath).then(() => true).catch(() => false), false);
+  });
+
+
+  // --- GetWarpKeyHealth: здоровье WARP-ключей, снятое у тылового sing-box --------------------
+
+  await t.test('GetWarpKeyHealth should block requests with invalid metadata tokens', (t, done) => {
+    const badMetadata = new grpc.Metadata();
+    badMetadata.add('x-orchestrator-secret', 'malicious_token');
+
+    client.getWarpKeyHealth({}, badMetadata, (err: any, response: any) => {
+      assert.ifError(err);
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.message, 'Invalid orchestrator secret token.');
+      done();
+    });
+  });
+
+  await t.test('GetWarpKeyHealth should say rear_not_running when there is no rear config', async () => {
+    /**
+     * Отличается от «тыл есть, но молчит» намеренно: на ноде без включённого WARP это НОРМАЛЬНОЕ
+     * состояние, и оркестратор не должен по нему ни шуметь, ни списывать ключи.
+     */
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+    await fs.rm(tempRearConfigPath, { force: true });
+
+    const response: any = await new Promise((resolve, reject) => {
+      client.getWarpKeyHealth({}, validMetadata, (err: any, res: any) => (err ? reject(err) : resolve(res)));
+    });
+
+    assert.strictEqual(response.success, true);
+    assert.strictEqual(response.skippedReason, 'rear_not_running');
+    // Тот же нюанс загрузчика: без defaults:true пустой repeated приезжает undefined, а не [].
+    // На стороне оркестратора (defaults:true) это будет [], и воркер там всё равно подставляет пустой список.
+    assert.deepStrictEqual(response.entries ?? [], []);
+  });
+
+  await t.test('GetWarpKeyHealth should read measurements from the rear clash api', async () => {
+    /**
+     * Замеры делает сам sing-box: конфиг тыла собирает WARP-туннели в группу `urltest`, и Clash API
+     * отдаёт уже накопленную историю. Здесь этот API подменён локальным сервером, но форма ответа
+     * взята из исходников sing-box v1.14.0 — `proxies` -> `{ history: [{ time, delay }] }`, причём
+     * endpoint-ы попадают в тот же список, что и outbound-ы.
+     */
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    const fakeClash = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          proxies: {
+            direct: { history: [] },
+            warp: { history: [{ time: '2026-09-03T04:00:00.000Z', delay: 30 }] },
+            'warp-key-alive': { history: [{ time: '2026-09-03T04:00:00.000Z', delay: 91 }] },
+            'warp-key-dead': { history: [] },
+          },
+        })
+      );
+    });
+    await new Promise<void>((resolve) => fakeClash.listen(0, '127.0.0.1', resolve));
+    const port = (fakeClash.address() as { port: number }).port;
+
+    try {
+      await fs.writeFile(
+        tempRearConfigPath,
+        JSON.stringify({ experimental: { clash_api: { external_controller: `127.0.0.1:${port}`, secret: 'x' } } }),
+        'utf-8'
+      );
+
+      const response: any = await new Promise((resolve, reject) => {
+        client.getWarpKeyHealth({}, validMetadata, (err: any, res: any) => (err ? reject(err) : resolve(res)));
+      });
+
+      assert.strictEqual(response.success, true);
+      // Клиент в этом файле грузит proto БЕЗ defaults:true, поэтому незаполненная строка
+      // приезжает undefined, а в проде (defaults:true с обеих сторон) — пустой строкой. Проверяем
+      // отсутствие причины, а не её конкретное представление.
+      assert.ok(!response.skippedReason, String(response.skippedReason));
+
+      const byTag = new Map<string, any>(response.entries.map((e: any) => [e.endpointTag, e]));
+      assert.deepStrictEqual([...byTag.keys()].sort(), ['warp-key-alive', 'warp-key-dead']);
+      assert.strictEqual(byTag.get('warp-key-alive').alive, true);
+      assert.strictEqual(byTag.get('warp-key-alive').rttMs, 91);
+      // Пустая история — это «не ответил», а не «нет данных»: sing-box УДАЛЯЕТ запись при неудаче.
+      assert.strictEqual(byTag.get('warp-key-dead').alive, false);
+    } finally {
+      await new Promise<void>((resolve) => fakeClash.close(() => resolve()));
+      await fs.rm(tempRearConfigPath, { force: true });
+    }
+  });
+
+  await t.test('GetWarpKeyHealth should say clash_api_unreachable when the rear API does not answer', async () => {
+    // Тыл настроен, но его API молчит — вот это уже повод посмотреть, и оркестратор должен уметь
+    // отличить этот случай от «WARP на ноде просто не включён».
+    const validMetadata = new grpc.Metadata();
+    validMetadata.add('x-orchestrator-secret', 'test-secret-123');
+
+    // Порт, который заведомо никто не слушает: занимаем и сразу освобождаем.
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const deadPort = (probe.address() as { port: number }).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    try {
+      await fs.writeFile(
+        tempRearConfigPath,
+        JSON.stringify({ experimental: { clash_api: { external_controller: `127.0.0.1:${deadPort}`, secret: '' } } }),
+        'utf-8'
+      );
+
+      const response: any = await new Promise((resolve, reject) => {
+        client.getWarpKeyHealth({}, validMetadata, (err: any, res: any) => (err ? reject(err) : resolve(res)));
+      });
+
+      assert.strictEqual(response.success, false);
+      assert.strictEqual(response.skippedReason, 'clash_api_unreachable');
+    } finally {
+      await fs.rm(tempRearConfigPath, { force: true });
+    }
   });
 
   await t.test('ApplyConfig should return success if sing-box configuration syntax is valid', (t, done) => {

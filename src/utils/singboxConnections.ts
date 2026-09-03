@@ -43,7 +43,7 @@ export interface SingBoxConnectionRecord {
   closed: boolean;
 }
 
-interface ClashApiEndpoint {
+export interface ClashApiEndpoint {
   address: string;
   secret: string;
 }
