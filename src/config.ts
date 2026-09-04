@@ -20,6 +20,9 @@ const configSchema = z.object({
   // direct при их отсутствии. Часто и дёшево: один запрос по loopback к соседнему процессу.
   // Смысл именно в скорости — оркестратор узнает ту же новость лишь через час.
   REAR_WARP_GUARD_INTERVAL_MS: z.coerce.number().default(30_000),
+  // Куда кладётся профиль сетевых буферов ядра (см. utils/kernelTuning.ts). Файл нужен вместе с
+  // применением, а не вместо: `sysctl -w` живёт до перезагрузки, файл переживает её.
+  SYSCTL_PROFILE_PATH: z.string().default('/etc/sysctl.d/99-route-agent.conf'),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   // The `|| systemctl restart caddy` fallback is load-bearing, not decorative: `reload` re-POSTs
   // the Caddyfile to the ALREADY-RUNNING process via its admin API — it never re-reads

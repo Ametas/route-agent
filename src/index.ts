@@ -40,6 +40,7 @@ import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.
 import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
 import { getWarpKeyHealthHandler } from './services/warpKeyHealth.service.js';
 import { startRearWarpGuard } from './services/rearWarpGuard.service.js';
+import { applyKernelTuning } from './utils/kernelTuning.js';
 
 const logger = pino({ level: 'info' });
 
@@ -177,6 +178,19 @@ export async function startServer(): Promise<Server> {
        * случай, когда фолбек нужен, а спросить некого. На ноде без тыла проход не делает ничего.
        */
       if (process.env.NODE_ENV !== 'test') {
+        /**
+         * Буферы ядра под QUIC — при КАЖДОМ старте, а не при установке.
+         *
+         * Так профиль доезжает до всего флота обычным `SelfUpdate` (он заканчивается рестартом
+         * юнита), достаётся свежей ноде без отдельного шага и заново утверждается после
+         * перезагрузки. Отдельного RPC и экрана сознательно нет: правильные значения одинаковы на
+         * всех нодах, а настраиваемость купила бы только возможность развести ноды в разные
+         * состояния и потом гадать, почему одна медленнее.
+         *
+         * Без `await`: старт gRPC-сервера ждать этого не должен, а неудача здесь — предупреждение
+         * в логе, не отказ (внутри по ключам, см. `applyKernelTuning`).
+         */
+        void applyKernelTuning();
         startRearWarpGuard();
       }
 
