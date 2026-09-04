@@ -68,21 +68,44 @@ test('the profile raises the QUIC receive buffer ceiling and does not pre-double
 test('the profile does not touch values the kernel derives from RAM', () => {
   /**
    * `udp_mem`, `tcp_rmem`, `tcp_wmem` считаются от объёма памяти при загрузке, и на ноде с другим
-   * объёмом наше зашитое число было бы хуже родного умолчания. `rmem_default` не трогаем по другой
-   * причине: он раздаёт буфер КАЖДОМУ сокету, включая тысячи короткоживущих, — расход памяти без
-   * выигрыша, потому что quic-go просит явно и ему достаточно потолка.
+   * объёмом наше зашитое число было бы хуже родного умолчания. Проверено: на ноде с вдвое меньшей
+   * памятью `udp_mem` ровно вдвое меньше.
    */
   const keys = KERNEL_TUNING.map((e) => e.key);
 
-  for (const forbidden of [
-    'net.ipv4.udp_mem',
-    'net.ipv4.tcp_rmem',
-    'net.ipv4.tcp_wmem',
-    'net.core.rmem_default',
-    'net.core.wmem_default',
-  ]) {
+  for (const forbidden of ['net.ipv4.udp_mem', 'net.ipv4.tcp_rmem', 'net.ipv4.tcp_wmem']) {
     assert.ok(!keys.includes(forbidden), `${forbidden} попал в профиль`);
   }
+});
+
+test('the default buffer is raised, because that is what the dropping sockets actually use', () => {
+  /**
+   * ГЛАВНАЯ строка профиля, и она стоила отдельного разбора, потому что очевидный кандидат оказался
+   * не тем. Сокет получает `rmem_default`, если никто не звал `setsockopt`, и упирается в
+   * `rmem_max`, только если звал.
+   *
+   * На ноде, где `rmem_max` УЖЕ поднят до 4194304, теряющие сокеты всё равно сидели на 212992 —
+   * то есть на `rmem_default` — и теряли по 500-780 тысяч дейтаграмм каждый. Потолок вчетверо выше
+   * умолчания не помогал им никак, потому что они до него не тянутся.
+   *
+   * 1 МБ, а не 7,5: величина достаётся каждому UDP-сокету, и первый шаг должен быть измеримым.
+   */
+  const values = new Map(KERNEL_TUNING.map((e) => [e.key, e.value]));
+
+  assert.strictEqual(values.get('net.core.rmem_default'), '1048576');
+  assert.strictEqual(values.get('net.core.wmem_default'), '1048576');
+});
+
+test('the ceiling stays too, and stays distinct from the default', () => {
+  /**
+   * `rmem_max` оставлен как рекомендация вики quic-go для тех, кто буфер запрашивает явно. Но он
+   * НЕ должен подменять собой умолчание: сравнять их значило бы раздать по 7,5 МБ каждому сокету,
+   * а это уже не скромный первый шаг, а ставка вслепую.
+   */
+  const values = new Map(KERNEL_TUNING.map((e) => [e.key, e.value]));
+
+  assert.strictEqual(values.get('net.core.rmem_max'), '7500000');
+  assert.notStrictEqual(values.get('net.core.rmem_default'), values.get('net.core.rmem_max'));
 });
 
 test('every key is written to the file with its reason', () => {
