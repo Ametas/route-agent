@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import path from 'path';
 import pino from 'pino';
 import { config } from '../config.js';
+import { allWritesAlreadyOnDisk, applyPlannedWrites, type PlannedWrite } from '../utils/plannedWrites.js';
 import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
 import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary, loadCaddyDnsProviderEnv } from '../utils/caddy.js';
@@ -59,6 +60,19 @@ export async function applyConfigHandler(
 }
 
 /**
+ * Работает ли служба Caddy прямо сейчас.
+ *
+ * В тестах `systemctl` закорочен, поэтому состояние задаётся снаружи: иначе ветка «конфиг тот же,
+ * но служба лежит» непроверяема вовсе — ровно та же причина и тот же приём, что у тылового
+ * sing-box (`REAR_TEST_INACTIVE`).
+ */
+async function isCaddyActive(): Promise<boolean> {
+  if (process.env.NODE_ENV === 'test') return process.env.CADDY_TEST_INACTIVE !== '1';
+  const { stdout } = await execAsync('systemctl is-active caddy').catch(() => ({ stdout: '' }));
+  return stdout.trim() === 'active';
+}
+
+/**
  * RPC Обработчик ConfigureCaddy (применение готового Caddyfile и распаковка заглушки)
  */
 export async function configureCaddyHandler(
@@ -99,9 +113,22 @@ export async function configureCaddyHandler(
     const finalCamouflagePath = validateSafeCamouflagePath(sanitizedCamouflagePath);
     const finalCamouflageHtml = camouflageHtml || camouflage_html || htmlContent;
 
+    /**
+     * СНАЧАЛА ПЛАН, ПОТОМ ЗАПИСЬ.
+     *
+     * Раньше каждый блок писал на диск сразу. Теперь они лишь наполняют список того, что должно
+     * оказаться на диске, — и это позволяет ответить на вопрос «а не лежит ли уже ровно это»
+     * ДО того, как что-то тронуто. Повторный синк с тем же содержимым (а он случается: шаг бота
+     * зовёт синк явно, а пуш конфига делает его же пресинком) перестаёт писать файлы, порождать
+     * `caddy validate` и перезагружать Caddy на живом узле.
+     *
+     * Условия наполнения списка ровно те же, что были у прежних записей: чего не прислали — того
+     * не пишем и не сравниваем.
+     */
+    const plannedWrites: PlannedWrite[] = [];
+
     if (finalCamouflageHtml && typeof finalCamouflageHtml === 'string' && finalCamouflageHtml.trim().length > 0) {
-      await fs.mkdir(finalCamouflagePath, { recursive: true });
-      await fs.writeFile(path.join(finalCamouflagePath, 'index.html'), finalCamouflageHtml, 'utf-8');
+      plannedWrites.push({ path: path.join(finalCamouflagePath, 'index.html'), content: finalCamouflageHtml });
     }
 
     // Xeon-ring nodes only — egress nodes never send this field. Written to the EnvironmentFile
@@ -110,10 +137,11 @@ export async function configureCaddyHandler(
     // `{env.CF_API_TOKEN}` placeholders at config-load/validate time too, not just at runtime.
     const finalCloudflareToken = cloudflareApiToken || cloudflare_api_token;
     if (finalCloudflareToken && typeof finalCloudflareToken === 'string' && finalCloudflareToken.trim().length > 0) {
-      const cfEnvPath = '/etc/caddy/cloudflare.env';
-      await fs.mkdir(path.dirname(cfEnvPath), { recursive: true });
-      await fs.writeFile(cfEnvPath, `CF_API_TOKEN=${finalCloudflareToken}\n`, { encoding: 'utf-8', mode: 0o600 });
-      await fs.chmod(cfEnvPath, 0o600).catch(() => {});
+      plannedWrites.push({
+        path: '/etc/caddy/cloudflare.env',
+        content: `CF_API_TOKEN=${finalCloudflareToken}\n`,
+        mode: 0o600,
+      });
     }
 
     // Egress nodes only — a wildcard cert/key relayed from a Xeon front by the orchestrator
@@ -130,11 +158,8 @@ export async function configureCaddyHandler(
       finalExtraCertDomain && typeof finalExtraCertDomain === 'string' && finalExtraCertDomain.trim().length > 0
     ) {
       const { certPath, keyPath } = getCaddyCertPaths(finalExtraCertDomain);
-      await fs.mkdir(path.dirname(certPath), { recursive: true });
-      await fs.writeFile(certPath, finalExtraCertPem, 'utf-8');
-      await fs.writeFile(keyPath, finalExtraKeyPem, { encoding: 'utf-8', mode: 0o600 });
-      await fs.chmod(keyPath, 0o600).catch(() => {});
-      logger.info({ domain: finalExtraCertDomain, certPath }, 'Wrote relayed wildcard cert/key for ring-relayed site block');
+      plannedWrites.push({ path: certPath, content: finalExtraCertPem });
+      plannedWrites.push({ path: keyPath, content: finalExtraKeyPem, mode: 0o600 });
     }
 
     /**
@@ -161,16 +186,30 @@ export async function configureCaddyHandler(
         if (!domain || !cert?.trim() || !key?.trim()) continue;
 
         const paths = getCaddyCertPaths(domain);
-        await fs.mkdir(path.dirname(paths.certPath), { recursive: true });
-        await fs.writeFile(paths.certPath, cert, 'utf-8');
-        await fs.writeFile(paths.keyPath, key, { encoding: 'utf-8', mode: 0o600 });
-        await fs.chmod(paths.keyPath, 0o600).catch(() => {});
-        logger.info({ domain, certPath: paths.certPath }, 'Wrote ring wildcard cert/key from the bulk relay');
+        plannedWrites.push({ path: paths.certPath, content: cert });
+        plannedWrites.push({ path: paths.keyPath, content: key, mode: 0o600 });
       }
     }
 
     const caddyfilePath = config.CADDYFILE_PATH || '/etc/caddy/Caddyfile';
     const caddyBackupPath = `${caddyfilePath}.bak`;
+    plannedWrites.push({ path: caddyfilePath, content: finalCaddyfile });
+
+    /**
+     * НИЧЕГО НЕ ИЗМЕНИЛОСЬ — НИЧЕГО НЕ ДЕЛАЕМ.
+     *
+     * Второе условие — живость Caddy — не формальность: узел с верным конфигом, но упавшей службой
+     * обязан получить перезагрузку. Без этой проверки оркестратор возил бы ему один и тот же
+     * конфиг, агент каждый раз отвечал бы «уже актуально», и поднять службу было бы некому.
+     */
+    if ((await allWritesAlreadyOnDisk(plannedWrites)) && (await isCaddyActive())) {
+      logger.info('Caddy config unchanged and service is up — skipping write, validate and reload');
+      return callback(null, {
+        success: true,
+        message: 'Caddy configuration already current — nothing to write or reload.',
+      });
+    }
+
     const caddyDir = path.dirname(caddyfilePath);
     await fs.mkdir(caddyDir, { recursive: true });
 
@@ -179,7 +218,7 @@ export async function configureCaddyHandler(
       await fs.copyFile(caddyfilePath, caddyBackupPath).catch(() => {});
     }
 
-    await fs.writeFile(caddyfilePath, finalCaddyfile, 'utf-8');
+    await applyPlannedWrites(plannedWrites);
 
     await fixCaddyPermissions();
     await fixXraySocketPermissions();
