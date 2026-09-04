@@ -590,8 +590,20 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
 
     const content = await fs.readFile(customTestUnitPath, 'utf-8');
     assert.ok(content.includes('Description=sing-box service'));
-    assert.ok(content.includes('CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE'));
-    assert.ok(content.includes('AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE'));
+    /**
+     * ОБЕИХ СТРОК БОЛЬШЕ НЕТ, И ЭТО НЕ УПРОЩЕНИЕ, А ИСПРАВЛЕНИЕ (2026-09-04).
+     *
+     * Ограничивающий набор возможностей действует на ВСЕ процессы юнита, включая `ExecReload`, и
+     * отбирал у них `CAP_KILL`. Пока служба и перезагрузка идут от root по одному UID, сигнал
+     * проходит и без неё; но если процесс принадлежит другому пользователю — `kill` получает
+     * `Operation not permitted`, и перезагрузка не работает никогда. Ровно это и случилось на ноде,
+     * где раньше стоял пакетный sing-box под пользователем `sing-box`: конфиг три недели не
+     * применялся, на UDP 443 не слушал никто.
+     *
+     * Пара имеет смысл только при `User=`, а его в этом юните нет.
+     */
+    assert.ok(!content.includes('CapabilityBoundingSet'), 'ограничивающий набор вернулся — он ломает ExecReload');
+    assert.ok(!content.includes('AmbientCapabilities'), 'ambient-возможности без User= бесполезны');
     assert.ok(content.includes(`ExecStart=${tempBinaryPath} run -c ${tempConfigPath}`));
     assert.ok(content.includes('Restart=always'));
     assert.ok(content.includes('RestartSec=5'));

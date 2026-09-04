@@ -80,7 +80,10 @@ rm -f /etc/systemd/system/sing-box.service
 rm -f /etc/systemd/system/olcrtc-agent-srv@.service
 rm -f /etc/systemd/system/route-rear-singbox.service
 # В конфиге тыла лежат ПРИВАТНЫЕ КЛЮЧИ WARP — оставлять его на снимаемой ноде нельзя.
-rm -f /etc/sing-box/rear.json
+# Второй путь — старое место (до 2026-09-04), откуда конфиг переехал: на нодах, снимаемых без
+# промежуточного обновления агента, он всё ещё лежит там. Каталог /etc/route-agent целиком удаляется
+# ниже, но явная строка нужна на случай, если тот блок когда-нибудь сузят.
+rm -f /etc/route-agent/rear.json /etc/sing-box/rear.json
 
 # Профиль сетевых буферов ядра, который агент кладёт при каждом старте (utils/kernelTuning.ts).
 # Снимается вместе с агентом: оставленный файл продолжал бы поднимать буферы на машине, где

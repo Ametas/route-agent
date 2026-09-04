@@ -14,7 +14,13 @@ const configSchema = z.object({
   // Тыловой инстанс sing-box (WARP-выход + наблюдение за направлениями). Отдельный конфиг и
   // отдельный юнит, но ТОТ ЖЕ бинарь, что у фронта: так UpgradeSingbox и SelfUpdate покрывают
   // оба инстанса и не появляется версии, о которой никто не знает.
-  REAR_SINGBOX_CONFIG_PATH: z.string().default('/etc/sing-box/rear.json'),
+  // ⚠️ НЕ В /etc/sing-box. Пакетный юнит sing-box запускается с флагом `-C /etc/sing-box`, а это
+  // КАТАЛОГ: sing-box сливает в один конфиг все `*.json` оттуда. Пока тыловой конфиг лежал рядом с
+  // фронтовым, один запуск пакетным юнитом склеил бы их — WARP-эндпоинты и loopback-инбаунды тыла
+  // оказались бы в одном процессе с публичными слушателями фронта. Спасало только то, что наш юнит
+  // указывает файл через `-c`. Найдено на ноде mo-nl-node (2026-09-04), где пакетный sing-box и
+  // наш тыл сосуществовали.
+  REAR_SINGBOX_CONFIG_PATH: z.string().default('/etc/route-agent/rear.json'),
   REAR_SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-rear-singbox.service'),
   // Как часто сторож проверяет, есть ли у тыла живые WARP-ключи, и переключает селектор на
   // direct при их отсутствии. Часто и дёшево: один запрос по loopback к соседнему процессу.

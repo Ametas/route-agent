@@ -66,14 +66,35 @@ export async function ensureSingboxSystemdUnit(
   const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
   const configPath = config.SINGBOX_CONFIG_PATH || '/etc/sing-box/config.json';
 
-  // Содержимое перенесено дословно из install.sh — меняется только место/момент его записи.
+  /**
+   * Содержимое перенесено дословно из install.sh — с ОДНОЙ правкой, стоившей отдельного разбора.
+   *
+   * ⚠️ ЗДЕСЬ БЫЛА ПАРА `CapabilityBoundingSet`/`AmbientCapabilities` НА CAP_NET_ADMIN И
+   * CAP_NET_BIND_SERVICE, И ОНА ЛОМАЛА ПЕРЕЗАГРУЗКУ. Обе строки имеют смысл только когда служба
+   * работает под непривилегированным пользователем: ambient-возможности нужны, чтобы выдать их
+   * такому процессу. У нас `User=` не задан вовсе, процесс идёт от root — и ему эти возможности
+   * безразличны, у него и так все.
+   *
+   * Зато ограничивающий набор действует и на root, и на ВСЕ процессы юнита, включая `ExecReload`.
+   * Он оставлял им ровно две перечисленные возможности и отбирал остальные — в том числе
+   * `CAP_KILL`. Пока и служба, и перезагрузка идут от root по одному UID, сигнал проходит и без
+   * неё. Но если процесс принадлежит ДРУГОМУ пользователю, `kill` без `CAP_KILL` получает
+   * `Operation not permitted` — и перезагрузка не работает никогда.
+   *
+   * Случай не выдуманный (нода mo-nl-node, 2026-09-04): там раньше стоял пакетный sing-box,
+   * работавший под пользователем `sing-box`; наш юнит лёг поверх пакетного, и с этого момента
+   * каждый `systemctl reload` падал. Процесс три недели держал в памяти старый конфиг, на UDP 443
+   * не слушал никто, а конфиг на диске откатывался в заглушку. Снаружи это выглядело как таймауты
+   * hysteria2 и tuic при живом VLESS — потому что VLESS терминирует Caddy, а он перезагружается
+   * отдельно и успешно.
+   *
+   * Если когда-нибудь появится `User=`, обе строки придётся вернуть — вместе с `CAP_KILL`.
+   */
   const expectedContent = `[Unit]
 Description=sing-box service
 After=network.target nss-lookup.target
 
 [Service]
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=${binaryPath} run -c ${configPath}
 Restart=always
 RestartSec=5

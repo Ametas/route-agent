@@ -24,7 +24,7 @@ const logger = pino({ level: 'info' });
  */
 
 function rearConfigPath(): string {
-  return config.REAR_SINGBOX_CONFIG_PATH || '/etc/sing-box/rear.json';
+  return config.REAR_SINGBOX_CONFIG_PATH || '/etc/route-agent/rear.json';
 }
 
 function rearUnitPath(): string {
@@ -36,6 +36,13 @@ function rearUnitName(): string {
 }
 
 /**
+ * Путь, где конфиг тыла лежал до 2026-09-04. Удаляется при первом же применении: оставленный, он
+ * продолжал бы подмешиваться в фронтовой конфиг на любой ноде, где sing-box запускают с `-C`
+ * (каталогом) — см. комментарий к `REAR_SINGBOX_CONFIG_PATH`.
+ */
+const LEGACY_REAR_CONFIG_PATH = '/etc/sing-box/rear.json';
+
+/**
  * Идемпотентно создаёт/обновляет unit тыла. Пишет только при отличии — иначе каждый пуш конфига
  * дёргал бы `daemon-reload` без всякой причины (тот же приём, что в `ensureAwgSystemdUnit`).
  *
@@ -43,8 +50,11 @@ function rearUnitName(): string {
  * прямо в перезагрузке, и SIGHUP посылается ТОЛЬКО если она прошла. Своя, более простая форма
  * (`kill -HUP` без проверки) у меня тут сначала и стояла — но проект уже решил эту задачу лучше, и
  * заводить второй, более слабый вариант того же механизма незачем.
+ *
+ * Возвращает `true`, если юнит пришлось переписать: вызывающему по этому признаку решать, хватит
+ * ли перезагрузки или нужен рестарт (сменившийся `ExecStart` перезагрузкой не подхватывается).
  */
-async function ensureRearUnit(): Promise<void> {
+async function ensureRearUnit(): Promise<boolean> {
   const unitPath = rearUnitPath();
   const binary = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
 
@@ -65,7 +75,7 @@ WantedBy=multi-user.target
 `;
 
   const existing = await fs.readFile(unitPath, 'utf-8').catch(() => null);
-  if (existing === expected) return;
+  if (existing === expected) return false;
 
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await fs.writeFile(unitPath, expected, 'utf-8');
@@ -76,6 +86,8 @@ WantedBy=multi-user.target
       logger.warn({ err: err.message }, 'Failed to daemon-reload after writing rear sing-box unit');
     });
   }
+
+  return true;
 }
 
 /**
@@ -85,6 +97,25 @@ WantedBy=multi-user.target
  */
 function serializeRearConfig(configObj: object): string {
   return JSON.stringify(configObj, null, 2);
+}
+
+/**
+ * Убирает конфиг тыла со старого места.
+ *
+ * Не косметика: пока файл лежит в /etc/sing-box, любой запуск sing-box с `-C` (каталогом) подмешает
+ * тыловые эндпоинты и loopback-инбаунды в фронтовой конфиг. Удаляем ПОСЛЕ успешной записи на новое
+ * место, чтобы не остаться вовсе без конфига, если запись сорвётся.
+ */
+async function removeLegacyRearConfig(): Promise<void> {
+  if (rearConfigPath() === LEGACY_REAR_CONFIG_PATH) return;
+
+  const existed = await fs.stat(LEGACY_REAR_CONFIG_PATH).then(() => true).catch(() => false);
+  if (!existed) return;
+
+  await fs.unlink(LEGACY_REAR_CONFIG_PATH).catch((err: any) => {
+    logger.warn({ err: err?.message, path: LEGACY_REAR_CONFIG_PATH }, 'Failed to remove the legacy rear config');
+  });
+  logger.info({ path: LEGACY_REAR_CONFIG_PATH }, 'Removed the legacy rear config from the shared sing-box directory');
 }
 
 /** Атомарная запись конфига тыла: временный файл рядом, затем rename. */
@@ -208,8 +239,17 @@ export async function configureRearSingboxHandler(
      * Юнит всё же приводим в порядок и в этой ветке: конфиг мог не измениться, а юнит — устареть
      * (например, после смены пути к бинарю обновлением sing-box).
      */
-    await ensureRearUnit();
-    if ((await rearConfigMatches(configObj)) && (await isRearRunning())) {
+    /**
+     * Юнит изменился — значит поменялся `ExecStart`, и перезагрузка тут бессильна: по SIGHUP
+     * sing-box перечитывает ТОТ путь, с которым его запустили, а он у работающего процесса
+     * прежний. Единственный способ подхватить новый — рестарт.
+     *
+     * Актуально при переезде конфига из /etc/sing-box (2026-09-04): без этого тыл продолжал бы
+     * читать старый файл, а мы бы считали, что применили новый.
+     */
+    const unitChanged = await ensureRearUnit();
+
+    if (!unitChanged && (await rearConfigMatches(configObj)) && (await isRearRunning())) {
       logger.info('Rear sing-box config unchanged and instance is up — skipping write and reload');
       return callback(null, {
         success: true,
@@ -230,9 +270,15 @@ export async function configureRearSingboxHandler(
     }
 
     await writeRearConfig(configObj);
+    await removeLegacyRearConfig();
 
     if (process.env.NODE_ENV !== 'test') {
-      await startAndReloadRear();
+      if (unitChanged) {
+        await execAsync(`systemctl enable --now ${rearUnitName()}`);
+        await execAsync(`systemctl restart ${rearUnitName()}`);
+      } else {
+        await startAndReloadRear();
+      }
     }
 
     const running = await isRearRunning();

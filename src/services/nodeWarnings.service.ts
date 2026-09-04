@@ -3,6 +3,7 @@ import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import { config } from '../config.js';
 import { authenticateCall } from '../middleware/auth.js';
 import { collectJournalWarnings } from '../utils/journalWarnings.js';
+import { detectCoreNotListening } from '../utils/listenerWarning.js';
 
 const logger = pino({ level: 'info' });
 
@@ -32,7 +33,15 @@ export async function pullNodeWarningsHandler(
   }
 
   try {
-    const warnings = await collectJournalWarnings();
+    /**
+     * Два источника, один доклад.
+     *
+     * Журнал ловит то, что процесс СКАЗАЛ; проверка сокетов — то, о чём он молчит. Нода, три недели
+     * простоявшая без единого слушателя на публичном порту, не написала об этом ни строчки: она
+     * просто ничего не обслуживала. Грепом отсутствие события не найти.
+     */
+    const [journal, notListening] = await Promise.all([collectJournalWarnings(), detectCoreNotListening()]);
+    const warnings = notListening ? [notListening, ...journal] : journal;
 
     if (warnings.length > 0) {
       logger.info(

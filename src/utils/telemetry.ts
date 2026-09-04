@@ -96,10 +96,27 @@ export async function getWebRtcStatus(): Promise<string> {
 }
 
 /**
- * Определение текущей версии sing-box бинарника
+ * Определение текущей версии sing-box.
+ *
+ * ⚠️ ОТВЕЧАЕТ НЕ «ЕСТЬ ЛИ ФАЙЛ», А «РАБОТОСПОСОБНО ЛИ ЯДРО». Разница выяснилась дорого
+ * (нода mo-nl-node, 2026-09-04): бинарь `/usr/local/bin/sing-box` общий у фронтового и ТЫЛОВОГО
+ * инстансов, поэтому после сноса фронтовой службы он остаётся на месте — тыл из него работает.
+ * Версия при этом определялась исправно, оркестратор считал ядро установленным, прятал кнопку
+ * установки и отказывался считать ноду неготовой. Штатного пути восстановления не осталось вовсе:
+ * пуш конфига упирался в `systemctl start`, а юнита не было.
+ *
+ * Поэтому отсутствие ЮНИТА равносильно отсутствию ядра. Формально бинарь есть, но запустить его
+ * нечем, и правильное действие ровно то же — установка, которая юнит и создаст.
  */
 export async function getSingBoxVersion(): Promise<string> {
   const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+
+  const unitPath = config.SINGBOX_UNIT_FILE_PATH || '/etc/systemd/system/sing-box.service';
+  const unitExists = await fs.stat(unitPath).then(() => true).catch(() => false);
+  if (!unitExists) {
+    return 'not_installed';
+  }
+
   try {
     const { stdout } = await execFileAsync(binaryPath, ['version']);
     const match = stdout.match(/sing-box version ([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
