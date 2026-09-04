@@ -170,6 +170,21 @@ service EgressAgentService {
   // and measuring throughput was ruled out as too expensive. Treat a healthy report as "the tunnel
   // answers", not as "the key is at full speed".
   rpc GetWarpKeyHealth (WarpKeyHealthRequest) returns (WarpKeyHealthResponse);
+  // Unary RPC that reports warnings found in this node's own journals — the class of problem where
+  // everything WORKS but works worse than it should, and nothing ever surfaces it.
+  //
+  // WHY THE AGENT AND NOT THE ORCHESTRATOR. Telemetry already streams a tail of the sing-box
+  // journal, so scanning it centrally looks tempting. It does not work: the tail is a few kilobytes,
+  // and the warnings that matter most are printed ONCE at socket setup, so on a busy node they
+  // scroll out of that window within seconds. Only the node can look back over hours of its own
+  // journal, and journalctl's own --grep keeps the cost on the node instead of shipping megabytes.
+  //
+  // STATELESS ON PURPOSE. The agent reports every distinct warning class currently visible in a
+  // fixed lookback window, with a count and the last occurrence — it does NOT track what it already
+  // said. A journal cursor would have to be persisted, kept in sync with an unknown number of
+  // consumers, and would silently swallow a warning whenever it drifted. Deduplication belongs to
+  // the orchestrator, which is the side that actually decides whether to notify a human.
+  rpc PullNodeWarnings (NodeWarningsRequest) returns (NodeWarningsResponse);
 }
 
 message ConfigPayload {
@@ -632,4 +647,32 @@ message WarpKeyHealthResponse {
   // normal report, INCLUDING one with no entries at all — that case means the rear runs with no
   // WARP endpoints, which is a real and expected state while the pool is still filling.
   string skipped_reason = 4;
+}
+
+message NodeWarningsRequest {
+  string orchestrator_secret = 1;
+}
+
+message NodeWarning {
+  // Stable class identifier, assigned by the agent's pattern registry (e.g. "quic_recv_buffer").
+  // It is what the orchestrator deduplicates on, so it must never be derived from the message text.
+  string kind = 1;
+  // Where it was found: a systemd unit name, or "kernel" for kernel ring-buffer messages.
+  string source = 2;
+  // The matching journal line, truncated. Kept verbatim rather than reworded because the numbers
+  // inside it (e.g. "wanted: 7500 kiB, got: 208 kiB") are the actual diagnosis.
+  string sample = 3;
+  // How many times this class appeared inside the lookback window. One occurrence of a
+  // setup-time warning and a thousand occurrences of a runtime one mean very different things.
+  uint32 occurrences = 4;
+  // When the LAST occurrence happened, in unix milliseconds.
+  int64 last_seen_unix_ms = 5;
+}
+
+message NodeWarningsResponse {
+  bool success = 1;
+  string message = 2;
+  repeated NodeWarning warnings = 3;
+  // How far back the agent actually looked, so the orchestrator never has to assume it.
+  uint32 lookback_hours = 4;
 }

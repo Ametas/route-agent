@@ -23,6 +23,10 @@ const configSchema = z.object({
   // Куда кладётся профиль сетевых буферов ядра (см. utils/kernelTuning.ts). Файл нужен вместе с
   // применением, а не вместо: `sysctl -w` живёт до перезагрузки, файл переживает её.
   SYSCTL_PROFILE_PATH: z.string().default('/etc/sysctl.d/99-route-agent.conf'),
+  // Насколько глубоко PullNodeWarnings смотрит в журнал. Сутки — потому что самые важные строки
+  // (срезанный ядром буфер QUIC) печатаются ОДИН раз при подъёме сокета: узкое окно их не увидит,
+  // а нода могла не перезапускаться неделями.
+  NODE_WARNING_LOOKBACK_HOURS: z.coerce.number().default(24),
   CADDYFILE_PATH: z.string().default('/etc/caddy/Caddyfile'),
   // The `|| systemctl restart caddy` fallback is load-bearing, not decorative: `reload` re-POSTs
   // the Caddyfile to the ALREADY-RUNNING process via its admin API — it never re-reads
