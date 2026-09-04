@@ -188,3 +188,35 @@ test('the sysctl file is rewritten only when it differs', async () => {
     assert.strictEqual((await applyKernelTuning(run)).fileChanged, false, 'файл перезаписан без изменений');
   });
 });
+
+test('the profile turns on BBR together with its queue', () => {
+  /**
+   * Не догадка, а разница между двумя живыми нодами: на тюнингованной владельцем `bbr` + `fq`, на
+   * нетронутой `cubic` + `fq_codel`. BBR при этом в ядре есть на обеих
+   * (`tcp_available_congestion_control: reno cubic bbr`), то есть включать нечего кроме ключа.
+   *
+   * `fq` идёт парой намеренно: BBR полагается на пейсинг, и без очереди, которая умеет его делать,
+   * ядро тянет это на себе.
+   */
+  const values = new Map(KERNEL_TUNING.map((e) => [e.key, e.value]));
+
+  assert.strictEqual(values.get('net.ipv4.tcp_congestion_control'), 'bbr');
+  assert.strictEqual(values.get('net.core.default_qdisc'), 'fq');
+});
+
+test('keys ruled out by measurement stay out', () => {
+  /**
+   * Обе строки были в профиле и обе убраны не по вкусу, а по замеру — сторож не даёт вернуть их
+   * «за компанию» при следующей правке:
+   *
+   *   * `netdev_max_backlog` — колонка потерь в /proc/net/softnet_stat на нагруженной ноде сплошь
+   *     нули: очередь приёма ни разу не переполнялась.
+   *   * `ip_local_port_range` — расширение вниз затянуло бы в эфемерный диапазон пять фиксированных
+   *     портов ноды (20000, 28080, 28081, 29000, 29001), которые при умолчании 32768-60999 лежат
+   *     ниже него и столкнуться не могут. Риск на ровном месте ради неизмеренного выигрыша.
+   */
+  const keys = KERNEL_TUNING.map((e) => e.key);
+
+  assert.ok(!keys.includes('net.core.netdev_max_backlog'), 'softnet не показал ни одной потери');
+  assert.ok(!keys.includes('net.ipv4.ip_local_port_range'), 'диапазон портов затянул бы внутрь фиксированные порты ноды');
+});
