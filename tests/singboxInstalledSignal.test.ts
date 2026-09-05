@@ -4,7 +4,7 @@ import * as fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { config } from '../src/config.js';
-import { getSingBoxVersion } from '../src/utils/telemetry.js';
+import { getSingBoxVersion, parseSingBoxVersionOutput } from '../src/utils/telemetry.js';
 
 process.env.NODE_ENV = 'test';
 
@@ -62,4 +62,30 @@ test('a missing unit means not installed, even with a working binary', async () 
   if (withUnitPresent === 'not_installed') return; // `git` недоступен — различать нечего
 
   assert.strictEqual(withoutUnit, 'not_installed', 'отсутствие юнита не считается отсутствием ядра');
+});
+
+/**
+ * Суффикс версии — единственное, по чему оркестратор отличает наш форк (горячая замена абонентов)
+ * от официальной сборки. До 2026-09-06 регулярка была `/sing-box version ([0-9.]+)/` и обрезала
+ * всё после цифр: форк приезжал как `1.14.0`, то есть побайтово как апстрим, и развилка кнопок
+ * «форк ↔ оригинал» была принципиально невозможна. Тот же обрез превращал пререлизы в стабильные.
+ */
+test('version suffix survives parsing — the fork must not read as upstream', () => {
+  assert.strictEqual(
+    parseSingBoxVersionOutput('sing-box version 1.14.0-hotusers\n\nEnvironment: go1.27.1 linux/amd64'),
+    '1.14.0-hotusers'
+  );
+  assert.strictEqual(
+    parseSingBoxVersionOutput('sing-box version 1.14.0\n\nEnvironment: go1.25.5 linux/amd64'),
+    '1.14.0'
+  );
+  assert.strictEqual(
+    parseSingBoxVersionOutput('sing-box version 1.15.0-beta.1\n'),
+    '1.15.0-beta.1'
+  );
+});
+
+test('unparseable output falls back to the first line, never to a wrong version', () => {
+  assert.strictEqual(parseSingBoxVersionOutput('totally unexpected output\nsecond line'), 'totally unexpected output');
+  assert.strictEqual(parseSingBoxVersionOutput(''), 'not_installed');
 });

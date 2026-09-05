@@ -108,6 +108,24 @@ export async function getWebRtcStatus(): Promise<string> {
  * Поэтому отсутствие ЮНИТА равносильно отсутствию ядра. Формально бинарь есть, но запустить его
  * нечем, и правильное действие ровно то же — установка, которая юнит и создаст.
  */
+/**
+ * Достаёт версию из вывода `sing-box version`.
+ *
+ * Вынесено из getSingBoxVersion отдельной чистой функцией ради проверяемости: подложить сюда
+ * бинарь, печатающий нужную строку, значит завести платформозависимый скрипт-заглушку, а разбор
+ * строки — ровно то место, где ошибка уже случалась.
+ *
+ * Версия забирается ЦЕЛИКОМ, до пробела, а не как `[0-9.]+`. Прежний вариант обрезал всё после
+ * цифр, и `1.14.0-hotusers` приезжало в оркестратор как `1.14.0` — то есть наша сборка с горячей
+ * заменой абонентов была побайтово неотличима от официальной. Тот же обрез молча превращал
+ * пререлизы (`1.15.0-beta.1`) в стабильные версии. Суффикс здесь не украшение: по нему
+ * оркестратор решает, какую кнопку установки показывать.
+ */
+export function parseSingBoxVersionOutput(stdout: string): string {
+  const match = stdout.match(/sing-box version (\S+)/) || stdout.match(/version\s+(\S+)/i);
+  return match ? match[1] : (stdout.split('\n')[0].trim() || 'not_installed');
+}
+
 export async function getSingBoxVersion(): Promise<string> {
   const binaryPath = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
 
@@ -119,8 +137,7 @@ export async function getSingBoxVersion(): Promise<string> {
 
   try {
     const { stdout } = await execFileAsync(binaryPath, ['version']);
-    const match = stdout.match(/sing-box version ([0-9.]+)/) || stdout.match(/version\s+([\w\.\-]+)/i);
-    return match ? match[1] : (stdout.split('\n')[0].trim() || 'not_installed');
+    return parseSingBoxVersionOutput(stdout);
   } catch {
     return 'not_installed';
   }

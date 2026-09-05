@@ -18,6 +18,41 @@ const logger = pino({ level: 'info' });
  * Выполняет атомарную замену бинарного файла через промежуточный временный файл в той же директории назначения.
  * Это предотвращает ошибки EXDEV (между разными файловыми системами) и ETXTBSY (при перезаписи запущенного исполняемого файла).
  */
+/**
+ * Проверяет, что ДАННЫЙ бинарь sing-box принимает УЖЕ ЛЕЖАЩИЕ на узле конфиги.
+ *
+ * Зачем это перед подменой бинаря. Конфиг проверяется `sing-box check` при каждом применении
+ * (`validateConfig` в utils/singbox.ts), но проверяет его ТЕКУЩИЙ бинарь. Смена бинаря меняет
+ * судью: сборки различаются набором фич и строгостью разбора, и конфиг, принятый одной, может
+ * быть отвергнут другой. Конкретный случай — наш форк: апстрим на негодном UUID молча
+ * подставляет `uuid.NewV5` от строки, форк отвергает набор целиком (это сделано намеренно —
+ * молчаливая подмена идентификатора хуже отказа).
+ *
+ * Без этой проверки последовательность была такой: бинарь подменён -> `systemctl restart` ->
+ * sing-box не стартует -> узел без сервиса, причём откатываться НЕ НА ЧТО, старый бинарь
+ * перезаписан. Теперь новый бинарь обязан сперва доказать, что умеет то, что на узле уже
+ * применено.
+ *
+ * Проверяются оба инстанса: фронтовой и тыловой (WARP) — бинарь у них общий, а конфиги разные,
+ * и отвергнуть новая сборка может любой из них. Отсутствующий конфиг пропускается: на свежем
+ * узле их ещё нет, и требовать их наличия значило бы запретить первую установку.
+ */
+export async function verifyBinaryAcceptsLiveConfigs(binaryPath: string): Promise<{ ok: true } | { ok: false; configPath: string; error: string }> {
+  const configPaths = [config.SINGBOX_CONFIG_PATH, config.REAR_SINGBOX_CONFIG_PATH].filter(Boolean);
+
+  for (const configPath of configPaths) {
+    const exists = await fs.stat(configPath).then(() => true).catch(() => false);
+    if (!exists) continue;
+    try {
+      await execFileAsync(binaryPath, ['check', '-c', configPath]);
+    } catch (err: unknown) {
+      const e = err as { stderr?: string; message?: string };
+      return { ok: false, configPath, error: (e.stderr || e.message || 'unknown error').slice(0, 1000) };
+    }
+  }
+  return { ok: true };
+}
+
 export async function replaceBinaryAtomically(sourcePath: string, targetPath: string): Promise<void> {
   const targetDir = path.dirname(targetPath);
   await fs.mkdir(targetDir, { recursive: true });
@@ -127,6 +162,25 @@ export async function uploadSingboxBinaryHandler(
           } catch (err: any) {
             logger.warn({ err: err.message }, 'Failed to setcap on new sing-box binary');
           }
+        }
+      }
+
+      // Проверяем ДО подмены, во временном файле: так откат не нужен вовсе — при отказе на
+      // месте остаётся прежний, заведомо рабочий бинарь, и узел не теряет сервис ни на секунду.
+      if (process.env.NODE_ENV !== 'test') {
+        const verdict = await verifyBinaryAcceptsLiveConfigs(tempPath);
+        if (!verdict.ok) {
+          await fs.unlink(tempPath).catch(() => {});
+          logger.error(
+            { version: targetVersion, configPath: verdict.configPath, error: verdict.error },
+            'Rejected uploaded sing-box binary: it does not accept a config already applied on this node'
+          );
+          return callback(null, {
+            success: false,
+            message:
+              `Бинарь ${targetVersion} отвергнут: он не принимает уже применённый на узле конфиг ` +
+              `${verdict.configPath}. Прежний бинарь оставлен на месте, сервис не тронут.\n${verdict.error}`,
+          });
         }
       }
 
