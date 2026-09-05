@@ -76,6 +76,23 @@ const SAMPLE_LIMIT = 300;
 const LINE_LIMIT = 2000;
 
 /**
+ * Потолок времени на ОДИН проход journalctl.
+ *
+ * Раньше его не было вовсе, и это был не недосмотр в мелочи, а способ повесить вызов навсегда:
+ * отмена gRPC по дедлайну дочерний процесс не убивает, он продолжает скрести журнал сам по себе.
+ * На живой ноде (2026-09-05) проход по юнитам занимал 65 секунд при дедлайне вызова в 60 — то есть
+ * оркестратор получал `DEADLINE_EXCEEDED` каждые 15 минут, а на ноде оставался работающий скан.
+ *
+ * Двадцать секунд взяты от дедлайна вызова, а не с потолка: проходов два, они последовательные,
+ * значит худший случай — сорок секунд, и остаётся запас на сам gRPC. Не уложились — докладываем
+ * без этого прохода: половина сведений лучше, чем сорванный вызов и висящий процесс.
+ *
+ * `SIGKILL`, а не `SIGTERM`: journalctl в разгаре чтения сжатого журнала на мягкий сигнал может не
+ * ответить, а смысл потолка в том, чтобы процесс ГАРАНТИРОВАННО не пережил свой вызов.
+ */
+const PASS_TIMEOUT_MS = 20_000;
+
+/**
  * Объединённый образец для `--grep`.
  *
  * Один вызов journalctl вместо вызова на класс: отбор всё равно идёт по одному проходу журнала, а
@@ -242,7 +259,11 @@ export async function collectJournalWarnings(
 
   for (const pass of passes) {
     try {
-      const { stdout } = await runExecFile('journalctl', pass.args, { maxBuffer: 8 * 1024 * 1024 });
+      const { stdout } = await runExecFile('journalctl', pass.args, {
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: PASS_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+      });
       collected.push(...parseJournalJson(String(stdout), pass.fallbackSource));
     } catch (err: any) {
       // journalctl отдаёт код 1, когда совпадений НЕ НАЙДЕНО — это не ошибка, а норма и самый
@@ -251,6 +272,21 @@ export async function collectJournalWarnings(
       const stdout = err?.stdout ? String(err.stdout) : '';
       if (stdout.trim()) {
         collected.push(...parseJournalJson(stdout, pass.fallbackSource));
+        continue;
+      }
+      /**
+       * Срабатывание потолка — отдельная новость, а не «проход не удался».
+       *
+       * Смысл различения не в формулировке: «не уложились» означает, что журнал на этой ноде
+       * слишком велик для окна оглядки, и лечится это объёмом журнала или окном. «Не удалось» —
+       * что journalctl отсутствует или урезан. Свалить их в одну строку значило бы разбирать
+       * причину заново при каждом случае.
+       */
+      if (err?.killed) {
+        logger.warn(
+          { timeoutMs: PASS_TIMEOUT_MS, source: pass.fallbackSource },
+          'Journal warning scan pass hit the time limit — reporting without it'
+        );
         continue;
       }
       if (err?.code !== 1) {

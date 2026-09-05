@@ -202,3 +202,84 @@ test('output attached to a non-zero exit is still parsed', async () => {
   assert.strictEqual(warnings[0].kind, 'quic_recv_buffer');
   assert.strictEqual(warnings[0].occurrences, 2, 'оба прохода отдали одно и то же — счёт должен это отразить');
 });
+
+test('each pass carries a hard time limit and is killed outright', () => {
+  /**
+   * ПОЧЕМУ ЭТО ВАЖНО. Потолка времени тут не было вовсе, и отмена gRPC-вызова по дедлайну
+   * дочерний процесс НЕ убивает: journalctl продолжал скрести журнал сам по себе. На живой ноде
+   * (2026-09-05) проход по юнитам занимал 65 секунд при дедлайне вызова в 60 — оркестратор получал
+   * DEADLINE_EXCEEDED каждые 15 минут.
+   *
+   * Проверяем оба поля. `timeout` без `killSignal` оставил бы SIGTERM, а journalctl в разгаре
+   * чтения сжатого журнала на мягкий сигнал может не ответить — то есть ровно тот случай, ради
+   * которого потолок и заводится, он бы не покрыл.
+   */
+  const opts: Array<Record<string, unknown>> = [];
+  const run = (async (_file: string, _args: string[], options: Record<string, unknown>) => {
+    opts.push(options);
+    return { stdout: '', stderr: '' };
+  }) as never;
+
+  return collectJournalWarnings(run, 24, new Date()).then(() => {
+    assert.strictEqual(opts.length, 2, 'проходов не два');
+    for (const [i, o] of opts.entries()) {
+      assert.ok(typeof o.timeout === 'number' && o.timeout > 0, `у прохода ${i} нет потолка времени`);
+      assert.strictEqual(o.killSignal, 'SIGKILL', `проход ${i} снимается мягким сигналом`);
+    }
+  });
+});
+
+test('two passes together fit inside the RPC deadline', () => {
+  /**
+   * Потолок выбран не на глаз: проходы последовательные, дедлайн вызова — 60 секунд, и сумма
+   * обязана оставлять запас на сам gRPC. Тест держит именно это соотношение, а не конкретное
+   * число: поднимут потолок до 40 секунд «чтобы успевало» — и вернётся та же ошибка, только
+   * объяснить её будет некому.
+   */
+  const RPC_DEADLINE_MS = 60_000;
+  const opts: number[] = [];
+  const run = (async (_file: string, _args: string[], options: Record<string, unknown>) => {
+    opts.push(options.timeout as number);
+    return { stdout: '', stderr: '' };
+  }) as never;
+
+  return collectJournalWarnings(run, 24, new Date()).then(() => {
+    const total = opts.reduce((a, b) => a + b, 0);
+    assert.ok(
+      total < RPC_DEADLINE_MS * 0.8,
+      `сумма потолков ${total} мс не оставляет запаса под дедлайн ${RPC_DEADLINE_MS} мс`
+    );
+  });
+});
+
+test('a pass killed by the time limit does not sink the other one', async () => {
+  /**
+   * Проходов два, и дорогой из них ровно один: на живой ноде поход по юнитам занимал 65 секунд, а
+   * по ядру — 0,3. Уронить из-за первого второй значило бы терять шесть классов предупреждений из
+   * семи там, где они как раз и водятся.
+   */
+  let call = 0;
+  const run = (async () => {
+    call += 1;
+    if (call === 1) {
+      const err: any = new Error('Command failed');
+      err.killed = true;
+      err.signal = 'SIGKILL';
+      err.stdout = '';
+      throw err;
+    }
+    return {
+      stdout: JSON.stringify({
+        MESSAGE: 'nf_conntrack: table full, dropping packet',
+        __REALTIME_TIMESTAMP: '1000000',
+        _SYSTEMD_UNIT: 'kernel',
+      }),
+      stderr: '',
+    };
+  }) as never;
+
+  const warnings = await collectJournalWarnings(run, 24, new Date());
+
+  assert.strictEqual(call, 2, 'второй проход не состоялся');
+  assert.strictEqual(warnings.length, 1, 'ядерное предупреждение потеряно вместе с сорванным проходом');
+});
