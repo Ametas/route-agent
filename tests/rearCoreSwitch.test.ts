@@ -183,3 +183,21 @@ test('повторный пуш того же конфига на mihomo нич�
     assert.strictEqual((await fs.stat(paths.mihomoConfig)).mtimeMs, firstWrite);
   });
 });
+
+/**
+ * mihomo читает файлы только внутри своего рабочего каталога (`-d`) и отвергает конфиг целиком со
+ * словами «path is not subpath of home directory or SAFE_PATHS». Рабочим каталогом мы делаем каталог
+ * конфига тыла — значит наборы правил обязаны лежать внутри него.
+ *
+ * Связь эта неявная: два независимых значения в конфиге агента, которые могут разъехаться молча, а
+ * проявится это отказом про пути, ничего не говорящим про изменённую константу.
+ */
+test('каталог наборов правил лежит внутри рабочего каталога mihomo', () => {
+  const workDir = path.dirname(config.REAR_MIHOMO_CONFIG_PATH);
+  const rulesDir = config.REAR_RULE_SET_DIR;
+
+  assert.ok(
+    rulesDir.startsWith(`${workDir}/`) || rulesDir.startsWith(workDir + path.sep),
+    `наборы (${rulesDir}) вне рабочего каталога mihomo (${workDir}) — конфиг будет отвергнут`
+  );
+});
