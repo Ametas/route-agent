@@ -124,16 +124,20 @@ export async function receiveStreamedBinary(
       return callback(null, { success: false, message: 'No binary data received.' });
     }
 
+    // Уборка идёт ДО ответа, а не в finally после него. Разница не косметическая: ответ
+    // «готово» должен означать, что временного файла уже нет. В finally он выполнялся после
+    // callback, и вызывающий видел успех, пока файл ещё лежал в /tmp — а на узле это десятки
+    // мегабайт содержимого бинаря, оставленные там, где его никто не ждёт.
+    let result: { success: boolean; message: string };
     try {
-      const result = await apply({ tempPath, version, targetBinary, bytes: bytesWritten });
-      return callback(null, result);
+      result = await apply({ tempPath, version, targetBinary, bytes: bytesWritten });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       logger.error({ err: msg, rpc: options.rpcName }, 'Failed to apply uploaded binary');
-      return callback(null, { success: false, message: `Failed to upload binary: ${msg}` });
-    } finally {
-      await fs.unlink(tempPath).catch(() => {});
+      result = { success: false, message: `Failed to upload binary: ${msg}` };
     }
+    await fs.unlink(tempPath).catch(() => {});
+    return callback(null, result);
   });
 
   call.on('error', (err) => {
