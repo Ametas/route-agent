@@ -280,7 +280,7 @@ export async function configureMeshTunnelHandler(
   }
 
   const {
-    privateKey, addressV4, addressV6, listenPort, jc, jmin, jmax, peers,
+    privateKey, addressV4, addressV6, listenPort, mtu, jc, jmin, jmax, peers,
     s1, s2, s3, s4, h1, h2, h3, h4, headerProtectionKey, i1, i2, i3, i4, i5,
   } = call.request;
 
@@ -307,6 +307,16 @@ export async function configureMeshTunnelHandler(
     if (cleanPrivateKey) configContent += `PrivateKey = ${cleanPrivateKey}\n`;
     if (listenPort) configContent += `ListenPort = ${listenPort}\n`;
     if (addresses.length > 0) configContent += `Address = ${addresses.join(', ')}\n`;
+    /**
+     * MTU интерфейса. Ноль или отсутствие — оставить умолчание awg-quick (1420).
+     *
+     * Оркестратор присылает его потому, что умолчание оказалось шире реальной дороги: на боевом
+     * узле путевой MTU до соседей 1452, а внешние пакеты выходили 1492, и фрагментами шло 27%
+     * трафика. Значение считает оркестратор — узел не должен угадывать его сам, иначе соседи по
+     * мешу разъедутся настройками.
+     */
+    const cleanMtu = Number.isFinite(Number(mtu)) && Number(mtu) > 0 ? Math.trunc(Number(mtu)) : null;
+    if (cleanMtu) configContent += `MTU = ${cleanMtu}\n`;
     if (jc !== undefined && jc !== null) configContent += `Jc = ${jc}\n`;
     if (jmin !== undefined && jmin !== null) configContent += `Jmin = ${jmin}\n`;
     if (jmax !== undefined && jmax !== null) configContent += `Jmax = ${jmax}\n`;
@@ -378,7 +388,27 @@ export async function configureMeshTunnelHandler(
       }
 
       const newAddressV4 = cleanAddressV4.split('/')[0] || null;
-      const identityUnchanged = interfaceExists && currentAddressV4 !== null && currentAddressV4 === newAddressV4;
+
+      /**
+       * MTU входит в проверку наравне с адресом, и по той же причине: это директива уровня
+       * awg-quick, а `awg-quick strip` выбрасывает такие перед `awg syncconf`. Через `reload`
+       * новое значение НЕ применится — на диске оно будет новым, на интерфейсе останется старым,
+       * и разойдутся они молча. Единственный способ подхватить — поднять интерфейс заново.
+       */
+      let currentMtu: number | null = null;
+      if (interfaceExists) {
+        currentMtu = await fs
+          .readFile(`/sys/class/net/${iface}/mtu`, 'utf-8')
+          .then((raw) => {
+            const parsed = Number(raw.trim());
+            return Number.isFinite(parsed) ? parsed : null;
+          })
+          .catch(() => null);
+      }
+      const mtuUnchanged = cleanMtu === null || currentMtu === cleanMtu;
+
+      const identityUnchanged =
+        interfaceExists && currentAddressV4 !== null && currentAddressV4 === newAddressV4 && mtuUnchanged;
 
       if (identityUnchanged) {
         try {
