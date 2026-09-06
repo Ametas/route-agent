@@ -47,6 +47,13 @@ service EgressAgentService {
 
   // Client Streaming RPC to stream a custom-built Caddy binary (caddy-dns/cloudflare plugin) to the node agent — Xeon-ring nodes only
   rpc UploadCaddyBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+  // Client Streaming RPC to stream the mihomo binary — the REAR core. Rear-capable nodes only.
+  //
+  // Separate from UploadSingboxBinary because these are two different binaries with two different
+  // jobs on the same node: sing-box serves subscribers at the front, mihomo carries the rear WARP
+  // branch. Sharing one RPC would mean a target_binary discriminator whose two values install to
+  // different paths, run under different units and fail for different reasons.
+  rpc UploadMihomoBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
 
   // Unary RPC for AmneziaWG3 service management
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
@@ -608,6 +615,15 @@ message RearSingboxConfigPayload {
   // keys from the orchestrator's pool, and which key belongs to which node is the orchestrator's
   // bookkeeping alone.
   string config_json = 3;
+
+  // Which core runs the rear: "mihomo", or "singbox"/empty for the original.
+  //
+  // Empty means singbox deliberately: an older agent that has never heard of this field reads the
+  // proto3 default and keeps doing exactly what it did before. Carried in the SAME call as the
+  // config rather than a separate switch RPC, because the config only makes sense to the core it
+  // was generated for — mihomo YAML handed to sing-box is not a degraded state, it is a node that
+  // does not come up. One call, one consistent pair.
+  string core = 4;
 }
 
 message RearSingboxConfigResponse {

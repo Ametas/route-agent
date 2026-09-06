@@ -22,6 +22,16 @@ const configSchema = z.object({
   // наш тыл сосуществовали.
   REAR_SINGBOX_CONFIG_PATH: z.string().default('/etc/route-agent/rear.json'),
   REAR_SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-rear-singbox.service'),
+
+  // Тыл на mihomo. Пути НАМЕРЕННО отдельные от sing-box-тыла, а не переиспользованные:
+  // `verifyBinaryAcceptsLiveConfigs` прогоняет новый бинарь sing-box по всем ЕГО конфигам, и
+  // окажись там конфиг mihomo — `sing-box check` падал бы на нём, блокируя любое обновление
+  // sing-box на узле. Разные пути делают эту проверку верной без единой правки.
+  MIHOMO_BINARY_PATH: z.string().default('/usr/local/bin/mihomo'),
+  REAR_MIHOMO_CONFIG_PATH: z.string().default('/etc/route-agent/rear.yaml'),
+  REAR_MIHOMO_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/route-rear-mihomo.service'),
+  // Каталог наборов правил, которые привозит оркестратор. Узел за ними в сеть не ходит.
+  REAR_RULE_SET_DIR: z.string().default('/etc/route-agent/rules'),
   // Как часто сторож проверяет, есть ли у тыла живые WARP-ключи, и переключает селектор на
   // direct при их отсутствии. Часто и дёшево: один запрос по loopback к соседнему процессу.
   // Смысл именно в скорости — оркестратор узнает ту же новость лишь через час.

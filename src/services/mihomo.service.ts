@@ -1,0 +1,120 @@
+import * as fs from 'fs/promises';
+import path from 'path';
+import pino from 'pino';
+import type { ServerReadableStream, sendUnaryData } from '@grpc/grpc-js';
+import { config } from '../config.js';
+import { execAsync, execFileAsync } from '../utils/exec.js';
+import { replaceBinaryAtomically } from './binary.service.js';
+import { receiveStreamedBinary } from './binaryReceiver.js';
+
+const logger = pino({ level: 'info' });
+
+/**
+ * Установка бинаря mihomo — ядра ТЫЛОВОГО инстанса.
+ *
+ * Тыл — второй прокси на том же узле, за фронтовым sing-box: фронт принимает абонентов, тыл
+ * решает, что уходит в WARP, а что выходит с собственного адреса узла. Раньше тылом работал второй
+ * инстанс того же sing-box; mihomo пришёл ради `rule-providers` — поддерживаемых списков доменов,
+ * которых у sing-box нет.
+ *
+ * **Capabilities не выдаются, в отличие от sing-box.** Тому нужны `cap_net_admin` (TUN) и
+ * `cap_net_bind_service` (порты ниже 1024). Тыл не поднимает интерфейсов и слушает только
+ * `127.0.0.1:29000/29001` — права ему не нужны ни одни, а выданные лишними были бы расширением
+ * поверхности атаки без единой причины.
+ */
+
+/**
+ * Проверяет, что НОВЫЙ бинарь принимает конфиг, который на узле уже работает.
+ *
+ * Смысл тот же, что у `verifyBinaryAcceptsLiveConfigs` для sing-box, и причина та же: конфиг
+ * проверяется при каждом применении, но проверяет его ТЕКУЩИЙ бинарь. Смена бинаря меняет судью —
+ * сборки различаются набором фич и строгостью разбора. Последовательность «подменили → перезапуск →
+ * не стартует» оставляет узел без тыла, и откатываться не на что: `replaceBinaryAtomically` старый
+ * бинарь не сохраняет.
+ *
+ * Отсутствие конфига — не отказ: бинарь может приезжать раньше первой настройки тыла, это штатный
+ * порядок (сначала ядро, потом конфигурация).
+ */
+export async function verifyMihomoAcceptsLiveConfig(
+  binaryPath: string
+): Promise<{ ok: true } | { ok: false; configPath: string; error: string }> {
+  const configPath = config.REAR_MIHOMO_CONFIG_PATH;
+  const exists = await fs.stat(configPath).then(() => true).catch(() => false);
+  if (!exists) return { ok: true };
+
+  try {
+    // `-d` задаёт рабочий каталог: mihomo ищет в нём наборы правил и складывает своё состояние.
+    await execFileAsync(binaryPath, ['-t', '-d', path.dirname(configPath), '-f', configPath]);
+    return { ok: true };
+  } catch (err: unknown) {
+    const e = err as { stderr?: string; message?: string };
+    return { ok: false, configPath, error: (e.stderr || e.message || 'unknown error').slice(0, 1000) };
+  }
+}
+
+/**
+ * RPC UploadMihomoBinary (клиентский стрим).
+ */
+export async function uploadMihomoBinaryHandler(
+  call: ServerReadableStream<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  return receiveStreamedBinary(
+    call,
+    callback,
+    { rpcName: 'UploadMihomoBinary', tempPrefix: 'mihomo' },
+    async ({ tempPath, version }) => {
+      const targetPath = config.MIHOMO_BINARY_PATH;
+      await fs.chmod(tempPath, 0o755);
+
+      if (process.env.NODE_ENV !== 'test') {
+        // Дымовой тест: файл вообще запускается на этой машине. Ловит и битую загрузку, и
+        // несовпадение микроархитектуры — второе иначе проявилось бы как SIGILL уже под нагрузкой.
+        try {
+          await execFileAsync(tempPath, ['-v']);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { success: false, message: `Полученный бинарь mihomo не запускается: ${msg.slice(0, 300)}` };
+        }
+
+        const accepts = await verifyMihomoAcceptsLiveConfig(tempPath);
+        if (!accepts.ok) {
+          // Подмены НЕ было: работающий тыл остаётся на прежнем бинаре и прежнем конфиге.
+          logger.warn(
+            { configPath: accepts.configPath, version },
+            'Rejected mihomo binary: it does not accept the config already live on this node'
+          );
+          return {
+            success: false,
+            message:
+              `Бинарь mihomo ${version} отвергнут: он не принимает уже применённый конфиг ` +
+              `${accepts.configPath}. Прежний бинарь оставлен на месте. ${accepts.error.slice(0, 400)}`,
+          };
+        }
+      }
+
+      await replaceBinaryAtomically(tempPath, targetPath);
+      logger.info({ path: targetPath, version }, 'Atomically updated mihomo binary');
+
+      // Юнит здесь НЕ создаётся: тыл провижинится вместе со своим конфигом (ConfigureRearSingbox с
+      // core=mihomo), потому что запускать ядро без конфигурации не во что. Если юнит уже есть —
+      // перезапускаем, чтобы новая версия начала работать сразу, а не после следующей настройки.
+      if (process.env.NODE_ENV !== 'test') {
+        const unitExists = await fs
+          .stat(config.REAR_MIHOMO_UNIT_FILE_PATH)
+          .then(() => true)
+          .catch(() => false);
+        if (unitExists) {
+          try {
+            await execAsync('systemctl restart route-rear-mihomo');
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn({ err: msg }, 'Failed to restart rear mihomo after binary upgrade');
+          }
+        }
+      }
+
+      return { success: true, message: `mihomo binary version ${version} successfully updated` };
+    }
+  );
+}

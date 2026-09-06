@@ -34,6 +34,11 @@ systemctl disable sing-box || true
 systemctl stop route-rear-singbox || true
 systemctl disable route-rear-singbox || true
 
+# Тыл на mihomo — та же роль, другое ядро. Юнит тоже создаётся агентом в рантайме, поэтому
+# снимаем оба варианта: на узле может стоять любой из них, и какой именно — здесь неизвестно.
+systemctl stop route-rear-mihomo || true
+systemctl disable route-rear-mihomo || true
+
 # olcrtc-agent-srv (план `olcrtc-redesign.md`) — one templated unit INSTANCE per user, not a single
 # fixed service name; stop/disable every currently-running instance before removing the template
 # unit file itself below. No UFW port to close here — the new design never opens one (control is
@@ -79,11 +84,15 @@ rm -f /etc/systemd/system/route-agent.service
 rm -f /etc/systemd/system/sing-box.service
 rm -f /etc/systemd/system/olcrtc-agent-srv@.service
 rm -f /etc/systemd/system/route-rear-singbox.service
+rm -f /etc/systemd/system/route-rear-mihomo.service
 # В конфиге тыла лежат ПРИВАТНЫЕ КЛЮЧИ WARP — оставлять его на снимаемой ноде нельзя.
 # Второй путь — старое место (до 2026-09-04), откуда конфиг переехал: на нодах, снимаемых без
 # промежуточного обновления агента, он всё ещё лежит там. Каталог /etc/route-agent целиком удаляется
 # ниже, но явная строка нужна на случай, если тот блок когда-нибудь сузят.
 rm -f /etc/route-agent/rear.json /etc/sing-box/rear.json
+# Конфиг тыла на mihomo и наборы правил, привезённые оркестратором.
+rm -f /etc/route-agent/rear.yaml
+rm -rf /etc/route-agent/rules
 
 # Профиль сетевых буферов ядра, который агент кладёт при каждом старте (utils/kernelTuning.ts).
 # Снимается вместе с агентом: оставленный файл продолжал бы поднимать буферы на машине, где
@@ -104,6 +113,7 @@ rm -rf /etc/amnezia/amneziawg
 rm -rf /etc/olcrtc-agent-srv
 rm -rf /var/www/decoy
 rm -f /usr/local/bin/sing-box
+rm -f /usr/local/bin/mihomo
 rm -f /usr/local/bin/olcrtc-agent-srv
 rm -f /tmp/sing-box.download
 
