@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import pino from 'pino';
 import { config } from '../config.js';
-import { readClashApiEndpoint } from '../utils/singboxConnections.js';
+import { readActiveRearClashApi } from '../utils/rearCore.js';
 import {
   currentSelection,
   decideWarpSelection,
@@ -28,13 +28,13 @@ let running = false;
  * означал бы запись в лог раз в полминуты и ничего больше.
  */
 export async function guardOnce(): Promise<string | null> {
-  const rearConfigPath = config.REAR_SINGBOX_CONFIG_PATH || '/etc/sing-box/rear.json';
-
-  const exists = await fs.stat(rearConfigPath).then(() => true).catch(() => false);
-  if (!exists) return null;
-
-  const endpoint = await readClashApiEndpoint(rearConfigPath);
-  if (!endpoint) return null;
+  // Ядро тыла определяется по тому, чей конфиг лежит на диске, а не берётся из настройки:
+  // сторож работает локально и каждые полминуты, а какое ядро выбрано — знает только
+  // оркестратор и только в момент настройки. Форма конфига у ядер разная, поэтому адрес Clash
+  // API читает само описание ядра.
+  const active = await readActiveRearClashApi();
+  if (!active) return null;
+  const endpoint = { address: active.address, secret: active.secret };
 
   const response = await fetch(`http://${endpoint.address}/proxies`, {
     headers: endpoint.secret ? { authorization: `Bearer ${endpoint.secret}` } : {},
@@ -45,7 +45,10 @@ export async function guardOnce(): Promise<string | null> {
   }
 
   const payload = await response.json();
-  const decision = decideWarpSelection(payload);
+  // Имена членов селектора у ядер РАЗНЫЕ: у sing-box это `wg-pool`/`direct`, у mihomo —
+  // `warp-auto`/`DIRECT`. PUT с чужим именем отвергается, то есть сторож молча перестал бы
+  // работать — ровно тот отказ, который здесь и стерегут.
+  const decision = decideWarpSelection(payload, active.core.warpMembers);
   // Селектора нет — WARP на ноде не включён или пул ещё пуст. Вмешиваться не во что.
   if (!decision) return null;
 

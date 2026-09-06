@@ -37,6 +37,15 @@ interface ClashProxyEntry {
 /** Теги наших туннелей. Группа называется ровно `warp`, поэтому одного префикса мало. */
 const WARP_TAG_PREFIX = 'warp-';
 
+/**
+ * Имена ГРУПП, которые тоже начинаются на `warp-` и ключами не являются.
+ *
+ * У тыла на mihomo между селектором и пулом стоит `warp-auto` — группа автоматического отката
+ * по порогу качества. Под префикс она попадает, ключом не является, и без этого исключения
+ * уезжала бы в оркестратор как несуществующий ключ с собственной задержкой.
+ */
+const WARP_GROUP_TAGS = new Set(['warp-auto']);
+
 function parseHistory(raw: unknown): { delay: number; at: number } | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
 
@@ -60,6 +69,7 @@ export function parseWarpKeyHealth(payload: unknown): WarpKeyHealthRecord[] {
     // Строго префикс И непустой остаток: тег группы — ровно `warp`, и принять его за ключ значило
     // бы отчитаться о туннеле, которого нет.
     if (!tag.startsWith(WARP_TAG_PREFIX) || tag.length === WARP_TAG_PREFIX.length) continue;
+    if (WARP_GROUP_TAGS.has(tag)) continue;
 
     const measured = parseHistory(entry?.history);
     records.push({

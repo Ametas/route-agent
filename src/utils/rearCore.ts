@@ -26,6 +26,21 @@ import { validateSingBoxConfig } from './singbox.js';
 
 export type RearCoreId = 'singbox' | 'mihomo';
 
+/**
+ * Имена членов селектора `warp`, между которыми переключает сторож.
+ *
+ * У ядер они РАЗНЫЕ, и это не косметика: PUT с чужим именем mihomo отвергает, то есть сторож
+ * молча перестал бы работать. У sing-box прямой выход — наш собственный аутбаунд `direct`, у
+ * mihomo — встроенный `DIRECT`, заглавными. И под селектором у mihomo стоит не сам пул, а
+ * `warp-auto` — группа автоматического отката по порогу качества.
+ */
+export interface RearWarpMembers {
+  /** Что выбрать, когда WARP работоспособен. */
+  pool: string;
+  /** Что выбрать, когда живых ключей не осталось. */
+  direct: string;
+}
+
 export interface RearCore {
   id: RearCoreId;
   /** Человекочитаемое имя для сообщений админу. */
@@ -38,6 +53,9 @@ export interface RearCore {
   unitContent(): string;
   /** Проверка конфига ТЕМ САМЫМ бинарём, который его будет исполнять. */
   validate(configObj: object): Promise<{ valid: boolean; error?: string }>;
+  warpMembers: RearWarpMembers;
+  /** Адрес и секрет Clash API из УЖЕ ПРИМЕНЁННОГО конфига — форма у ядер разная. */
+  clashApiFrom(parsed: unknown): { address: string; secret: string } | null;
 }
 
 const unitName = (unitPath: string) => path.basename(unitPath, '.service');
@@ -83,6 +101,14 @@ export const SINGBOX_REAR_CORE: RearCore = {
     });
   },
   validate: validateSingBoxConfig,
+  warpMembers: { pool: 'wg-pool', direct: 'direct' },
+  clashApiFrom(parsed: unknown) {
+    const api = (parsed as { experimental?: { clash_api?: { external_controller?: unknown; secret?: unknown } } })
+      ?.experimental?.clash_api;
+    const address = typeof api?.external_controller === 'string' ? api.external_controller.trim() : '';
+    if (!address) return null;
+    return { address, secret: typeof api?.secret === 'string' ? api.secret : '' };
+  },
 };
 
 export const MIHOMO_REAR_CORE: RearCore = {
@@ -111,6 +137,13 @@ export const MIHOMO_REAR_CORE: RearCore = {
     });
   },
   validate: validateMihomoConfig,
+  warpMembers: { pool: 'warp-auto', direct: 'DIRECT' },
+  clashApiFrom(parsed: unknown) {
+    const root = parsed as { 'external-controller'?: unknown; secret?: unknown };
+    const address = typeof root?.['external-controller'] === 'string' ? root['external-controller'].trim() : '';
+    if (!address) return null;
+    return { address, secret: typeof root?.secret === 'string' ? root.secret : '' };
+  },
 };
 
 /**
@@ -152,4 +185,40 @@ export function resolveRearCore(coreId: string | undefined | null): RearCore {
 /** Второе ядро — то, которое надо снять при переключении. */
 export function otherRearCore(core: RearCore): RearCore {
   return core.id === 'mihomo' ? SINGBOX_REAR_CORE : MIHOMO_REAR_CORE;
+}
+
+/**
+ * Какое ядро СЕЙЧАС несёт тыл — по тому, чей конфиг лежит на диске.
+ *
+ * Спрашиваем диск, а не оркестратор: сторож WARP и отчёт о здоровье ключей работают локально и
+ * каждые полминуты, а поле в запросе приходит только при настройке. Переключение снимает конфиг
+ * предшественника целиком, поэтому двусмысленности нет; если файлов почему-то два, старшинство
+ * у mihomo — его юнит и поднимается последним.
+ */
+export async function resolveActiveRearCore(): Promise<RearCore | null> {
+  for (const core of [MIHOMO_REAR_CORE, SINGBOX_REAR_CORE]) {
+    const exists = await fs.stat(core.configPath()).then(() => true).catch(() => false);
+    if (exists) return core;
+  }
+  return null;
+}
+
+/**
+ * Clash API работающего тыла — вместе с ядром, которому он принадлежит.
+ *
+ * Адрес и секрет берутся из ПРИМЕНЁННОГО конфига, а не из отдельной настройки: так они не могут
+ * разойтись с тем, что на самом деле слушает процесс.
+ */
+export async function readActiveRearClashApi(): Promise<{ core: RearCore; address: string; secret: string } | null> {
+  const core = await resolveActiveRearCore();
+  if (!core) return null;
+  try {
+    const raw = await fs.readFile(core.configPath(), 'utf-8');
+    // Конфиг mihomo мы пишем JSON-ом в файл `.yaml` (YAML — надстройка над JSON), поэтому
+    // разбирается он тем же `JSON.parse`, что и конфиг sing-box.
+    const endpoint = core.clashApiFrom(JSON.parse(raw));
+    return endpoint ? { core, ...endpoint } : null;
+  } catch {
+    return null;
+  }
 }

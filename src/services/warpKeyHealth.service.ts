@@ -3,7 +3,7 @@ import pino from 'pino';
 import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import { config } from '../config.js';
 import { authenticateCall } from '../middleware/auth.js';
-import { readClashApiEndpoint } from '../utils/singboxConnections.js';
+import { readActiveRearClashApi } from '../utils/rearCore.js';
 import { fetchWarpKeyHealth } from '../utils/warpKeyHealth.js';
 
 const logger = pino({ level: 'info' });
@@ -47,7 +47,10 @@ export async function getWarpKeyHealthHandler(
 
     // Адрес и секрет берутся из ПРИМЕНЁННОГО конфига тыла, а не из отдельной настройки: так они не
     // могут разойтись с тем, что на самом деле слушает процесс.
-    const endpoint = await readClashApiEndpoint(rearConfigPath);
+    // Форма конфига у ядер разная (у sing-box `experimental.clash_api`, у mihomo поля верхнего
+    // уровня), поэтому адрес читает само описание ядра, а какое ядро работает — определяется по
+    // тому, чей конфиг лежит на диске.
+    const endpoint = await readActiveRearClashApi();
     if (!endpoint) {
       return callback(null, {
         success: true,

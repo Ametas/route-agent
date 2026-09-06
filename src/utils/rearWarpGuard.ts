@@ -22,6 +22,11 @@ import { parseWarpKeyHealth } from './warpKeyHealth.js';
 
 /** Тег селектора и его членов — должны совпадать с генератором конфига в оркестраторе. */
 export const WARP_SELECTOR_TAG = 'warp';
+/**
+ * Имена членов селектора у ТЫЛА НА SING-BOX. У mihomo они другие (`warp-auto` и `DIRECT`), и
+ * приезжают из описания ядра — см. `RearWarpMembers` в `utils/rearCore.ts`. Оставлены здесь
+ * умолчанием, чтобы вызовы для sing-box читались как раньше.
+ */
 export const WARP_POOL_TAG = 'wg-pool';
 export const DIRECT_TAG = 'direct';
 
@@ -29,7 +34,7 @@ export type WarpSelection = typeof WARP_POOL_TAG | typeof DIRECT_TAG;
 
 export interface GuardDecision {
   /** Что должно быть выбрано по текущему состоянию ключей. */
-  desired: WarpSelection;
+  desired: string;
   /** Сколько ключей ответило на последнем замере sing-box. */
   aliveKeys: number;
   totalKeys: number;
@@ -42,7 +47,10 @@ export interface GuardDecision {
  * включён или пул ещё пуст (генератор тогда не создаёт ни группу, ни селектор), и трогать там
  * нечего.
  */
-export function decideWarpSelection(payload: unknown): GuardDecision | null {
+export function decideWarpSelection(
+  payload: unknown,
+  members: { pool: string; direct: string } = { pool: WARP_POOL_TAG, direct: DIRECT_TAG }
+): GuardDecision | null {
   const proxies = (payload as { proxies?: Record<string, unknown> })?.proxies;
   if (!proxies || typeof proxies !== 'object' || !(WARP_SELECTOR_TAG in proxies)) return null;
 
@@ -52,7 +60,7 @@ export function decideWarpSelection(payload: unknown): GuardDecision | null {
   const aliveKeys = keys.filter((key) => key.alive).length;
 
   return {
-    desired: aliveKeys > 0 ? WARP_POOL_TAG : DIRECT_TAG,
+    desired: aliveKeys > 0 ? members.pool : members.direct,
     aliveKeys,
     totalKeys: keys.length,
   };
@@ -76,7 +84,7 @@ function authHeaders(endpoint: ClashApiEndpoint): Record<string, string> {
  * успех — 204 без тела. Цель обязана быть селектором (иначе 400 «Must be a Selector»), а член —
  * входить в группу (иначе 400 «not found»).
  */
-export async function selectWarpMember(endpoint: ClashApiEndpoint, member: WarpSelection): Promise<void> {
+export async function selectWarpMember(endpoint: ClashApiEndpoint, member: string): Promise<void> {
   const response = await fetch(`http://${endpoint.address}/proxies/${WARP_SELECTOR_TAG}`, {
     method: 'PUT',
     headers: { ...authHeaders(endpoint), 'content-type': 'application/json' },
