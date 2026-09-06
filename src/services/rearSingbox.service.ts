@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { authenticateCall } from '../middleware/auth.js';
 import { execAsync } from '../utils/exec.js';
 import { validateSingBoxConfig } from '../utils/singbox.js';
+import { resolveRearCore, otherRearCore, SINGBOX_REAR_CORE, type RearCore } from '../utils/rearCore.js';
 
 const logger = pino({ level: 'info' });
 
@@ -23,16 +24,16 @@ const logger = pino({ level: 'info' });
  * тыла, и мы отвечаем `skipped_reason`, а не ошибкой.
  */
 
-function rearConfigPath(): string {
-  return config.REAR_SINGBOX_CONFIG_PATH || '/etc/route-agent/rear.json';
+function rearConfigPath(core: RearCore = SINGBOX_REAR_CORE): string {
+  return core.configPath();
 }
 
-function rearUnitPath(): string {
-  return config.REAR_SINGBOX_UNIT_FILE_PATH || '/etc/systemd/system/route-rear-singbox.service';
+function rearUnitPath(core: RearCore = SINGBOX_REAR_CORE): string {
+  return core.unitPath();
 }
 
-function rearUnitName(): string {
-  return path.basename(rearUnitPath(), '.service');
+function rearUnitName(core: RearCore = SINGBOX_REAR_CORE): string {
+  return core.unitName();
 }
 
 /**
@@ -54,39 +55,22 @@ const LEGACY_REAR_CONFIG_PATH = '/etc/sing-box/rear.json';
  * Возвращает `true`, если юнит пришлось переписать: вызывающему по этому признаку решать, хватит
  * ли перезагрузки или нужен рестарт (сменившийся `ExecStart` перезагрузкой не подхватывается).
  */
-async function ensureRearUnit(): Promise<boolean> {
-  const unitPath = rearUnitPath();
-  const binary = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
-
-  const expected = `[Unit]
-Description=Rear sing-box (WARP egress, managed by route-agent)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=${binary} run -c ${rearConfigPath()}
-Restart=on-failure
-RestartSec=5
-ExecReload=/bin/sh -c "${binary} check -c ${rearConfigPath()} && /bin/kill -HUP $MAINPID"
-
-[Install]
-WantedBy=multi-user.target
-`;
+async function ensureRearUnit(core: RearCore): Promise<boolean> {
+  const unitPath = core.unitPath();
+  const expected = core.unitContent();
 
   const existing = await fs.readFile(unitPath, 'utf-8').catch(() => null);
   if (existing === expected) return false;
 
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await fs.writeFile(unitPath, expected, 'utf-8');
-  logger.info({ path: unitPath }, 'Provisioned/updated rear sing-box systemd unit file');
+  logger.info({ path: unitPath, core: core.id }, 'Provisioned/updated rear systemd unit file');
 
   if (process.env.NODE_ENV !== 'test') {
     await execAsync('systemctl daemon-reload').catch((err: any) => {
-      logger.warn({ err: err.message }, 'Failed to daemon-reload after writing rear sing-box unit');
+      logger.warn({ err: err.message }, 'Failed to daemon-reload after writing rear unit');
     });
   }
-
   return true;
 }
 
@@ -119,8 +103,8 @@ async function removeLegacyRearConfig(): Promise<void> {
 }
 
 /** Атомарная запись конфига тыла: временный файл рядом, затем rename. */
-async function writeRearConfig(configObj: object): Promise<void> {
-  const target = rearConfigPath();
+async function writeRearConfig(core: RearCore, configObj: object): Promise<void> {
+  const target = core.configPath();
   const dir = path.dirname(target);
   const tmp = path.join(dir, `.rear.${Date.now()}_${crypto.randomUUID().slice(0, 8)}.tmp`);
 
@@ -139,8 +123,8 @@ async function writeRearConfig(configObj: object): Promise<void> {
  *
  * Юнит рядом (`ensureRearUnit`) сравнивает себя ровно так же и ровно поэтому.
  */
-async function rearConfigMatches(configObj: object): Promise<boolean> {
-  const existing = await fs.readFile(rearConfigPath(), 'utf-8').catch(() => null);
+async function rearConfigMatches(core: RearCore, configObj: object): Promise<boolean> {
+  const existing = await fs.readFile(core.configPath(), 'utf-8').catch(() => null);
   return existing !== null && existing === serializeRearConfig(configObj);
 }
 
@@ -157,16 +141,17 @@ async function rearConfigMatches(configObj: object): Promise<boolean> {
  * показал — подмена reload на restart не роняла ни одного теста.
  */
 export async function startAndReloadRear(
+  core: RearCore = SINGBOX_REAR_CORE,
   runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync
 ): Promise<void> {
-  const unit = rearUnitName();
+  const unit = core.unitName();
   // `enable --now` и на первом включении, и на последующих: юнит уже включён — команда идемпотентна.
   await runExec(`systemctl enable --now ${unit}`);
   await runExec(`systemctl reload ${unit}`);
 }
 
 /** Читаем состояние У ЮНИТА, а не выводим из того, что команда не упала. */
-async function isRearRunning(): Promise<boolean> {
+async function isRearRunning(core: RearCore = SINGBOX_REAR_CORE): Promise<boolean> {
   /**
    * В тестах `systemctl` закорочен, поэтому состояние юнита приходится задавать снаружи — иначе
    * ветка «конфиг тот же, но тыл лежит» непроверяема вовсе: мутационный прогон показал, что
@@ -174,13 +159,13 @@ async function isRearRunning(): Promise<boolean> {
    * в `utils/singbox.ts`.
    */
   if (process.env.NODE_ENV === 'test') return process.env.REAR_TEST_INACTIVE !== '1';
-  const { stdout } = await execAsync(`systemctl is-active ${rearUnitName()}`).catch(() => ({ stdout: '' }));
+  const { stdout } = await execAsync(`systemctl is-active ${core.unitName()}`).catch(() => ({ stdout: '' }));
   return stdout.trim() === 'active';
 }
 
-async function stopRear(): Promise<void> {
+async function stopRear(core: RearCore = SINGBOX_REAR_CORE): Promise<void> {
   if (process.env.NODE_ENV === 'test') return;
-  const unit = rearUnitName();
+  const unit = core.unitName();
   await execAsync(`systemctl disable --now ${unit}`).catch(() => {});
 }
 
@@ -203,27 +188,38 @@ export async function configureRearSingboxHandler(
 
   const enabled = Boolean(call.request.enabled);
   const rawConfig = call.request.configJson || call.request.config_json || '';
+  // Пустое `core` — sing-box: так читается умолчание proto3 у оркестратора, который поля ещё
+  // не присылает. Старое поведение остаётся старым по умолчанию, а не по совпадению.
+  const core = resolveRearCore(call.request.core);
+  const previous = otherRearCore(core);
 
   try {
     if (!enabled) {
-      await stopRear();
-      // Конфиг убираем вместе с инстансом: в нём лежат приватные ключи WARP, и оставлять их на
+      // Снимаем ОБА ядра, а не только запрошенное: «тыл выключен» — это состояние узла, и оно не
+      // должно зависеть от того, какое ядро оркестратор считал текущим. Иначе выключение после
+      // переключения оставило бы прежний инстанс работать, занимая порты и продолжая гнать
+      // трафик в WARP.
+      //
+      // Конфиги убираем вместе с инстансами: в них лежат приватные ключи WARP, и оставлять их на
       // ноде, которая больше не в пуле, незачем.
-      await fs.unlink(rearConfigPath()).catch(() => {});
-      await fs.unlink(rearUnitPath()).catch(() => {});
-      logger.info('Rear sing-box stopped and removed');
-      return callback(null, { success: true, message: 'Rear sing-box stopped and removed.', running: false });
+      for (const target of [core, previous]) {
+        await stopRear(target);
+        await fs.unlink(target.configPath()).catch(() => {});
+        await fs.unlink(target.unitPath()).catch(() => {});
+      }
+      logger.info('Rear instance stopped and removed (both cores)');
+      return callback(null, { success: true, message: 'Rear instance stopped and removed.', running: false });
     }
 
-    const binary = config.SINGBOX_BINARY_PATH || '/usr/local/bin/sing-box';
+    const binary = core.binaryPath();
     const hasBinary = await fs.stat(binary).then(() => true).catch(() => false);
     if (!hasBinary && process.env.NODE_ENV !== 'test') {
-      logger.warn({ binary }, 'ConfigureRearSingbox requested but sing-box is not installed');
+      logger.warn({ binary, core: core.id }, 'Rear requested but its core is not installed');
       return callback(null, {
         success: false,
-        message: 'sing-box is not installed on this node — nothing to run a rear instance from.',
+        message: `${core.label} is not installed on this node — nothing to run a rear instance from.`,
         running: false,
-        skippedReason: 'singbox_not_installed',
+        skippedReason: `${core.id}_not_installed`,
       });
     }
 
@@ -247,10 +243,25 @@ export async function configureRearSingboxHandler(
      * Актуально при переезде конфига из /etc/sing-box (2026-09-04): без этого тыл продолжал бы
      * читать старый файл, а мы бы считали, что применили новый.
      */
-    const unitChanged = await ensureRearUnit();
+    // Прежнее ядро снимается ДО поднятия нового: оба слушают одни и те же порты петли
+    // (29000/29001), и оставленный работать предшественник не дал бы новому подняться вовсе — а
+    // выглядело бы это как «конфиг не применился», без единого слова про настоящую причину.
+    if (previous.id !== core.id) {
+      const hadPrevious = await fs.stat(previous.unitPath()).then(() => true).catch(() => false);
+      if (hadPrevious) {
+        logger.info({ from: previous.id, to: core.id }, 'Switching rear core — removing the previous one');
+        await stopRear(previous);
+        await fs.unlink(previous.unitPath()).catch(() => {});
+        await fs.unlink(previous.configPath()).catch(() => {});
+        if (process.env.NODE_ENV !== 'test') {
+          await execAsync('systemctl daemon-reload').catch(() => {});
+        }
+      }
+    }
 
-    if (!unitChanged && (await rearConfigMatches(configObj)) && (await isRearRunning())) {
-      logger.info('Rear sing-box config unchanged and instance is up — skipping write and reload');
+    const unitChanged = await ensureRearUnit(core);
+    if (!unitChanged && (await rearConfigMatches(core, configObj)) && (await isRearRunning(core))) {
+      logger.info({ core: core.id }, 'Rear config unchanged and instance is up — skipping write and reload');
       return callback(null, {
         success: true,
         message: 'Rear sing-box configuration already current — nothing to write or reload.',
@@ -258,34 +269,34 @@ export async function configureRearSingboxHandler(
       });
     }
 
-    const syntaxCheck = await validateSingBoxConfig(configObj);
+    const syntaxCheck = await core.validate(configObj);
     if (!syntaxCheck.valid) {
-      logger.error({ err: syntaxCheck.error }, 'Rear sing-box config rejected by sing-box check');
+      logger.error({ err: syntaxCheck.error, core: core.id }, 'Rear config rejected by its own core');
       return callback(null, {
         success: false,
-        message: `Rejected by Node Agent: invalid rear sing-box syntax. Error: ${syntaxCheck.error}`,
-        running: await isRearRunning(),
+        message: `Rejected by Node Agent: invalid rear ${core.label} syntax. Error: ${syntaxCheck.error}`,
+        running: await isRearRunning(core),
         skippedReason: 'check_failed',
       });
     }
 
-    await writeRearConfig(configObj);
+    await writeRearConfig(core, configObj);
     await removeLegacyRearConfig();
 
     if (process.env.NODE_ENV !== 'test') {
       if (unitChanged) {
-        await execAsync(`systemctl enable --now ${rearUnitName()}`);
-        await execAsync(`systemctl restart ${rearUnitName()}`);
+        await execAsync(`systemctl enable --now ${core.unitName()}`);
+        await execAsync(`systemctl restart ${core.unitName()}`);
       } else {
-        await startAndReloadRear();
+        await startAndReloadRear(core);
       }
     }
 
-    const running = await isRearRunning();
-    logger.info({ running }, 'Rear sing-box configuration applied');
+    const running = await isRearRunning(core);
+    logger.info({ running, core: core.id }, 'Rear configuration applied');
     return callback(null, {
       success: true,
-      message: 'Rear sing-box configuration validated, applied and (re)started.',
+      message: `Rear ${core.label} configuration validated, applied and (re)started.`,
       running,
     });
   } catch (err: unknown) {

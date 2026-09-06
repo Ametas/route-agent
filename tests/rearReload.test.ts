@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { startAndReloadRear } from '../src/services/rearSingbox.service.js';
+import { SINGBOX_REAR_CORE } from '../src/utils/rearCore.js';
 
 /**
  * Выбор между reload и restart для тылового инстанса.
@@ -17,7 +18,7 @@ test('startAndReloadRear reloads instead of restarting', async () => {
     return { stdout: '', stderr: '' };
   };
 
-  await startAndReloadRear(runExec);
+  await startAndReloadRear(SINGBOX_REAR_CORE, runExec);
 
   assert.strictEqual(commands.length, 2, commands.join(' | '));
   assert.match(commands[0], /^systemctl enable --now /);
