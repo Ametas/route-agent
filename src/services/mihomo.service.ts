@@ -172,6 +172,31 @@ export async function uploadRearRuleSetHandler(
       }
 
       logger.info({ name, bytes, destPath }, 'Rear rule set stored');
+
+      /**
+       * Перечитать конфиг ПОСЛЕ записи — иначе новый список лежит на диске мёртвым грузом: провайдеры
+       * читаются при разборе конфига, а не при обращении к правилу.
+       *
+       * Только если тыл УЖЕ работает. При переключении ядра наборы приезжают раньше конфига, юнита
+       * ещё нет, и перезагружать нечего — а конфиг, пришедший следом, прочитает файлы сам.
+       *
+       * `reload`, а не `restart`: у юнита это SIGHUP, mihomo перечитывает конфиг не завершаясь
+       * (проверено на живом бинаре 2026-09-06). Через тыл идёт весь звёздный трафик узла, и рвать
+       * его ради обновления списка доменов было бы несоразмерно.
+       */
+      if (process.env.NODE_ENV !== 'test') {
+        const unit = path.basename(config.REAR_MIHOMO_UNIT_FILE_PATH, '.service');
+        const active = await execAsync(`systemctl is-active ${unit}`)
+          .then(({ stdout }) => stdout.trim() === 'active')
+          .catch(() => false);
+        if (active) {
+          await execAsync(`systemctl reload ${unit}`).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.warn({ err: msg, name }, 'Failed to reload rear mihomo after storing a rule set');
+          });
+        }
+      }
+
       return { success: true, message: `Набор правил ${name} записан (${bytes} байт)` };
     }
   );
