@@ -6,7 +6,7 @@ import path from 'path';
 import os from 'os';
 import { config } from '../src/config.js';
 import { receiveStreamedBinary, type ReceivedBinary } from '../src/services/binaryReceiver.js';
-import { verifyMihomoAcceptsLiveConfig } from '../src/services/mihomo.service.js';
+import { verifyMihomoAcceptsLiveConfig, uploadRearRuleSetHandler } from '../src/services/mihomo.service.js';
 
 process.env.NODE_ENV = 'test';
 
@@ -174,4 +174,81 @@ test('проверка конфига mihomo не блокирует устан�
     config.REAR_MIHOMO_CONFIG_PATH = original;
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+// --- приём наборов правил ------------------------------------------------------------------
+
+/** Прогоняет UploadRearRuleSet и возвращает ответ. */
+async function driveRuleSet(name: string, body: string): Promise<{ success: boolean; message: string }> {
+  const call = new FakeCall(metadataWith(config.EGRESS_CONTROL_SECRET));
+  return new Promise((resolve) => {
+    void uploadRearRuleSetHandler(
+      call as never,
+      ((_err: unknown, response: { success: boolean; message: string }) => resolve(response)) as never
+    );
+    setImmediate(() => {
+      call.emit('data', { targetBinary: name, chunk: Buffer.from(body) });
+      call.emit('end');
+    });
+  });
+}
+
+async function withRuleDir<T>(body: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rules-'));
+  const original = config.REAR_RULE_SET_DIR;
+  config.REAR_RULE_SET_DIR = path.join(dir, 'rules');
+  try {
+    return await body(config.REAR_RULE_SET_DIR);
+  } finally {
+    config.REAR_RULE_SET_DIR = original;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('набор записывается под своим именем и без временных остатков', async () => {
+  await withRuleDir(async (dir) => {
+    const response = await driveRuleSet('category-media', 'полезная-нагрузка');
+
+    assert.strictEqual(response.success, true);
+    assert.strictEqual(await fs.readFile(path.join(dir, 'category-media.mrs'), 'utf8'), 'полезная-нагрузка');
+    // Промежуточный файл переименован, а не оставлен рядом.
+    assert.deepStrictEqual(await fs.readdir(dir), ['category-media.mrs']);
+  });
+});
+
+/** Восклицательный знак у MetaCubeX помечает наборы «без китайского сегмента» — их большинство. */
+test('имя с восклицательным знаком принимается', async () => {
+  await withRuleDir(async (dir) => {
+    const response = await driveRuleSet('category-ai-!cn', 'x');
+
+    assert.strictEqual(response.success, true);
+    assert.ok((await fs.readdir(dir)).includes('category-ai-!cn.mrs'));
+  });
+});
+
+/**
+ * Имя приезжает ПО СЕТИ и становится частью пути. Здесь проверяется не «отвергли ли строку», а то,
+ * что за пределами каталога наборов не появилось НИЧЕГО.
+ */
+test('обход каталога отвергается, и наружу ничего не пишется', async () => {
+  for (const evil of ['../../etc/passwd', '..', 'a/b', '/etc/passwd', '', '.hidden']) {
+    await withRuleDir(async (dir) => {
+      const parent = path.dirname(dir);
+      const before = await fs.readdir(parent);
+
+      const response = await driveRuleSet(evil, 'вредоносное');
+
+      assert.strictEqual(response.success, false, `имя ${JSON.stringify(evil)} приняли`);
+      assert.match(response.message, /Недопустимое имя/);
+      assert.deepStrictEqual(await fs.readdir(parent), before, `имя ${JSON.stringify(evil)} что-то создало`);
+      assert.strictEqual(await fs.stat(dir).then(() => true).catch(() => false), false);
+    });
+  }
+});
+
+test('слишком длинное имя отвергается', async () => {
+  await withRuleDir(async () => {
+    const response = await driveRuleSet('a'.repeat(200), 'x');
+    assert.strictEqual(response.success, false);
+  });
 });

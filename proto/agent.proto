@@ -55,6 +55,16 @@ service EgressAgentService {
   // different paths, run under different units and fail for different reasons.
   rpc UploadMihomoBinary (stream BinaryChunkPayload) returns (UploadBinaryResponse);
 
+  // Client Streaming RPC to deliver ONE rule set for the rear (MetaCubeX .mrs) to the node.
+  //
+  // The node never fetches these itself. A hosted node reaching out to github.com recreates the
+  // very traffic anomaly the tunnel exists to remove: a box that only accepts subscribers looks
+  // nothing like a box that also pulls from code-hosting. Fetching outward is the orchestrator's
+  // job alone; the node only ever receives.
+  //
+  // The set name travels in target_binary — see the field comment on BinaryChunkPayload.
+  rpc UploadRearRuleSet (stream BinaryChunkPayload) returns (UploadBinaryResponse);
+
   // Unary RPC for AmneziaWG3 service management
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
 
@@ -307,6 +317,18 @@ message BinaryChunkPayload {
   bytes chunk = 2;
   string version = 3;
   bool is_final = 4;
+
+  // WHICH artifact within this RPC — the meaning is per-RPC, not global.
+  //
+  // UploadAwgToolsBinary uses it to tell "awg-quick" from "awg"/"wg"; UploadRearRuleSet carries
+  // the rule-set name ("category-media"); UploadMeshAwgKernelSource leaves it empty because that
+  // RPC ships exactly one thing. The name says "binary" for historical reasons — it predates the
+  // non-binary uses — and is kept because renaming a wire field buys nothing and breaks agents
+  // mid-rollout.
+  //
+  // ⚠️ It reaches the node as UNTRUSTED input and, for rule sets, becomes part of a FILENAME.
+  // The node-side handler must validate it against an allowlist pattern, never interpolate it
+  // into a path as-is.
   string target_binary = 5;
 }
 

@@ -1,4 +1,4 @@
-import { uploadMihomoBinaryHandler } from "./services/mihomo.service.js";
+import { uploadMihomoBinaryHandler, uploadRearRuleSetHandler } from "./services/mihomo.service.js";
 import { 
   Server, 
   ServerCredentials, 
@@ -137,6 +137,7 @@ export async function startServer(): Promise<Server> {
       upgradeSingbox: upgradeSingboxHandler,
       uploadSingboxBinary: uploadSingboxBinaryHandler,
       uploadMihomoBinary: uploadMihomoBinaryHandler,
+      uploadRearRuleSet: uploadRearRuleSetHandler,
       uploadOlcrtcAgentSrvBinary: uploadOlcrtcAgentSrvBinaryHandler,
       uploadAwgToolsBinary: uploadAwgToolsBinaryHandler,
       uploadAwgGoBinary: uploadAwgGoBinaryHandler,

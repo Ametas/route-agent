@@ -118,3 +118,61 @@ export async function uploadMihomoBinaryHandler(
     }
   );
 }
+
+/**
+ * Допустимое имя набора правил.
+ *
+ * Имя приходит ПО СЕТИ и становится частью имени файла — это единственное место во всём приёме, где
+ * недоверенная строка попадает в путь. Проверка на разрешённый набор символов, а не на запрещённые:
+ * чёрные списки обходятся кодировками, белый — нет. Восклицательный знак разрешён потому, что у
+ * MetaCubeX так помечены наборы «без китайского сегмента» (`category-ai-!cn`).
+ */
+const SAFE_RULE_SET_NAME = /^[A-Za-z0-9][A-Za-z0-9._!-]{0,63}$/;
+
+/**
+ * RPC UploadRearRuleSet — приём одного набора правил для тыла.
+ *
+ * Узел за наборами в сеть не ходит: их привозит оркестратор. Здесь только приём и запись.
+ */
+export async function uploadRearRuleSetHandler(
+  call: ServerReadableStream<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  return receiveStreamedBinary(
+    call,
+    callback,
+    { rpcName: 'UploadRearRuleSet', tempPrefix: 'ruleset' },
+    async ({ tempPath, targetBinary, bytes }) => {
+      const name = targetBinary;
+      if (!SAFE_RULE_SET_NAME.test(name)) {
+        logger.warn({ name: name.slice(0, 120) }, 'Rejected rule set with a disallowed name');
+        return { success: false, message: 'Недопустимое имя набора правил.' };
+      }
+
+      const dir = config.REAR_RULE_SET_DIR;
+      await fs.mkdir(dir, { recursive: true });
+      const destPath = path.join(dir, `${name}.mrs`);
+
+      // Вторая линия обороны на случай, если шаблон выше однажды ослабят: итоговый путь обязан
+      // лежать ровно в каталоге наборов, а не «где-то под ним» и тем более не выше.
+      if (path.dirname(path.resolve(destPath)) !== path.resolve(dir)) {
+        logger.error({ name, destPath }, 'Rule set path escaped its directory — refusing to write');
+        return { success: false, message: 'Недопустимое имя набора правил.' };
+      }
+
+      // Запись атомарная: mihomo может читать наборы в этот самый момент, и наполовину
+      // переписанный файл он бы отверг целиком, оставив тыл без правил.
+      const stagingPath = path.join(dir, `.${name}.mrs.${Date.now()}.tmp`);
+      try {
+        await fs.copyFile(tempPath, stagingPath);
+        await fs.chmod(stagingPath, 0o644);
+        await fs.rename(stagingPath, destPath);
+      } finally {
+        await fs.unlink(stagingPath).catch(() => {});
+      }
+
+      logger.info({ name, bytes, destPath }, 'Rear rule set stored');
+      return { success: true, message: `Набор правил ${name} записан (${bytes} байт)` };
+    }
+  );
+}
