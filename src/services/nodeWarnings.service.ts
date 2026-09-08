@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { authenticateCall } from '../middleware/auth.js';
 import { collectJournalWarnings } from '../utils/journalWarnings.js';
 import { detectCoreNotListening } from '../utils/listenerWarning.js';
+import { detectEmptyRearRuleProviders } from '../utils/rearRuleProviderWarning.js';
 
 const logger = pino({ level: 'info' });
 
@@ -40,8 +41,16 @@ export async function pullNodeWarningsHandler(
      * простоявшая без единого слушателя на публичном порту, не написала об этом ни строчки: она
      * просто ничего не обслуживала. Грепом отсутствие события не найти.
      */
-    const [journal, notListening] = await Promise.all([collectJournalWarnings(), detectCoreNotListening()]);
-    const warnings = notListening ? [notListening, ...journal] : journal;
+    const [journal, notListening, emptyProviders] = await Promise.all([
+      collectJournalWarnings(),
+      detectCoreNotListening(),
+      // Третий источник: тыл спрашивают о СОСТАВЕ его наборов. Провайдер, загруженный пустым,
+      // молчит так же, как отсутствующий слушатель, — правило есть, а не ловит ничего.
+      detectEmptyRearRuleProviders(),
+    ]);
+    const warnings = [notListening, emptyProviders, ...journal].filter(
+      (w): w is NonNullable<typeof w> => w !== null
+    );
 
     if (warnings.length > 0) {
       logger.info(
