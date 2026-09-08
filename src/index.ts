@@ -41,6 +41,7 @@ import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.
 import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
 import { getWarpKeyHealthHandler } from './services/warpKeyHealth.service.js';
 import { pullNodeWarningsHandler } from './services/nodeWarnings.service.js';
+import { getAwgObservationHandler } from './services/awgObservation.service.js';
 import { startRearWarpGuard } from './services/rearWarpGuard.service.js';
 import { applyKernelTuning } from './utils/kernelTuning.js';
 
@@ -159,7 +160,8 @@ export async function startServer(): Promise<Server> {
       applyTrafficThrottle: applyTrafficThrottleHandler,
       configureRearSingbox: configureRearSingboxHandler,
       getWarpKeyHealth: getWarpKeyHealthHandler,
-      pullNodeWarnings: pullNodeWarningsHandler
+      pullNodeWarnings: pullNodeWarningsHandler,
+      getAwgObservation: getAwgObservationHandler
     };
     
     server.addService(agentPackage.EgressAgentService.service, serviceImplementation);

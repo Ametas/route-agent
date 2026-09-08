@@ -65,6 +65,18 @@ service EgressAgentService {
   // The set name travels in target_binary — see the field comment on BinaryChunkPayload.
   rpc UploadRearRuleSet (stream BinaryChunkPayload) returns (UploadBinaryResponse);
 
+
+  // Наблюдение за трафиком AmneziaWG.
+  //
+  // ЗАЧЕМ ОТДЕЛЬНЫЙ ВЫЗОВ, если есть GetSingBoxConnections. Клиентский AWG уходит с узла ядерным
+  // NAT-ом, МИНУЯ sing-box: `устройство -> awg0 -> ядро -> интернет`. В таблице соединений
+  // sing-box этого трафика нет по построению, поэтому абоненты на AWG были вне контура
+  // наблюдения целиком — ни снимков, ни ограничения.
+  //
+  // Источников два и они разной надёжности: счётчики пиров есть всегда, соединения ядра дают
+  // форму потока. Подробности — в комментариях к AwgObservationResponse.
+  rpc GetAwgObservation (AwgObservationRequest) returns (AwgObservationResponse);
+
   // Unary RPC for AmneziaWG3 service management
   rpc ConfigureAwg (AwgConfigPayload) returns (AwgConfigResponse);
 
@@ -727,4 +739,51 @@ message NodeWarningsResponse {
   repeated NodeWarning warnings = 3;
   // How far back the agent actually looked, so the orchestrator never has to assume it.
   uint32 lookback_hours = 4;
+}
+
+message AwgObservationRequest {
+  string orchestrator_secret = 1;
+}
+
+// Один пир и сколько он прокачал с момента поднятия интерфейса.
+//
+// СЧЁТЧИКИ РАЗДЕЛЕНЫ НАМЕРЕННО, как и у SingBoxConnection: подпись торрента — устойчивая
+// СИММЕТРИЯ отдачи и приёма, тогда как просмотр и закачка асимметричны в обратную сторону.
+message AwgPeerCounters {
+  // Публичный ключ пира. Оркестратор сопоставляет его с устройством: на AWG атрибуция точнее,
+  // чем на прокси-стороне, где всё приходит с 127.0.0.1.
+  string public_key = 1;
+  // Адреса пира внутри туннеля.
+  repeated string tunnel_ips = 2;
+  // Принято ОТ пира, то есть его отдача.
+  int64 rx_bytes = 3;
+  // Отдано ПИРУ, то есть его приём.
+  int64 tx_bytes = 4;
+  int64 latest_handshake_unix = 5;
+}
+
+// Одно соединение из таблицы ядра, уже привязанное к пиру.
+//
+// БАЙТОВ ЗДЕСЬ НЕТ, и это не упущение: в /proc/net/nf_conntrack они появляются только при
+// включённом nf_conntrack_acct, а он по умолчанию выключен. Объём берётся из AwgPeerCounters,
+// отсюда — только форма потока: сколько различных назначений, на каких портах.
+message AwgFlow {
+  string public_key = 1;
+  string tunnel_ip = 2;
+  // tcp / udp.
+  string protocol = 3;
+  // ИСХОДНОЕ назначение, до подмены NAT-ом. Обратное направление в таблице ядра указывает на сам
+  // узел, и взять его значило бы получить выборку, где все соединения идут на сервер.
+  string destination_ip = 4;
+  uint32 destination_port = 5;
+}
+
+message AwgObservationResponse {
+  bool success = 1;
+  string message = 2;
+  repeated AwgPeerCounters peers = 3;
+  repeated AwgFlow flows = 4;
+  // Прочиталась ли таблица ядра. Отличать «соединений нет» от «посмотреть не удалось»
+  // обязательно: иначе узел без доступа к ней выглядел бы идеально тихим.
+  bool conntrack_available = 5;
 }
