@@ -42,6 +42,7 @@ export async function getAwgObservationHandler(
           : `${observation.peers.length} peer(s), ${observation.flows.length} flow(s).`,
       peers: observation.peers.map((peer) => ({
         publicKey: peer.publicKey,
+        endpoint: peer.endpoint,
         tunnelIps: peer.tunnelIps,
         rxBytes: peer.rxBytes,
         txBytes: peer.txBytes,
