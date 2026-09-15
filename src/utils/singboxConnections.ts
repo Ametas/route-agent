@@ -145,14 +145,23 @@ export function parseClashConnections(payload: unknown, closed: boolean): SingBo
 }
 
 /**
- * Запрашивает у Clash API живые и недавно завершённые соединения.
+ * Запрашивает у Clash API живые соединения.
  *
- * Завершённые берутся намеренно: свип ходит раз в несколько минут, а короткие потоки за это время
- * успевают открыться и закрыться целиком. Без них картина систематически смещалась бы в сторону
- * долгих соединений — то есть ровно мимо всплесков, ради которых всё и затевалось.
+ * **РАНЬШЕ ЗДЕСЬ БЫЛО ДВА ЗАПРОСА, И ВТОРОЙ УДВАИВАЛ ВЫБОРКУ** (исправлено 2026-09-15). Второй
+ * ходил на `/connections?closed=true` за буфером завершённых — с обоснованием, что короткие потоки
+ * иначе теряются между проходами свипа. Обоснование верное, а эндпоинта НЕ СУЩЕСТВУЕТ: у sing-box
+ * один маршрут `/connections`, неизвестный query-параметр он молча игнорирует и отдаёт тот же
+ * список. Обе половины складывались без дедупликации, поэтому каждое соединение попадало в срез
+ * дважды — один раз как живое, один раз как завершённое.
  *
- * Сбой любой из двух половин не отменяет другую: недоступный буфер завершённых не повод потерять
- * живые.
+ * Замер на живом узле: `живых: 296, завершённых: 296` — до единицы одно и то же.
+ *
+ * Цена была не только в удвоенных цифрах: срез раздувался вдвое и в этом виде копился в Redis, а
+ * разбор нагрузки и префиксов считал каждое соединение за два.
+ *
+ * ЧТО ПОТЕРЯНО ВМЕСТЕ С ЭТИМ: короткие потоки, открывшиеся и закрывшиеся между проходами, мы не
+ * видим. Это было верно и раньше — просто скрывалось за дублями. Отдельный вопрос, нужен ли для
+ * них другой источник.
  */
 export async function fetchConnections(endpoint: ClashApiEndpoint): Promise<SingBoxConnectionRecord[]> {
   const headers: Record<string, string> = endpoint.secret
@@ -170,24 +179,5 @@ export async function fetchConnections(endpoint: ClashApiEndpoint): Promise<Sing
     return parseClashConnections(await response.json(), closed);
   };
 
-  const [live, closed] = await Promise.allSettled([
-    get('/connections', false),
-    get('/connections?closed=true', true),
-  ]);
-
-  const records: SingBoxConnectionRecord[] = [];
-  if (live.status === 'fulfilled') {
-    records.push(...live.value);
-  } else {
-    // Живые соединения — основная половина; если не отдались они, это уже повод сказать наружу.
-    throw live.reason instanceof Error ? live.reason : new Error(String(live.reason));
-  }
-  if (closed.status === 'fulfilled') {
-    records.push(...closed.value);
-  } else {
-    const msg = closed.reason instanceof Error ? closed.reason.message : String(closed.reason);
-    logger.debug({ err: msg }, 'Closed-connections buffer unavailable, returning live connections only');
-  }
-
-  return records;
+  return get('/connections', false);
 }

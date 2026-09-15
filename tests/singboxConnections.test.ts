@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parseClashConnections, readClashApiEndpoint } from '../src/utils/singboxConnections.js';
+import { parseClashConnections, readClashApiEndpoint, fetchConnections } from '../src/utils/singboxConnections.js';
 
 /**
  * Разбор записей о соединениях из локального Clash API sing-box'а (2026-08-30).
@@ -143,4 +143,37 @@ describe('чтение точки доступа из применённого �
   it('отсутствующий файл не роняет чтение', async () => {
     assert.equal(await readClashApiEndpoint('/nonexistent/config.json'), null);
   });
+});
+
+/**
+ * ОДИН запрос, а не два.
+ *
+ * До 2026-09-15 `fetchConnections` ходила дважды: на `/connections` и на `/connections?closed=true`
+ * за буфером завершённых. Обоснование было верное — короткие потоки успевают открыться и закрыться
+ * между проходами свипа, — а ЭНДПОИНТА НЕ СУЩЕСТВУЕТ: у sing-box один маршрут `/connections`,
+ * неизвестный query-параметр он молча игнорирует и отдаёт тот же список. Обе половины
+ * складывались без дедупликации, и каждое соединение попадало в срез дважды.
+ *
+ * Замер на живом узле: `живых: 296, завершённых: 296` — до единицы одно и то же. Срез раздувался
+ * вдвое, копился в этом виде в Redis, а разбор нагрузки и префиксов считал каждое соединение за два.
+ */
+it('соединения запрашиваются одним вызовом, без несуществующего буфера завершённых', async () => {
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL) => {
+    calls.push(String(url));
+    return {
+      ok: true,
+      json: async () => ({ connections: [] }),
+    } as unknown as Response;
+  }) as typeof globalThis.fetch;
+
+  try {
+    await fetchConnections({ address: '127.0.0.1:9090', secret: 's' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1, `запросов вместо одного: ${calls.length} (${calls.join(', ')})`);
+  assert.ok(!calls[0]!.includes('closed'), 'снова запрашивается несуществующий буфер завершённых');
 });
