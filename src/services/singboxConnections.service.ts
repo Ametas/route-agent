@@ -2,6 +2,7 @@ import { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import pino from 'pino';
 import { authenticateCall } from '../middleware/auth.js';
 import { readClashApiEndpoint, fetchConnections } from '../utils/singboxConnections.js';
+import { collectRearConnections } from '../utils/rearConnections.js';
 
 const logger = pino({ level: 'info' });
 
@@ -40,6 +41,39 @@ export async function getSingBoxConnectionsHandler(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err: msg }, 'Failed to fetch sing-box connections');
+    return callback(null, { success: false, message: msg, connections: [] });
+  }
+}
+
+/**
+ * RPC handler for GetRearConnections — соединения ТЫЛОВОГО ядра.
+ *
+ * Отдельный обработчик рядом с фронтовым, а не флаг в том же: источники разные (Clash API sing-box
+ * против Clash API mihomo), формы ответа разные, и «тыла на узле нет» — штатное состояние, тогда
+ * как отсутствие фронтового ядра означает совсем другое. Общей у них остаётся только форма
+ * ОТВЕТА, и она вынесена в общий тип записи.
+ *
+ * Как и сосед: наружу не бросает, отказ приезжает заполненным ответом.
+ */
+export async function getRearConnectionsHandler(
+  call: ServerUnaryCall<any, any>,
+  callback: sendUnaryData<any>
+): Promise<void> {
+  if (!authenticateCall(call)) {
+    logger.warn('Unauthorized GetRearConnections request blocked');
+    return callback(null, { success: false, message: 'Invalid orchestrator secret token.', connections: [] });
+  }
+
+  try {
+    const connections = await collectRearConnections();
+    return callback(null, {
+      success: true,
+      message: connections.length === 0 ? 'Rear core is not active on this node.' : 'OK',
+      connections,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Failed to fetch rear connections');
     return callback(null, { success: false, message: msg, connections: [] });
   }
 }

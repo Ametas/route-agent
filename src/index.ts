@@ -36,7 +36,7 @@ import { selfUpdateHandler, getAgentInfoHandler } from './services/system.servic
 import { runNetworkDiagnosticHandler } from './services/networkDiagnostic.service.js';
 import { computeProtoContractHash } from './services/protoContract.service.js';
 import { getSingBoxUserTrafficHandler } from './services/singboxStats.service.js';
-import { getSingBoxConnectionsHandler } from './services/singboxConnections.service.js';
+import { getSingBoxConnectionsHandler, getRearConnectionsHandler } from './services/singboxConnections.service.js';
 import { applyTrafficThrottleHandler } from './services/trafficThrottle.service.js';
 import { configureRearSingboxHandler } from './services/rearSingbox.service.js';
 import { getWarpKeyHealthHandler } from './services/warpKeyHealth.service.js';
@@ -157,6 +157,7 @@ export async function startServer(): Promise<Server> {
       getManagedCertificate: getManagedCertificateHandler,
       getSingBoxUserTraffic: getSingBoxUserTrafficHandler,
       getSingBoxConnections: getSingBoxConnectionsHandler,
+      getRearConnections: getRearConnectionsHandler,
       applyTrafficThrottle: applyTrafficThrottleHandler,
       configureRearSingbox: configureRearSingboxHandler,
       getWarpKeyHealth: getWarpKeyHealthHandler,

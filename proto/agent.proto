@@ -146,6 +146,22 @@ service EgressAgentService {
   // The two halves are therefore analysed separately and never need to be joined.
   rpc GetSingBoxConnections (SingBoxConnectionsRequest) returns (SingBoxConnectionsResponse);
 
+  // Соединения ТЫЛОВОГО ядра (mihomo) — тот же контракт сообщений, другой источник.
+  //
+  // ЗАЧЕМ ОТДЕЛЬНЫЙ ВЫЗОВ. Тыл стоит на хоп ДАЛЬШЕ фронтового sing-box и видит то, чего не видит
+  // никто другой: НАСТОЯЩЕЕ внешнее назначение. У фронта назначение — это кольцо, у эгресса —
+  // петля на локальный порт, и лишь тыл маршрутизирует по реальному адресу, а значит знает его
+  // точно, а не по сниффингу наугад.
+  //
+  // ЧЕГО ЗДЕСЬ НЕТ И НЕ БУДЕТ: абонента. Эгресс ходит в тыл одним исходящим VLESS с ОДНИМ uuid на
+  // всех, поэтому `user` у всех записей одинаков (`link`). Это не недоделка сбора, а следствие
+  // устройства связки — см. BACKLOG.md, «полная видимость на тылу».
+  //
+  // Поэтому разбор по этим записям АГРЕГАТНЫЙ: «куда льётся поток с узла», а не «кто льёт». Ровно
+  // это и требовалось исходной задаче про поток к одному назначению — наказывается направление, а
+  // не абонент.
+  rpc GetRearConnections (SingBoxConnectionsRequest) returns (SingBoxConnectionsResponse);
+
   // Unary RPC that brings the node's source-prefix rate limiting to the requested state and
   // returns the drop counters observed BEFORE that change.
   //
