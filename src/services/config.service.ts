@@ -8,7 +8,13 @@ import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata, authenticateCall } from '../middleware/auth.js';
 import { validateSafeCamouflagePath, fixXraySocketPermissions, resolveCaddyBinary, loadCaddyDnsProviderEnv } from '../utils/caddy.js';
 import { getCaddyCertPaths } from '../utils/certStorage.js';
-import { validateSingBoxConfig, atomicApplyAndReload, fixCaddyPermissions } from '../utils/singbox.js';
+import {
+  validateSingBoxConfig,
+  atomicApplyAndReload,
+  fixCaddyPermissions,
+  singboxConfigMatches,
+  isSingboxRunning,
+} from '../utils/singbox.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
 
@@ -36,6 +42,38 @@ export async function applyConfigHandler(
   try {
     const rawConfig = call.request.configJson || call.request.config_json;
     const configObj = JSON.parse(rawConfig);
+
+    /**
+     * Пуш, который ничего не меняет, не должен ничего делать.
+     *
+     * ЦЕНА ЛИШНЕГО ПУША — ОБРЫВ У ВСЕХ. Reload у sing-box это `instance.Close()` и сборка нового
+     * инстанса; частичной перезагрузки в дереве нет, поэтому рвутся сессии всех абонентов ноды, а
+     * не только тех, кого правка касалась. Проверено на живом узле 2026-09-17: удаление одного
+     * абонента в 07:39 оставило на ноде 49 соединений из 144, и самое старое из выживших началось
+     * в 07:39:38 — то есть не выжило ни одного.
+     *
+     * ЧТО ЭТО ЗАКРЫВАЕТ. Оркестратор пушит конфиг ВЕЕРОМ на весь флот при правке одного абонента:
+     * ноды, чей конфиг не изменился, платили обрывом ни за что. Плюс удаление абонента давало два
+     * пуша подряд — собственный и от вебхука панели, — и второй вёз тот же самый конфиг.
+     *
+     * ПОЧЕМУ ДО ВАЛИДАЦИИ. `sing-box check` — отдельный процесс на каждый пуш; конфиг, лежащий на
+     * диске, эту проверку уже прошёл, когда его туда клали.
+     *
+     * ПОЧЕМУ ДВА УСЛОВИЯ. Пропускаем, только если конфиг тот же И юнит жив. Без второго нода, у
+     * которой ядро легло, осталась бы лежать: оркестратор возит ей один и тот же конфиг, агент
+     * каждый раз отвечает «уже актуально», и поднять инстанс некому.
+     *
+     * Ответ — `success: true`, и это важно не только для отчёта: `PurgeWorker` дочищает абонента
+     * из базы только после того, как КАЖДАЯ нода подтвердила пуш. Пропуск, отвеченный неуспехом,
+     * подвесил бы очередь навсегда.
+     */
+    if ((await singboxConfigMatches(configObj)) && (await isSingboxRunning())) {
+      logger.info('Sing-box config unchanged and core is up — skipping write, validate and reload');
+      return callback(null, {
+        success: true,
+        message: 'Sing-box configuration already current — nothing to write or reload.',
+      });
+    }
 
     const syntaxCheck = await validateSingBoxConfig(configObj);
     

@@ -145,17 +145,53 @@ WantedBy=multi-user.target
 export async function resolveSingboxReloadCommand(
   runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
 ): Promise<string> {
+  return (await isSingboxUnitActive(runExec)) ? config.RELOAD_COMMAND : 'systemctl start sing-box';
+}
+
+/**
+ * Активен ли юнит sing-box. Чистый примитив: спрашивает systemd и больше ничего не решает.
+ *
+ * Ответ нужен ДВУМ разным вопросам — «reload или start» (выше) и «можно ли пропустить пуш»
+ * (`applyConfigHandler`), поэтому вынесен, а не написан дважды.
+ */
+export async function isSingboxUnitActive(
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<boolean> {
   try {
     const { stdout } = await runExec('systemctl is-active sing-box');
-    if (stdout.trim() === 'active') {
-      return config.RELOAD_COMMAND;
-    }
+    return stdout.trim() === 'active';
   } catch {
     // `systemctl is-active` завершается ненулевым кодом (и тем самым реджектит промис
     // из promisify(exec)) для любого состояния, кроме "active" — inactive/failed/unknown
-    // юнит. Любой такой исход трактуем как "нужен start, а не reload".
+    // юнит. Любой такой исход трактуем как «не активен».
+    return false;
   }
-  return 'systemctl start sing-box';
+}
+
+/**
+ * То же самое, но с тестовым швом.
+ *
+ * Отдельной функцией, а не флагом внутри `isSingboxUnitActive`: у той есть свои тесты, которые
+ * подсовывают `runExec` и ждут, что его СПРОСЯТ — шим по `NODE_ENV` закоротил бы их до вызова.
+ * Приём и имя переменной повторяют `isRearRunning` в `rearSingbox.service.ts`.
+ */
+export async function isSingboxRunning(): Promise<boolean> {
+  if (process.env.NODE_ENV === 'test') return process.env.SINGBOX_TEST_INACTIVE !== '1';
+  return isSingboxUnitActive();
+}
+
+/**
+ * Единственная форма записи конфига на диск. Сравнение обязано сериализовать ровно так же, иначе
+ * оно сравнивало бы наш JSON с чужим форматированием и не совпадало никогда.
+ */
+export function serializeSingboxConfig(configObj: object): string {
+  return JSON.stringify(configObj, null, 2);
+}
+
+/** Лежит ли на диске байт в байт этот же конфиг. */
+export async function singboxConfigMatches(configObj: object): Promise<boolean> {
+  const existing = await fs.readFile(config.SINGBOX_CONFIG_PATH, 'utf-8').catch(() => null);
+  return existing !== null && existing === serializeSingboxConfig(configObj);
 }
 
 /**
@@ -202,7 +238,7 @@ export async function atomicApplyAndReload(configObj: object): Promise<void> {
   }
 
   // 2. Атомарная подмена через временный файл
-  await fs.writeFile(tempFilePath, JSON.stringify(configObj, null, 2), 'utf-8');
+  await fs.writeFile(tempFilePath, serializeSingboxConfig(configObj), 'utf-8');
   await fs.rename(tempFilePath, config.SINGBOX_CONFIG_PATH);
 
   // 3. Мягкий reload сервиса с откатом при ошибке
