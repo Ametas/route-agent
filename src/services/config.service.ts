@@ -14,7 +14,10 @@ import {
   fixCaddyPermissions,
   singboxConfigMatches,
   isSingboxRunning,
+  readSingboxConfigOnDisk,
+  writeSingboxConfigAtomically,
 } from '../utils/singbox.js';
+import { isForkBinary, withUsersApiService, planRosterUpdate, applyRosterUpdates } from '../utils/hotUsers.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
 
@@ -23,6 +26,38 @@ const logger = pino({ level: 'info' });
 function sanitizeConfigInput(val: string | number | undefined | null): string {
   if (val === undefined || val === null) return '';
   return String(val).replace(/[\r\n]/g, '').trim();
+}
+
+/**
+ * Пробует применить изменение горячим путём, без перезагрузки ядра.
+ *
+ * Возвращает текст ответа при успехе и `null`, если горячим путём не вышло, — вызывающий тогда
+ * идёт обычным путём с reload. Любая неясность трактуется как `null`: битый конфиг на диске,
+ * непонятный диф, отказ ручки. Отступать всегда есть куда, и отступление стоит обрыва, а не
+ * неправильного состояния.
+ *
+ * ОТКАТ БЕЗОПАСЕН ИМЕННО ПОТОМУ, ЧТО ФАЙЛ УЖЕ ЗАПИСАН. Если часть наборов уехала в сокет, а
+ * следующий отказал, reload поднимет инстанс из записанного файла целиком — то есть сойдётся к
+ * тому же состоянию, к которому мы шли.
+ */
+async function tryHotRosterSwap(configObj: object): Promise<string | null> {
+  const onDisk = await readSingboxConfigOnDisk();
+  if (!onDisk) return null;
+
+  const plan = planRosterUpdate(configObj, onDisk);
+  if (!plan) return null;
+
+  try {
+    // Файл обновляем ДО сокета: переживи процесс перезапуск между двумя действиями, на диске
+    // должен лежать тот набор, который мы считаем актуальным, а не предыдущий.
+    await writeSingboxConfigAtomically(configObj);
+    await applyRosterUpdates(plan);
+    return `Applied ${plan.length} inbound roster change(s) through the live users-api — no reload, sessions kept.`;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ err: msg }, 'Hot roster swap failed — falling back to a full reload');
+    return null;
+  }
 }
 
 /**
@@ -41,7 +76,21 @@ export async function applyConfigHandler(
 
   try {
     const rawConfig = call.request.configJson || call.request.config_json;
-    const configObj = JSON.parse(rawConfig);
+    const parsedConfig = JSON.parse(rawConfig);
+
+    /**
+     * Служба `users-api` подмешивается ЗДЕСЬ, а не приезжает из оркестратора.
+     *
+     * Она существует только в нашем форке: сток отвергнет неизвестный тип службы и не поднимется
+     * вовсе. Кто именно стоит на ноде, достоверно знает только агент — у оркестратора это сведения
+     * из телеметрии, в лучшем случае вчерашние.
+     *
+     * И обязательно ДО сверки с диском: иначе присланный конфиг (без службы) сравнивался бы с
+     * лежащим (со службой) и не совпадал бы никогда — то есть сверка перестала бы работать.
+     */
+    const isFork = await isForkBinary();
+    const configObj = isFork ? withUsersApiService(parsedConfig) : parsedConfig;
+    const coreRunning = await isSingboxRunning();
 
     /**
      * Пуш, который ничего не меняет, не должен ничего делать.
@@ -67,7 +116,7 @@ export async function applyConfigHandler(
      * из базы только после того, как КАЖДАЯ нода подтвердила пуш. Пропуск, отвеченный неуспехом,
      * подвесил бы очередь навсегда.
      */
-    if ((await singboxConfigMatches(configObj)) && (await isSingboxRunning())) {
+    if ((await singboxConfigMatches(configObj)) && coreRunning) {
       logger.info('Sing-box config unchanged and core is up — skipping write, validate and reload');
       return callback(null, {
         success: true,
@@ -85,6 +134,32 @@ export async function applyConfigHandler(
     }
 
     await syncEgressFirewall(configObj);
+
+    /**
+     * Горячая замена набора абонентов — если изменились ТОЛЬКО наборы.
+     *
+     * `force_reload` приходит от оркестратора там, где доступ отзывают: у tuic и hysteria2 клиент
+     * держит одну аутентифицированную QUIC-сессию и гоняет по ней всё, новые запросы проверку не
+     * проходят — отозванный абонент работал бы до переподключения. Рвать сессии в этом случае
+     * обязательно, и решает это оркестратор, потому что «за что сняли доступ» знает только он.
+     *
+     * Лежащее ядро тоже сюда не пускаем: горячая замена обращается к сокету ЖИВОГО процесса, а
+     * поднять его может только `start`.
+     */
+    const forceReload = Boolean(call.request.forceReload ?? call.request.force_reload);
+
+    /**
+     * `isFork` здесь не перестраховка. У стокового ядра службы `users-api` нет, сокета не
+     * существует, и без этого условия КАЖДЫЙ пуш на такую ноду стучался бы в него впустую — чтобы
+     * затем всё равно уйти в reload, только с лишним отказом в логе.
+     */
+    if (isFork && !forceReload && coreRunning) {
+      const applied = await tryHotRosterSwap(configObj);
+      if (applied) {
+        return callback(null, { success: true, message: applied });
+      }
+    }
+
     await atomicApplyAndReload(configObj);
     return callback(null, {
       success: true,

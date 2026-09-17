@@ -225,7 +225,14 @@ export async function validateSingBoxConfig(configObj: object): Promise<{ valid:
 /**
  * Исполнитель применения конфигурации и мягкой перезагрузки ядра
  */
-export async function atomicApplyAndReload(configObj: object): Promise<void> {
+/**
+ * Кладёт конфиг на диск, сохранив бэкап предыдущего. Без перезагрузки.
+ *
+ * Отдельно от `atomicApplyAndReload`, потому что у горячей замены абонентов (`hotUsers.ts`) файл
+ * обязан обновиться, а ядро — не перезапускаться: набор туда уезжает через сокет. Возвращает, был
+ * ли конфиг до нас, — по этому вызывающий решает, есть ли куда откатываться.
+ */
+export async function writeSingboxConfigAtomically(configObj: object): Promise<{ hadPreviousConfig: boolean }> {
   const targetDir = path.dirname(config.SINGBOX_CONFIG_PATH);
   const uniqueId = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const tempFilePath = path.join(targetDir, `.config.${uniqueId}.tmp`);
@@ -240,6 +247,27 @@ export async function atomicApplyAndReload(configObj: object): Promise<void> {
   // 2. Атомарная подмена через временный файл
   await fs.writeFile(tempFilePath, serializeSingboxConfig(configObj), 'utf-8');
   await fs.rename(tempFilePath, config.SINGBOX_CONFIG_PATH);
+
+  return { hadPreviousConfig: configExists };
+}
+
+/** Читает лежащий на диске конфиг разобранным. `null` — файла нет или он не читается как объект. */
+export async function readSingboxConfigOnDisk(): Promise<object | null> {
+  const raw = await fs.readFile(config.SINGBOX_CONFIG_PATH, 'utf-8').catch(() => null);
+  if (raw === null) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null ? (parsed as object) : null;
+  } catch {
+    // Битый файл на диске — не повод падать: значит сравнивать не с чем, и пойдёт обычный путь.
+    return null;
+  }
+}
+
+export async function atomicApplyAndReload(configObj: object): Promise<void> {
+  const backupFilePath = `${config.SINGBOX_CONFIG_PATH}.bak`;
+  const { hadPreviousConfig: configExists } = await writeSingboxConfigAtomically(configObj);
 
   // 3. Мягкий reload сервиса с откатом при ошибке
   if (process.env.NODE_ENV !== 'test' || process.env.RELOAD_COMMAND) {
