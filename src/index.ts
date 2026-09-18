@@ -125,7 +125,20 @@ export async function startServer(): Promise<Server> {
   return new Promise((resolve, reject) => {
     const serverOptions = {
       'grpc.keepalive_time_ms': 10000,
-      'grpc.keepalive_timeout_ms': 5000,
+      /**
+       * Двадцать секунд, а не пять (2026-09-18).
+       *
+       * Столько отводится на ОТВЕТ оркестратора, и в этот срок обязаны уложиться пауза сборщика
+       * мусора, всплеск потерь пакетов, любая заминка на канале. Один неотвеченный пинг — и
+       * grpc-js уничтожает транспорт, а оркестратор видит `read ECONNRESET` и объявляет узел
+       * недоступным. Двадцать — умолчание самого gRPC, выбранное ровно из этих соображений.
+       *
+       * ЗЕРКАЛЬНО ОРКЕСТРАТОРУ. То же значение стоит у его клиента
+       * (`vpn-orchestrate/src/core/services/grpc/GrpcConnectionManager.ts`), и менять его надо
+       * ОДНОВРЕМЕННО С ОБЕИХ СТОРОН: сторож есть у каждой, и оставленный тугим конец продолжит
+       * рвать соединение в одиночку.
+       */
+      'grpc.keepalive_timeout_ms': 20000,
       'grpc.keepalive_permit_without_calls': 1,
       'grpc.http2.min_ping_interval_without_data_ms': 5000,
       'grpc.http2.max_pings_without_data': 0,
