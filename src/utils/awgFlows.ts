@@ -119,6 +119,23 @@ export function parseAwgDump(stdout: string): AwgPeer[] {
  * ПЕРВАЯ пара `src=/dst=` — исходное направление; вторая описывает обратное после NAT, и брать её
  * нельзя: назначение там подменено на адрес самого узла.
  */
+/** Транспортные протоколы, которые вообще попадают в таблицу соединений. */
+const L4_PROTOCOLS = new Set(['tcp', 'udp', 'icmp', 'icmpv6', 'udplite', 'dccp', 'sctp', 'gre']);
+
+/**
+ * Протокол строки — поиском по первым колонкам, а не по фиксированному индексу.
+ *
+ * ДВА ФОРМАТА, И ОНИ СДВИНУТЫ ДРУГ ОТНОСИТЕЛЬНО ДРУГА. `/proc/net/nf_conntrack` начинает строку с
+ * семейства адресов (`ipv4 2 tcp 6 …`), вывод `conntrack -L` — сразу с протокола (`tcp 6 …`).
+ * Прежний разбор брал третью колонку и на выводе утилиты возвращал бы номер протокола вместо имени.
+ */
+function protocolOf(parts: string[]): string {
+  for (const token of parts.slice(0, 4)) {
+    if (L4_PROTOCOLS.has(token)) return token;
+  }
+  return 'unknown';
+}
+
 export function parseConntrack(contents: string, tunnelIpToPeer: Map<string, string>): AwgFlow[] {
   const flows: AwgFlow[] = [];
 
@@ -134,9 +151,7 @@ export function parseConntrack(contents: string, tunnelIpToPeer: Map<string, str
     const dport = /\bdport=(\d+)/.exec(line);
     if (!dst || !dport) continue;
 
-    const parts = line.trim().split(/\s+/);
-    // `ipv4 2 tcp 6 ...` — протокол третьей колонкой. Формат стабилен с 2.6, но перестраховываемся.
-    const protocol = parts[2] ?? 'unknown';
+    const protocol = protocolOf(line.trim().split(/\s+/));
 
     flows.push({
       publicKey,
@@ -184,14 +199,47 @@ export async function collectAwgObservation(iface = 'awg0'): Promise<AwgObservat
 
   if (tunnelIpToPeer.size === 0) return { peers, flows: [], conntrackAvailable: false };
 
+  const contents = await readConntrackTable();
+  if (contents === null) return { peers, flows: [], conntrackAvailable: false };
+
+  return { peers, flows: parseConntrack(contents, tunnelIpToPeer), conntrackAvailable: true };
+}
+
+/**
+ * Таблица соединений ядра: сначала `/proc`, потом утилита.
+ *
+ * ПОЧЕМУ ПОНАДОБИЛСЯ ВТОРОЙ ПУТЬ (2026-09-20). `/proc/net/nf_conntrack` даёт опция сборки ядра
+ * `CONFIG_NF_CONNTRACK_PROCFS`, и в современных сборках её выключают — proc-интерфейс давно
+ * объявлен устаревшим. На нашем узле так и оказалось: модули `nf_conntrack` загружены, таблица
+ * ведётся, а файла нет и не будет. Наблюдение при этом молча отдавало ноль соединений: отпечаток
+ * базы вотчера показал тринадцать тысяч замеров формы трафика AWG, у всех `flows: 0`, — то есть
+ * сигнал, ради которого всё это собиралось, не мог сработать ни разу.
+ *
+ * ПОРЯДОК ИМЕННО ТАКОЙ. Там, где файл есть, он дешевле: чтение в процессе против запуска утилиты
+ * каждые три минуты. Утилита — запасной путь, а не замена.
+ *
+ * `null` означает «посмотреть не удалось» и доезжает до вотчера флагом `conntrackAvailable: false`.
+ * Отличать это от «соединений нет» обязательно: иначе слепой узел выглядел бы идеально тихим.
+ */
+async function readConntrackTable(): Promise<string | null> {
   try {
-    const contents = await fs.readFile(CONNTRACK_PATH, 'utf-8');
-    return { peers, flows: parseConntrack(contents, tunnelIpToPeer), conntrackAvailable: true };
+    return await fs.readFile(CONNTRACK_PATH, 'utf-8');
+  } catch (err: unknown) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Kernel conntrack procfs unavailable, falling back to the conntrack utility'
+    );
+  }
+
+  try {
+    // Сводку («N flow entries have been shown») утилита пишет в stderr, записи — в stdout.
+    const { stdout } = await execAsync('conntrack -L');
+    return stdout;
   } catch (err: unknown) {
     logger.debug(
       { err: err instanceof Error ? err.message : String(err) },
       'Kernel conntrack table unreadable — reporting peer counters only'
     );
-    return { peers, flows: [], conntrackAvailable: false };
+    return null;
   }
 }
