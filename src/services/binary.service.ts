@@ -201,41 +201,47 @@ export async function uploadSingboxBinaryHandler(
       // Юнит sing-box больше не создаётся заранее в install.sh — провижинится здесь, лениво,
       // в момент первой (или любой последующей) реальной загрузки бинарника, зеркально
       // паттерну AWG/Olcrtc. Делаем это ДО любой попытки systemctl start/reload для него.
-      const unitJustProvisioned = await ensureSingboxSystemdUnit();
+      // Возвращает true при ЛЮБОМ расхождении содержимого юнита, а не только при первом его
+      // создании — отсюда и имя: «изменился», а не «только что создан».
+      const unitChanged = await ensureSingboxSystemdUnit();
 
       if (process.env.NODE_ENV !== 'test') {
-        if (unitJustProvisioned) {
-          // Первый реальный вызов: юнит только что создан — поднимаем демон сразу с
-          // доставленным бинарником и placeholder-конфигом и переживаем перезагрузки.
+        /**
+         * ПЕРЕЗАПУСК БЕЗУСЛОВНЫЙ, И ЭТО ГЛАВНОЕ В ЭТОМ БЛОКЕ.
+         *
+         * Здесь подменён сам исполняемый файл. Ни `reload` (SIGHUP уже запущенному процессу —
+         * он перечитает конфиг и продолжит исполнять СТАРЫЙ образ), ни `enable --now` (для
+         * активного юнита это пустая операция) нового бинарника в работу не вводят. Только
+         * `restart` делает exec нового файла, и он же поднимает юнит, если тот был неактивен —
+         * поэтому отдельная ветка «первого запуска» не нужна вовсе.
+         *
+         * Оба промаха стоили одного и того же отказа на двух фронтах подряд (2026-09-20):
+         * бинарь на диске форковый, `sing-box version` и телеметрия рапортуют новую версию, а
+         * в работе остаётся прежний процесс. Агент, увидев форк НА ДИСКЕ, подмешивает в конфиг
+         * службу `users-api`, старое ядро отвечает `unknown inbound type: users-api` и остаётся
+         * на прежнем конфиге. Узел при этом числится здоровым, и расхождение ниоткуда не видно.
+         *
+         * Сначала был исправлен только путь с `reload`, и второй фронт немедленно показал, что
+         * ветка с `enable --now` ведёт себя точно так же. Отсюда отказ от ветвления: у операции
+         * «подменили бинарь» ровно один правильный исход, и он не должен зависеть от того,
+         * трогали ли заодно файл юнита.
+         */
+        if (unitChanged) {
+          // `enable` без `--now`: нужно только чтобы юнит переживал перезагрузки. Запуск —
+          // задача restart ниже, и дублировать его здесь значило бы вернуть прежнюю развилку.
           try {
-            const { stdout, stderr } = await execAsync('systemctl enable --now sing-box');
-            if (stdout) logger.info({ stdout }, 'sing-box enabled and started after unit provisioning');
-            if (stderr) logger.warn({ stderr }, 'sing-box enable --now stderr');
+            await execAsync('systemctl enable sing-box');
           } catch (err: any) {
-            logger.warn({ err: err.message }, 'Failed to enable/start sing-box after provisioning its systemd unit');
+            logger.warn({ err: err.message }, 'Failed to enable sing-box unit after provisioning');
           }
-        } else {
-          /**
-           * ИМЕННО restart, А НЕ reload. Здесь подменён сам исполняемый файл, а `reload` — это
-           * SIGHUP уже запущенному процессу: он перечитает конфиг и продолжит исполнять СТАРЫЙ
-           * образ. Только перезапуск юнита делает exec нового бинарника.
-           *
-           * Раньше здесь стояло `config.RELOAD_COMMAND || 'systemctl restart sing-box'`, и
-           * запасной вариант с restart был мёртвым кодом: `z.string().default()` срабатывает
-           * только когда переменной нет вовсе, так что слева всегда оказывалась непустая строка
-           * `systemctl reload sing-box`. Та же ловушка, что уже описана у CADDY_RELOAD_COMMAND.
-           *
-           * Чем это обернулось на живом узле — см. комментарий у SINGBOX_RESTART_COMMAND: бинарь
-           * форковый, процесс прежний, конфиг со службой `users-api` отвергнут, и всё это при
-           * зелёном статусе узла.
-           */
-          try {
-            const { stdout, stderr } = await execAsync(config.SINGBOX_RESTART_COMMAND);
-            if (stdout) logger.info({ stdout }, 'Restart after binary upgrade');
-            if (stderr) logger.warn({ stderr }, 'Restart stderr');
-          } catch (err: any) {
-            logger.warn({ err: err.message }, 'Restart command failed after binary upgrade');
-          }
+        }
+
+        try {
+          const { stdout, stderr } = await execAsync(config.SINGBOX_RESTART_COMMAND);
+          if (stdout) logger.info({ stdout }, 'Restart after binary upgrade');
+          if (stderr) logger.warn({ stderr }, 'Restart stderr');
+        } catch (err: any) {
+          logger.warn({ err: err.message }, 'Restart command failed after binary upgrade');
         }
       }
 
