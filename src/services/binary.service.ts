@@ -215,14 +215,26 @@ export async function uploadSingboxBinaryHandler(
             logger.warn({ err: err.message }, 'Failed to enable/start sing-box after provisioning its systemd unit');
           }
         } else {
-          // Юнит уже актуален — sing-box уже управляется штатным ApplyConfig-путём (reload).
+          /**
+           * ИМЕННО restart, А НЕ reload. Здесь подменён сам исполняемый файл, а `reload` — это
+           * SIGHUP уже запущенному процессу: он перечитает конфиг и продолжит исполнять СТАРЫЙ
+           * образ. Только перезапуск юнита делает exec нового бинарника.
+           *
+           * Раньше здесь стояло `config.RELOAD_COMMAND || 'systemctl restart sing-box'`, и
+           * запасной вариант с restart был мёртвым кодом: `z.string().default()` срабатывает
+           * только когда переменной нет вовсе, так что слева всегда оказывалась непустая строка
+           * `systemctl reload sing-box`. Та же ловушка, что уже описана у CADDY_RELOAD_COMMAND.
+           *
+           * Чем это обернулось на живом узле — см. комментарий у SINGBOX_RESTART_COMMAND: бинарь
+           * форковый, процесс прежний, конфиг со службой `users-api` отвергнут, и всё это при
+           * зелёном статусе узла.
+           */
           try {
-            const reloadCmd = config.RELOAD_COMMAND || 'systemctl restart sing-box';
-            const { stdout, stderr } = await execAsync(reloadCmd);
-            if (stdout) logger.info({ stdout }, 'Restart/Reload after binary upgrade');
-            if (stderr) logger.warn({ stderr }, 'Restart/Reload stderr');
+            const { stdout, stderr } = await execAsync(config.SINGBOX_RESTART_COMMAND);
+            if (stdout) logger.info({ stdout }, 'Restart after binary upgrade');
+            if (stderr) logger.warn({ stderr }, 'Restart stderr');
           } catch (err: any) {
-            logger.warn({ err: err.message }, 'Reload command failed after binary upgrade');
+            logger.warn({ err: err.message }, 'Restart command failed after binary upgrade');
           }
         }
       }

@@ -11,6 +11,18 @@ const configSchema = z.object({
   SINGBOX_BINARY_PATH: z.string().default('/usr/local/bin/sing-box'),
   SINGBOX_UNIT_FILE_PATH: z.string().default('/etc/systemd/system/sing-box.service'),
   RELOAD_COMMAND: z.string().default('systemctl reload sing-box'),
+  // ⚠️ ОТДЕЛЬНАЯ КОМАНДА ДЛЯ ПОДМЕНЫ БИНАРНИКА, и это не дублирование RELOAD_COMMAND.
+  //
+  // `reload` у sing-box — это SIGHUP УЖЕ ЗАПУЩЕННОМУ процессу: он перечитывает конфиг, но
+  // продолжает исполнять старый образ. После замены файла на диске процесс так и остаётся
+  // прежним, а `sing-box version` (и телеметрия вслед за ним) показывает уже новый бинарь —
+  // расхождение, которое ниоткуда не видно.
+  //
+  // Реальный случай (2026-09-20, фронт aeza-msc-1): форк доставлен, телеметрия рапортует
+  // `1.14.1-hotusers`, а в работе процесс от 10 сентября. Агент, увидев форк НА ДИСКЕ, подмешал
+  // в конфиг службу `users-api`, старое ядро ответило `unknown inbound type: users-api` и
+  // осталось на прежнем конфиге. Узел при этом числился здоровым.
+  SINGBOX_RESTART_COMMAND: z.string().default('systemctl restart sing-box'),
   // Тыловой инстанс sing-box (WARP-выход + наблюдение за направлениями). Отдельный конфиг и
   // отдельный юнит, но ТОТ ЖЕ бинарь, что у фронта: так UpgradeSingbox и SelfUpdate покрывают
   // оба инстанса и не появляется версии, о которой никто не знает.
