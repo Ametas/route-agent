@@ -177,6 +177,22 @@ export interface AwgObservation {
 
 const CONNTRACK_PATH = '/proc/net/nf_conntrack';
 
+/**
+ * Потолок на вывод `conntrack -L`.
+ *
+ * ЗАДАН ЯВНО, ПОТОМУ ЧТО УМОЛЧАНИЕ ЗДЕСЬ — ЛОВУШКА. `promisify(exec)` обрезает вывод на ОДНОМ
+ * мегабайте и бросает `ENOBUFS`, а это примерно пять тысяч записей — обычный размер таблицы на
+ * живом узле. Мы бы поймали исключение, записали строку в debug и отчитались «таблица недоступна»
+ * — то есть ровно та молчаливая слепота, ради устранения которой этот запасной путь и появился.
+ * Соседний `journalWarnings.ts` поднимает потолок по той же причине.
+ *
+ * Тридцать два мегабайта — это около полутораста тысяч соединений, с запасом от сегодняшнего
+ * флота. Не «сколько угодно» намеренно: выше этого разбор стоил бы больше, чем стоят ответы,
+ * которые он даёт, и тогда правильным ходом будет фильтровать выборку по подсети AWG
+ * (`conntrack -L -s <подсеть>`), а не поднимать потолок ещё раз.
+ */
+const CONNTRACK_MAX_BUFFER = 32 * 1024 * 1024;
+
 /** Снимок состояния AWG: пиры со счётчиками и их соединения из таблицы ядра. */
 export async function collectAwgObservation(iface = 'awg0'): Promise<AwgObservation> {
   let peers: AwgPeer[] = [];
@@ -233,7 +249,7 @@ async function readConntrackTable(): Promise<string | null> {
 
   try {
     // Сводку («N flow entries have been shown») утилита пишет в stderr, записи — в stdout.
-    const { stdout } = await execAsync('conntrack -L');
+    const { stdout } = await execAsync('conntrack -L', { maxBuffer: CONNTRACK_MAX_BUFFER });
     return stdout;
   } catch (err: unknown) {
     logger.debug(
