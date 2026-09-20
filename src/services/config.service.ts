@@ -14,6 +14,7 @@ import {
   fixCaddyPermissions,
   singboxConfigMatches,
   isSingboxRunning,
+  isSingboxImageStale,
   readSingboxConfigOnDisk,
   writeSingboxConfigAtomically,
 } from '../utils/singbox.js';
@@ -116,7 +117,18 @@ export async function applyConfigHandler(
      * из базы только после того, как КАЖДАЯ нода подтвердила пуш. Пропуск, отвеченный неуспехом,
      * подвесил бы очередь навсегда.
      */
-    if ((await singboxConfigMatches(configObj)) && coreRunning) {
+    /**
+     * ТРЕТЬЕ УСЛОВИЕ: образ в памяти должен быть тем же, что на диске.
+     *
+     * Без него пропуск становится ловушкой, и она уже сработала дважды (2026-09-20, оба фронта).
+     * После подмены бинарника старый процесс отверг конфиг со службой `users-api` и остался на
+     * прежнем — но на диске-то лежит новый конфиг, и юнит активен. Оба прежних условия выполнены,
+     * агент отвечает «уже актуально», и так на каждый последующий пуш: состояние ниоткуда не
+     * чинится, а снаружи узел здоров. Единственное, что отличает этот случай от честного
+     * «нечего делать», — что живой процесс исполняет уже отвязанный файл.
+     */
+    const imageStale = await isSingboxImageStale();
+    if ((await singboxConfigMatches(configObj)) && coreRunning && !imageStale) {
       logger.info('Sing-box config unchanged and core is up — skipping write, validate and reload');
       return callback(null, {
         success: true,
@@ -153,7 +165,10 @@ export async function applyConfigHandler(
      * существует, и без этого условия КАЖДЫЙ пуш на такую ноду стучался бы в него впустую — чтобы
      * затем всё равно уйти в reload, только с лишним отказом в логе.
      */
-    if (isFork && !forceReload && coreRunning) {
+    // `!imageStale` — потому что горячая замена стучится в сокет ЖИВОГО процесса, а он при
+    // подменённом образе всё ещё старый: службы `users-api` у него нет, и попытка кончилась бы
+    // отказом в логе и всё тем же уходом в перезапуск ниже, только дорогой и непонятной.
+    if (isFork && !forceReload && coreRunning && !imageStale) {
       const applied = await tryHotRosterSwap(configObj);
       if (applied) {
         return callback(null, { success: true, message: applied });

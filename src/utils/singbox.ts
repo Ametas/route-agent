@@ -145,7 +145,21 @@ WantedBy=multi-user.target
 export async function resolveSingboxReloadCommand(
   runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
 ): Promise<string> {
-  return (await isSingboxUnitActive(runExec)) ? config.RELOAD_COMMAND : 'systemctl start sing-box';
+  if (!(await isSingboxUnitActive(runExec))) return 'systemctl start sing-box';
+
+  /**
+   * Подменённый образ лечится только перезапуском — `reload` отдаёт SIGHUP тому же старому
+   * процессу, и он останется старым сколько его ни перезагружай (см. isSingboxImageStale).
+   *
+   * Проверка живёт здесь, а не в вызывающем: это единственное место, где вообще решается, какой
+   * командой вводить конфиг в работу, и любая ветка, обошедшая его, повторила бы отказ.
+   */
+  if (await isSingboxImageStale(runExec)) {
+    logger.warn('Running sing-box executes a replaced binary — restarting instead of reloading');
+    return config.SINGBOX_RESTART_COMMAND;
+  }
+
+  return config.RELOAD_COMMAND;
 }
 
 /**
@@ -178,6 +192,44 @@ export async function isSingboxUnitActive(
 export async function isSingboxRunning(): Promise<boolean> {
   if (process.env.NODE_ENV === 'test') return process.env.SINGBOX_TEST_INACTIVE !== '1';
   return isSingboxUnitActive();
+}
+
+/**
+ * Исполняет ли живой процесс sing-box ТОТ ЖЕ файл, что лежит на диске.
+ *
+ * ЗАЧЕМ. Бинарник подменяется атомарным переименованием, то есть старый inode отвязывается от
+ * имени, но продолжает жить, пока его держит запущенный процесс. Снаружи это неразличимо:
+ * `sing-box version` читает файл НА ДИСКЕ и показывает новую версию, юнит активен, телеметрия
+ * зелёная — а в памяти работает прежний образ. Ядро при этом не понимает нововведений своего же
+ * «текущего» бинаря: форковую службу `users-api` старый образ встречает ошибкой
+ * `unknown inbound type`, отвергает конфиг целиком и остаётся на прежнем.
+ *
+ * КАК ОПРЕДЕЛЯЕТСЯ. Ядро Linux помечает `/proc/<pid>/exe` суффиксом ` (deleted)`, когда файл, из
+ * которого процесс запущен, больше не связан со своим именем. Это прямой признак подменённого
+ * образа, а не догадка по версиям или временам.
+ *
+ * ПОЧЕМУ НЕ ПО КОДУ ВОЗВРАТА RELOAD. `ExecReload` юнита — это `sing-box check -c … && kill -HUP`.
+ * Проверка исполняется НОВЫМ бинарником с диска и проходит успешно, сигнал уходит, systemd
+ * рапортует успех — а разбор конфига падает уже внутри старого процесса. Наверх этот отказ не
+ * доходит вовсе.
+ */
+export async function isSingboxImageStale(
+  runExec: (command: string) => Promise<{ stdout: string; stderr: string }> = execAsync,
+): Promise<boolean> {
+  if (process.env.NODE_ENV === 'test') return process.env.SINGBOX_TEST_STALE_IMAGE === '1';
+
+  try {
+    const { stdout } = await runExec('systemctl show sing-box -p MainPID --value');
+    const mainPid = stdout.trim();
+    if (!mainPid || mainPid === '0') return false;
+
+    const target = await fs.readlink(`/proc/${mainPid}/exe`).catch(() => '');
+    return target.endsWith(' (deleted)');
+  } catch {
+    // Не смогли выяснить — считаем образ актуальным. Ошибка в эту сторону оставляет всё как
+    // есть; в обратную она перезапускала бы ядро на каждом пуше, рвя сессии всем абонентам.
+    return false;
+  }
 }
 
 /**

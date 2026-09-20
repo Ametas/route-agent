@@ -719,6 +719,39 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     assert.strictEqual(rejectingCmd, 'systemctl start sing-box');
   });
 
+  await t.test('resolveSingboxReloadCommand restarts when the running core executes a replaced binary', async () => {
+    /**
+     * ПОДМЕНЁННЫЙ ОБРАЗ ЛЕЧИТСЯ ТОЛЬКО ПЕРЕЗАПУСКОМ (2026-09-20, два фронта подряд).
+     *
+     * Бинарник меняется атомарным переименованием: имя указывает на новый файл, а запущенный
+     * процесс продолжает держать старый inode. Снаружи неразличимо — `sing-box version` читает
+     * файл с диска и показывает новую версию, юнит активен, телеметрия зелёная. При этом старое
+     * ядро не понимает форковую службу `users-api`, отвергает конфиг целиком и живёт на прежнем.
+     *
+     * `reload` тут бесполезен принципиально: он шлёт SIGHUP тому же старому процессу. И заметить
+     * отказ по коду возврата нельзя — `ExecReload` юнита делает `sing-box check` НОВЫМ бинарником
+     * с диска, проверка проходит, systemd рапортует успех, а разбор падает уже внутри старого
+     * процесса.
+     */
+    const { resolveSingboxReloadCommand } = await import('../src/utils/singbox.js');
+    const { config: agentConfig } = await import('../src/config.js');
+
+    const activeExec = async (_command: string) => ({ stdout: 'active\n', stderr: '' });
+
+    process.env.SINGBOX_TEST_STALE_IMAGE = '1';
+    try {
+      const staleCmd = await resolveSingboxReloadCommand(activeExec);
+      assert.strictEqual(staleCmd, agentConfig.SINGBOX_RESTART_COMMAND, 'подменённый образ обязан вести к restart');
+    } finally {
+      delete process.env.SINGBOX_TEST_STALE_IMAGE;
+    }
+
+    // И обратная сторона: без подмены остаётся мягкий reload. Перезапуск на каждом пуше рвал бы
+    // сессии всем абонентам ноды — ровно то, ради чего дедупликация пушей и заводилась.
+    const freshCmd = await resolveSingboxReloadCommand(activeExec);
+    assert.strictEqual(freshCmd, process.env.RELOAD_COMMAND);
+  });
+
   await t.test('getAwgInterfaceName and restartActiveAwgServices when unconfigured', async () => {
     const { getAwgInterfaceName, restartActiveAwgServices } = await import('../src/utils/awg.js');
     assert.strictEqual(getAwgInterfaceName(), 'awg0');
