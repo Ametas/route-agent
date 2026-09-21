@@ -100,6 +100,103 @@ function withoutUsers(configObj: object, inbounds: InboundLike[]): string {
   return JSON.stringify({ ...configObj, inbounds: stripped });
 }
 
+function stripUsers(configObj: object, inbounds: InboundLike[]): object {
+  const stripped = inbounds.map((inbound) => {
+    const copy = { ...inbound };
+    delete copy.users;
+    return copy;
+  });
+  return { ...configObj, inbounds: stripped };
+}
+
+/**
+ * ГДЕ именно конфиги разошлись — путь до первого различия, без значений.
+ *
+ * ⚠️ ЗНАЧЕНИЯ НЕ ПИШУТСЯ НИКОГДА. Конфиг несёт приватные ключи reality, пароли инбаундов и
+ * сертификаты; лог с ними стал бы хранилищем секретов. Пути достаточно: он отвечает на
+ * единственный нужный вопрос — что чинить.
+ *
+ * ЗАЧЕМ ВООБЩЕ. `planRosterUpdate` отвечает «горячим путём не пройти» одним `null`, и до
+ * 2026-09-21 этот отказ был полностью немым: узел с фоРком уходил в перезагрузку, рвал сессии
+ * всем абонентам и не оставлял в логе ни строчки о причине. Выяснилось это только потому, что
+ * владелец снял счётчик живых соединений до и после создания абонента.
+ */
+export function describeConfigDiff(next: unknown, current: unknown, path = ''): string | null {
+  if (next === current) return null;
+
+  const bothObjects =
+    typeof next === 'object' && next !== null && typeof current === 'object' && current !== null;
+  if (!bothObjects) return path || '(корень)';
+
+  if (Array.isArray(next) !== Array.isArray(current)) return path || '(корень)';
+
+  if (Array.isArray(next) && Array.isArray(current)) {
+    if (next.length !== current.length) return `${path}[длина ${current.length} → ${next.length}]`;
+    for (let i = 0; i < next.length; i++) {
+      const found = describeConfigDiff(next[i], current[i], `${path}[${i}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const nextObj = next as Record<string, unknown>;
+  const currentObj = current as Record<string, unknown>;
+  const nextKeys = Object.keys(nextObj);
+  const currentKeys = Object.keys(currentObj);
+
+  /**
+   * Порядок ключей проверяется отдельно и первым: сравнение идёт через `JSON.stringify`, для
+   * которого `{a,b}` и `{b,a}` — разные строки. Диф «по значениям» такого не покажет вовсе, и
+   * причина выглядела бы как «всё одинаково, но не совпадает».
+   */
+  if (nextKeys.join(',') !== currentKeys.join(',')) {
+    const added = nextKeys.filter((k) => !currentKeys.includes(k));
+    const removed = currentKeys.filter((k) => !nextKeys.includes(k));
+    if (added.length || removed.length) {
+      return `${path || '(корень)'}{добавлено: ${added.join('|') || '—'}, убрано: ${removed.join('|') || '—'}}`;
+    }
+    return `${path || '(корень)'}{порядок ключей}`;
+  }
+
+  for (const key of nextKeys) {
+    const found = describeConfigDiff(nextObj[key], currentObj[key], path ? `${path}.${key}` : key);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+/**
+ * Почему горячая замена не прошла — строкой для лога.
+ *
+ * `null` означает «прошла бы»: вызывать имеет смысл только там, где `planRosterUpdate` уже
+ * отказал.
+ */
+export function explainHotSwapBlocker(nextConfig: object, currentConfig: object): string {
+  const nextInbounds = inboundsOf(nextConfig);
+  const currentInbounds = inboundsOf(currentConfig);
+  if (!nextInbounds) return 'в присланном конфиге нет inbounds';
+  if (!currentInbounds) return 'в конфиге на диске нет inbounds';
+
+  const outside = describeConfigDiff(
+    stripUsers(nextConfig, nextInbounds),
+    stripUsers(currentConfig, currentInbounds)
+  );
+  if (outside) return `разошлось вне наборов абонентов: ${outside}`;
+
+  for (let i = 0; i < nextInbounds.length; i++) {
+    const inbound = nextInbounds[i];
+    if (JSON.stringify(inbound.users ?? null) === JSON.stringify(currentInbounds[i]?.users ?? null)) continue;
+    if (typeof inbound.type !== 'string' || !HOT_SWAPPABLE_TYPES.has(inbound.type)) {
+      return `инбаунд ${i} типа ${String(inbound.type)} не умеет горячую замену`;
+    }
+    if (typeof inbound.tag !== 'string' || inbound.tag === '') return `у инбаунда ${i} нет тега`;
+    if (!Array.isArray(inbound.users)) return `у инбаунда ${i} набор абонентов не массив`;
+  }
+
+  return 'причина не определена';
+}
+
 /**
  * Что изменилось между конфигами: только наборы абонентов — или что-то ещё.
  *

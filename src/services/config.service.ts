@@ -18,7 +18,7 @@ import {
   readSingboxConfigOnDisk,
   writeSingboxConfigAtomically,
 } from '../utils/singbox.js';
-import { isForkBinary, withUsersApiService, planRosterUpdate, applyRosterUpdates } from '../utils/hotUsers.js';
+import { isForkBinary, withUsersApiService, planRosterUpdate, applyRosterUpdates, explainHotSwapBlocker } from '../utils/hotUsers.js';
 import { syncEgressFirewall, isUfwInstalled } from '../utils/firewall.js';
 import { getAwgInterfaceName } from '../utils/awg.js';
 
@@ -43,10 +43,29 @@ function sanitizeConfigInput(val: string | number | undefined | null): string {
  */
 async function tryHotRosterSwap(configObj: object): Promise<string | null> {
   const onDisk = await readSingboxConfigOnDisk();
-  if (!onDisk) return null;
+  if (!onDisk) {
+    logger.warn('Горячая замена невозможна: конфиг на диске не прочитался — уходим в перезагрузку');
+    return null;
+  }
 
   const plan = planRosterUpdate(configObj, onDisk);
-  if (!plan) return null;
+  if (!plan) {
+    /**
+     * ⚠️ ЭТОТ ОТКАЗ БЫЛ НЕМЫМ ДО 2026-09-21, и это стоило ровно того, ради чего форк и делался.
+     *
+     * Узел с форковым ядром уходил в полную перезагрузку — то есть рвал сессии ВСЕМ абонентам —
+     * и не оставлял в журнале ни строчки о причине. Обнаружилось случайно: владелец снял счётчик
+     * живых соединений до и после создания абонента и увидел 254 → 0 при живом форке.
+     *
+     * Причина называется, значения не пишутся: в конфиге лежат приватные ключи reality, пароли
+     * инбаундов и сертификаты.
+     */
+    logger.warn(
+      { blocker: explainHotSwapBlocker(configObj, onDisk) },
+      'Горячая замена невозможна — уходим в полную перезагрузку, сессии будут разорваны'
+    );
+    return null;
+  }
 
   try {
     // Файл обновляем ДО сокета: переживи процесс перезапуск между двумя действиями, на диске
