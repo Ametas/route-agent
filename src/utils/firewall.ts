@@ -72,6 +72,34 @@ export function extractUdpTunnelPorts(configObj: Record<string, unknown>): numbe
   return Array.from(ports);
 }
 
+export interface FirewallSyncPlan {
+  toOpen: number[];
+  toClose: number[];
+  /** Нужна ли перезагрузка правил. Ровно тогда, когда есть что применять. */
+  needsReload: boolean;
+}
+
+/**
+ * Что делать с фаерволом — чистое решение, отдельно от его исполнения.
+ *
+ * ⚠️ `needsReload` ЗАВИСИТ ОТ НАЛИЧИЯ ИЗМЕНЕНИЙ, и до аудита 2026-09-21 не зависел: `ufw reload`
+ * выполнялся безусловно, в конце каждой синхронизации. А синхронизация идёт на КАЖДОМ применении
+ * конфига — то есть на каждом создании абонента флот перестраивал правила iptables, хотя портовый
+ * состав от появления абонента не меняется никогда.
+ *
+ * Вынесено в чистую функцию, чтобы это правило можно было проверить тестом: сам `syncEgressFirewall`
+ * ходит в `sudo ufw` и в файл по абсолютному пути, и проверяем он только на живой машине.
+ */
+export function planFirewallSync(newPorts: number[], previousPorts: number[]): FirewallSyncPlan {
+  const newPortsSet = new Set(newPorts);
+  const previousPortsSet = new Set(previousPorts);
+
+  const toOpen = newPorts.filter((port) => !previousPortsSet.has(port));
+  const toClose = previousPorts.filter((port) => !newPortsSet.has(port));
+
+  return { toOpen, toClose, needsReload: toOpen.length > 0 || toClose.length > 0 };
+}
+
 /**
  * Синхронизирует правила UFW с актуальным списком UDP-портов hysteria2/tuic
  */
@@ -85,11 +113,13 @@ export async function syncEgressFirewall(configObj: Record<string, unknown>): Pr
     const newPorts = extractUdpTunnelPorts(configObj);
     const previousPorts = await readActivePortsCache();
 
-    const newPortsSet = new Set(newPorts);
-    const previousPortsSet = new Set(previousPorts);
+    const { toOpen: portsToOpen, toClose: portsToClose, needsReload } = planFirewallSync(newPorts, previousPorts);
 
-    const portsToOpen = newPorts.filter((port) => !previousPortsSet.has(port));
-    const portsToClose = previousPorts.filter((port) => !newPortsSet.has(port));
+    if (!needsReload) {
+      // Портовый состав не изменился — применять нечего, и перезагружать правила незачем.
+      logger.debug({ ports: newPorts.length }, 'Egress firewall already in sync — skipping UFW reload');
+      return;
+    }
 
     await Promise.allSettled(
       portsToOpen.map(async (port) => {
