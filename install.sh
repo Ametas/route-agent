@@ -22,6 +22,61 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_SUSPEND=1
 export NEEDRESTART_MODE=l
 
+# Сеть: запасные источники для хостов, которые с этого сервера недоступны (2026-09-24).
+#
+# Живой случай: московский VPS, где любой трафик к адресам Cloudflare глохнет после TCP-соединения —
+# и TLS, и простой HTTP. За Cloudflare стоят NodeSource и npm-реестр, а у curl не было таймаутов,
+# поэтому установка висела на первом же ключе без единой строки ошибки. GitHub при этом доступен.
+#
+# Зеркала — npmmirror (CDN Alibaba, не Cloudflare). Основной источник остаётся первым: зеркало
+# берётся, только если основной не ответил за несколько секунд.
+NODE_MAJOR=22
+NODE_MIRROR="https://cdn.npmmirror.com/binaries/node"
+NPM_MIRROR="https://registry.npmmirror.com"
+
+# Скачивание с таймаутами: без них заглушённый на пути хост вешает установку навсегда.
+fetch() { curl -fsSL --connect-timeout 10 --max-time 180 "$@"; }
+
+# Отвечает ли источник вообще — короткая проверка, прежде чем на него опереться.
+reachable() { curl -fsS -o /dev/null --connect-timeout 8 --max-time 15 "$1"; }
+
+# Ключ apt-репозитория: во временный файл и только потом в keyrings. Прерванная загрузка раньше
+# оставляла пустой ключ, а `gpg --dearmor` без `--yes` при следующем запуске спрашивал про
+# перезапись и ждал ответа.
+install_apt_key() {
+  local url="$1" dest="$2" tmp
+  tmp=$(mktemp)
+  fetch "$url" -o "$tmp"
+  gpg --dearmor --yes -o "$dest" "$tmp"
+  rm -f "$tmp"
+}
+
+# Node.js из официальных сборок через зеркало — когда NodeSource недоступен. Контрольная сумма
+# берётся с того же зеркала: она ловит обрыв и порчу загрузки, но не подменённое зеркало.
+install_node_from_mirror() {
+  local prefix="${1:-/usr/local}" arch base tmp file
+  case "$(uname -m)" in
+    x86_64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo "❌ Error: unsupported CPU architecture for the Node.js mirror: $(uname -m)"; exit 1 ;;
+  esac
+  base="$NODE_MIRROR/latest-v${NODE_MAJOR}.x"
+  tmp=$(mktemp -d)
+  fetch "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
+  file=$(grep -oE "node-v${NODE_MAJOR}\.[0-9]+\.[0-9]+-linux-${arch}\.tar\.xz" "$tmp/SHASUMS256.txt" | head -1)
+  if [ -z "$file" ]; then
+    echo "❌ Error: no Node.js ${NODE_MAJOR} linux-${arch} build listed on $base"
+    exit 1
+  fi
+  echo "📥 Downloading $file from $NODE_MIRROR..."
+  fetch "$base/$file" -o "$tmp/$file"
+  (cd "$tmp" && grep " $file\$" SHASUMS256.txt | sha256sum -c -)
+  mkdir -p "$prefix"
+  tar -xJf "$tmp/$file" -C "$prefix" --strip-components=1 --exclude='*.md' --exclude='LICENSE'
+  rm -rf "$tmp"
+  hash -r
+}
+
 SECRET=""
 PORT="8081"
 REPO="https://github.com/Ametas/route-agent.git"
@@ -49,13 +104,20 @@ fi
 # 1. Установка системных зависимостей и подключение репозитория Caddy
 echo "📦 Installing system packages and Caddy repository..."
 apt-get update
-apt-get install -y iptables iproute2 ufw git curl unzip mtr-tiny conntrack debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
+apt-get install -y iptables iproute2 ufw git curl unzip xz-utils mtr-tiny conntrack debian-keyring debian-archive-keyring apt-transport-https ca-certificates gnupg
 
 if ! command -v caddy &> /dev/null; then
-  echo "📥 Adding Caddy official apt repository..."
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update
+  CADDY_REPO="https://dl.cloudsmith.io/public/caddy/stable"
+  if reachable "$CADDY_REPO/gpg.key"; then
+    echo "📥 Adding Caddy official apt repository..."
+    install_apt_key "$CADDY_REPO/gpg.key" /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    fetch "$CADDY_REPO/debian.deb.txt" -o /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update
+  else
+    # Базовый Caddy годится из дистрибутива: свою сборку оркестратор всё равно пушит сам.
+    echo "⚠️ Cloudsmith is unreachable from this server — installing Caddy from the distro repository."
+    rm -f /etc/apt/sources.list.d/caddy-stable.list
+  fi
   apt-get install -y caddy
 fi
 
@@ -85,11 +147,20 @@ echo '{"route":{"rules":[]}}' > /etc/sing-box/config.json
 # npm рядом — тогда этот блок молча пропускался бы, а npm ci ниже падал бы с
 # "npm: command not found" (реальный инцидент).
 if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
-  mkdir -p /etc/apt/keyrings
-  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-  apt-get update
-  apt-get install -y nodejs
+  NODESOURCE_KEY="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+  if reachable "$NODESOURCE_KEY"; then
+    mkdir -p /etc/apt/keyrings
+    install_apt_key "$NODESOURCE_KEY" /etc/apt/keyrings/nodesource.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+    apt-get update
+    apt-get install -y nodejs
+  else
+    echo "⚠️ NodeSource is unreachable from this server — installing Node.js ${NODE_MAJOR} from $NODE_MIRROR."
+    # Хвосты прошлых попыток: список с недоступным хостом apt-get update будет дёргать при каждом
+    # запуске, а пустой ключ от прерванной загрузки ни к чему.
+    rm -f /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg
+    install_node_from_mirror /usr/local
+  fi
 fi
 
 if ! command -v npm &> /dev/null; then
@@ -148,6 +219,14 @@ else
 fi
 cd "$AGENT_DIR"
 
+# npm-реестр тоже за Cloudflare. Зеркало пишется в глобальный конфиг npm, а не передаётся флагом:
+# самообновление агента (selfUpdateHandler) потом само запускает `npm ci`, и ему нужен тот же
+# реестр. Адреса из package-lock.json npm подменяет на заданный реестр сам (replace-registry-host).
+if ! reachable "https://registry.npmjs.org/"; then
+  echo "⚠️ registry.npmjs.org is unreachable from this server — switching npm to $NPM_MIRROR."
+  npm config set registry "$NPM_MIRROR" --location=global
+fi
+
 npm ci
 npm run build
 
@@ -194,6 +273,9 @@ AGENT_KEY_PATH=/etc/route-agent/certs/agent.key
 EOT
 chmod 600 "$AGENT_DIR/.env"
 
+# Путь к node — по факту установки: из зеркала он ложится в /usr/local/bin, а не в /usr/bin.
+NODE_BIN=$(command -v node)
+
 cat << EOT > /etc/systemd/system/route-agent.service
 [Unit]
 Description=Route Egress gRPC Agent Service
@@ -203,7 +285,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$AGENT_DIR
-ExecStart=/usr/bin/node $AGENT_DIR/dist/index.js
+ExecStart=$NODE_BIN $AGENT_DIR/dist/index.js
 Restart=always
 RestartSec=5
 EnvironmentFile=$AGENT_DIR/.env
