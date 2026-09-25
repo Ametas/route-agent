@@ -1,0 +1,53 @@
+# Проверка и автоверсия агента (2026-09-25).
+#
+# Версия — тег `vX.Y.Z`, который ставит semantic-release по типам коммитов с прошлого тега:
+# feat → минорная, fix/perf → патч, `!` после типа или BREAKING CHANGE → мажорная, остальное
+# (chore, docs, refactor, test, ci) релиза не даёт. Коммитов в main бот не делает: версия живёт в
+# теге, агент на узле читает её `git describe --tags` (system.service.ts).
+#
+# Релиз — только после зелёной проверки и только на main.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  pull_request:
+    paths-ignore: ['**/*.md']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+        env:
+          # Zod-конфиг агента требует секрет узла; тестам годится любой.
+          EGRESS_CONTROL_SECRET: ci-test-secret
+          NODE_ENV: test
+
+  release:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Анализ идёт от прошлого тега — нужна вся история и все теги.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # Пресет @9, а не @10: @10 требует conventional-changelog-writer@9, а release-notes-generator
+      # из semantic-release 25 грузит старый — заметки к релизу не собираются (проверено dry-run).
+      - run: npx --yes -p semantic-release@25 -p conventional-changelog-conventionalcommits@9 semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
