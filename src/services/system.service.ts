@@ -13,9 +13,17 @@ let cachedAgentVersion: string | null = null;
 export async function getAgentVersion(): Promise<string> {
   if (cachedAgentVersion) return cachedAgentVersion;
 
+  /**
+   * Версия — от ближайшего тега релиза: `v1.4.0` на самом теге, `v1.4.0-3-gabc1234` на три коммита
+   * позже, короткий хеш, если тегов нет вовсе (2026-09-25).
+   *
+   * Теги ставит semantic-release в CI по типам коммитов (`.releaserc.json`). До этого здесь был
+   * голый `git rev-parse --short HEAD`: хеш говорит «какой коммит», но не «новее ли он», и
+   * оркестратор не мог решить, умеет ли агент что-то, — ему нечего было сравнить.
+   */
   let version = '';
   try {
-    const { stdout } = await execAsync('git rev-parse --short HEAD');
+    const { stdout } = await execAsync('git describe --tags --always');
     if (stdout && stdout.trim()) {
       version = stdout.trim();
     }
@@ -103,7 +111,7 @@ export async function selfUpdateHandler(
   setTimeout(async () => {
     try {
       logger.info('Starting agent self-update sequence...');
-      const updateCmd = 'cd /opt/route-agent && git fetch --all && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
+      const updateCmd = 'cd /opt/route-agent && git fetch --all --tags && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
       await execAsync(updateCmd);
     } catch (err: any) {
       logger.error({ err: err.stderr || err.message }, 'Failed to execute self-update sequence');

@@ -202,14 +202,14 @@ fi
 # иначе повторный запуск install.sh будет пересобирать устаревший чекаут и
 # "фикс не применяется после повторного запуска" (см. реальный инцидент).
 # Зеркалируем точную git-идиому из selfUpdateHandler (src/services/system.service.ts):
-# git fetch --all && git reset --hard @{u} && git clean -fd
+# git fetch --all --tags && git reset --hard @{u} && git clean -fd
 if [ ! -d "$AGENT_DIR" ]; then
   git clone "$REPO" "$AGENT_DIR"
 elif [ -d "$AGENT_DIR/.git" ]; then
   echo "🔄 $AGENT_DIR already exists — syncing to latest upstream commit..."
   (
     cd "$AGENT_DIR"
-    git fetch --all
+    git fetch --all --tags
     git reset --hard @{u}
     git clean -fd
   )
