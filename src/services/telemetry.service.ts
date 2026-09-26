@@ -118,7 +118,8 @@ export async function streamTelemetryHandler(
           meshAwgKernelStatus: meshKernel.status,
           meshAwgKernelVersion: meshKernel.version,
           meshTunnelInterfaceStatus: meshIface.status,
-          meshTunnelActivePeers: meshIface.activePeers
+          meshTunnelActivePeers: meshIface.activePeers,
+          meshTunnelLivePeerKeys: meshIface.livePeerKeys
         });
       } catch {
         cleanup();
@@ -162,7 +163,8 @@ export async function getTelemetryHandler(
       meshAwgKernelStatus: 'unknown',
       meshAwgKernelVersion: '',
       meshTunnelInterfaceStatus: 'unknown',
-      meshTunnelActivePeers: 0
+      meshTunnelActivePeers: 0,
+      meshTunnelLivePeerKeys: []
     });
   }
 
@@ -198,7 +200,8 @@ export async function getTelemetryHandler(
       meshAwgKernelStatus: meshKernel.status,
       meshAwgKernelVersion: meshKernel.version,
       meshTunnelInterfaceStatus: meshIface.status,
-      meshTunnelActivePeers: meshIface.activePeers
+      meshTunnelActivePeers: meshIface.activePeers,
+      meshTunnelLivePeerKeys: meshIface.livePeerKeys
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -219,7 +222,8 @@ export async function getTelemetryHandler(
       meshAwgKernelStatus: 'error',
       meshAwgKernelVersion: '',
       meshTunnelInterfaceStatus: 'error',
-      meshTunnelActivePeers: 0
+      meshTunnelActivePeers: 0,
+      meshTunnelLivePeerKeys: []
     });
   }
 }

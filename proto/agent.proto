@@ -274,6 +274,9 @@ message TelemetryResponse {
   string mesh_awg_kernel_version = 14;
   string mesh_tunnel_interface_status = 15; // "up" | "down" | "absent"
   uint32 mesh_tunnel_active_peers = 16;
+  // Public keys of mesh peers with a handshake in the last 180s — the orchestrator routes a
+  // front's ring traffic to an egress node over the tunnel only while that pair is live.
+  repeated string mesh_tunnel_live_peer_keys = 17;
 }
 
 message UpgradePayload {
