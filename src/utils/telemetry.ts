@@ -393,17 +393,55 @@ export function invalidateMeshAwgKernelStatusCache(): void {
   lastMeshAwgKernelCheckTime = 0;
 }
 
+/** Окно «свежего» рукопожатия — то же, что у клиентского AWG (`getAwgActivePeersCount`). */
+const MESH_HANDSHAKE_FRESH_SEC = 180;
+
+export interface MeshTunnelInterfaceStatus {
+  status: string;
+  activePeers: number;
+  /**
+   * Публичные ключи пиров со свежим рукопожатием (2026-09-26).
+   *
+   * Одного числа оркестратору мало: фронт ведёт трафик кольца к egress-узлу через туннель, и
+   * решать это надо по каждому узлу отдельно. Живой случай: у эстонского узла из четырёх фронтов
+   * рукопожатие было с одним, остальные три слали трафик кольца в туннель, где ответы не
+   * доходили. По ключам оркестратор узнаёт, до каких узлов туннель жив, и к остальным ведёт
+   * трафик по публичному адресу.
+   */
+  livePeerKeys: string[];
+}
+
+/**
+ * Разбор `awg show <iface> dump`. Первая строка — сам интерфейс, дальше по строке на пира:
+ * ключ, psk, endpoint, allowed-ips, время последнего рукопожатия (unix, 0 — не было), …
+ */
+export function parseMeshPeerDump(stdout: string, nowSec: number): { activePeers: number; livePeerKeys: string[] } {
+  const lines = stdout.trim().split('\n');
+  const livePeerKeys: string[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    const latestHandshake = parseInt(parts[4], 10);
+    if (!isNaN(latestHandshake) && latestHandshake > 0 && nowSec - latestHandshake <= MESH_HANDSHAKE_FRESH_SEC) {
+      livePeerKeys.push(parts[0]);
+    }
+  }
+  return { activePeers: livePeerKeys.length, livePeerKeys };
+}
+
 /**
  * "absent" (interface doesn't exist at all) vs "up" (interface exists — kernel-module-backed
  * AWG interfaces don't have a meaningful "down but configured" state the way systemd units do,
  * since awg-quick down removes the interface entirely) — mirrors getAwgActivePeersCount's
  * handshake-recency window (180s) for the active-peer count.
  */
-export async function getMeshTunnelInterfaceStatus(): Promise<{ status: string; activePeers: number }> {
+export async function getMeshTunnelInterfaceStatus(): Promise<MeshTunnelInterfaceStatus> {
   if (process.env.NODE_ENV === 'test' && process.env.TEST_MESH_TUNNEL_STATUS !== undefined) {
+    const livePeerKeys = (process.env.TEST_MESH_TUNNEL_LIVE_PEER_KEYS || '').split(',').filter(Boolean);
     return {
       status: process.env.TEST_MESH_TUNNEL_STATUS,
       activePeers: parseInt(process.env.TEST_MESH_TUNNEL_ACTIVE_PEERS || '0', 10) || 0,
+      livePeerKeys,
     };
   }
 
@@ -411,28 +449,14 @@ export async function getMeshTunnelInterfaceStatus(): Promise<{ status: string; 
   try {
     await execAsync(`ip link show ${iface}`);
   } catch {
-    return { status: 'absent', activePeers: 0 };
+    return { status: 'absent', activePeers: 0, livePeerKeys: [] };
   }
 
   try {
     const { stdout } = await execAsync(`awg show ${iface} dump`);
-    const lines = stdout.trim().split('\n');
-    if (lines.length <= 1) return { status: 'up', activePeers: 0 };
-
-    const now = Math.floor(Date.now() / 1000);
-    let activePeers = 0;
-    for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].trim().split(/\s+/);
-      if (parts.length >= 5) {
-        const latestHandshake = parseInt(parts[4], 10);
-        if (!isNaN(latestHandshake) && latestHandshake > 0 && (now - latestHandshake) <= 180) {
-          activePeers++;
-        }
-      }
-    }
-    return { status: 'up', activePeers };
+    return { status: 'up', ...parseMeshPeerDump(stdout, Math.floor(Date.now() / 1000)) };
   } catch {
-    return { status: 'up', activePeers: 0 };
+    return { status: 'up', activePeers: 0, livePeerKeys: [] };
   }
 }
 
