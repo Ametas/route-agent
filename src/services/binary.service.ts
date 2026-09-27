@@ -639,8 +639,8 @@ export async function uploadAwgGoBinaryHandler(
 
 /**
  * RPC Обработчик UploadCaddyBinary (клиентский стрим RPC для загрузки кастомно собранного
- * Caddy с плагином caddy-dns/cloudflare — только для Xeon-ring узлов, egress-ноды продолжают
- * использовать apt-Caddy и этот RPC никогда не получают).
+ * Caddy с плагином caddy-dns/cloudflare). Получают Xeon-фронты и, с 2026-09-27, egress-узлы, где
+ * apt-Caddy старше 2.7 и не умеет приём PROXY от фронтов.
  */
 export async function uploadCaddyBinaryHandler(
   call: ServerReadableStream<any, any>,
@@ -710,13 +710,17 @@ export async function uploadCaddyBinaryHandler(
 
       logger.info({ path: targetPath, version: targetVersion }, 'Atomically updated custom Caddy binary');
 
-      // UploadCaddyBinary is only ever invoked for Xeon-ring nodes (regular egress nodes never
-      // receive this RPC at all), so it's safe to switch the systemd unit over to the custom
-      // binary right here — idempotent (no-op if the override already matches).
+      // Переводим caddy.service на наш бинарь (идемпотентно). С 2026-09-27 RPC получают и
+      // egress-узлы — их apt-Caddy старше 2.7 не умеет proxy_protocol.
+      //
+      // Перезапуск НУЖЕН И ТОГДА, когда drop-in уже на месте: работающий процесс держит старый
+      // бинарь в памяти, и без перезапуска обновление Caddy молча не применялось бы до ближайшего
+      // рестарта. `ensureCaddyCustomBinaryOverride` перезапускает сам, только если drop-in менялся.
       let overrideMsg = '';
       if (process.env.NODE_ENV !== 'test') {
-        await ensureCaddyCustomBinaryOverride();
-        overrideMsg = ' and systemd override provisioned';
+        const restarted = await ensureCaddyCustomBinaryOverride();
+        if (!restarted) await execAsync('systemctl restart caddy');
+        overrideMsg = ' and caddy.service restarted on it';
       }
 
       return callback(null, {
