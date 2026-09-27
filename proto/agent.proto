@@ -564,7 +564,19 @@ message AgentInfoResponse {
 // by comparing results across nodes centrally, instead of each node picking its own targets.
 message NetworkDiagnosticRequest {
   string orchestrator_secret = 1;
+  // ICMP-only probes (the scheduled diagnostic's shape) — kept as is for that caller.
   repeated string targets = 2;
+  // Protocol-specific probes (new-server reachability check): results follow `targets`' results.
+  repeated NetworkDiagnosticProbe probes = 3;
+}
+
+// protocol: "icmp" | "tcp" | "udp"; port is required for tcp/udp and ignored for icmp. TCP counts
+// SYN-ACK or RST from the target as reached, UDP counts ICMP port-unreachable — so a bare server
+// with nothing listening still answers, and the answer proves the round trip.
+message NetworkDiagnosticProbe {
+  string target = 1;
+  string protocol = 2;
+  uint32 port = 3;
 }
 
 // Only hops that actually show loss are included (see networkDiagnostic.service.ts on the agent
@@ -583,6 +595,11 @@ message NetworkDiagnosticTargetResult {
   double avg_latency_ms = 4;
   repeated NetworkDiagnosticHop lossy_hops = 5;
   string error = 6;
+  string protocol = 7;
+  uint32 port = 8;
+  // Last hop that answered at all: where the path dies when the target is unreachable.
+  uint32 last_hop_number = 9;
+  string last_hop_address = 10;
 }
 
 message NetworkDiagnosticResponse {

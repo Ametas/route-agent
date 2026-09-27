@@ -1469,6 +1469,44 @@ test('Route Agent gRPC Pipeline Testing', async (t) => {
     });
   });
 
+  await t.test('RunNetworkDiagnostic runs protocol probes after targets and echoes protocol/port', (t, done) => {
+    client.runNetworkDiagnostic(
+      {
+        targets: ['8.8.8.8'],
+        probes: [
+          { target: '1.2.3.4', protocol: 'tcp', port: 443 },
+          { target: '1.2.3.4', protocol: 'udp', port: 0 },
+          { target: '1.2.3.4', protocol: 'sctp', port: 1 }
+        ]
+      },
+      validMetadata,
+      (err: any, response: any) => {
+        try {
+          assert.ifError(err);
+          assert.strictEqual(response.success, true);
+          assert.strictEqual(response.results.length, 4, 'one result per target plus one per probe, in request order');
+
+          assert.strictEqual(response.results[0].target, '8.8.8.8');
+          assert.strictEqual(response.results[0].protocol, 'icmp');
+
+          // mtr в песочнице нет — проба доходит до запуска и падает на ENOENT, но с протоколом и портом.
+          assert.strictEqual(response.results[1].protocol, 'tcp');
+          assert.strictEqual(response.results[1].port, 443);
+          assert.strictEqual(response.results[1].reachable, false);
+          assert.ok(response.results[1].error);
+
+          assert.strictEqual(response.results[2].protocol, 'udp');
+          assert.match(response.results[2].error, /port must be 1-65535/);
+
+          assert.match(response.results[3].error, /Unsupported probe protocol/);
+          done();
+        } catch (e) {
+          done(e);
+        }
+      }
+    );
+  });
+
   await t.test('RunNetworkDiagnostic should treat an empty targets list as a trivial success', (t, done) => {
     client.runNetworkDiagnostic({ targets: [] }, validMetadata, (err: any, response: any) => {
       assert.ifError(err);
