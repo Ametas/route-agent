@@ -30,6 +30,19 @@ function sanitizeConfigInput(val: string | number | undefined | null): string {
 }
 
 /**
+ * Флаг AWG 3.1 строкой конфига (2026-09-28): `RandomTrailers = on`. Оркестратор шлёт "on" или
+ * "off", пусто — директиву не пишем вовсе, и сервер работает как раньше. awg-tools принимает
+ * on/off/0/1 (`parse_bool` в config.c); всё прочее отбрасываем, а не отдаём в конфиг, который
+ * иначе был бы отвергнут целиком.
+ */
+export function awgBoolDirective(name: string, raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (value === 'on' || value === '1') return `${name} = on\n`;
+  if (value === 'off' || value === '0') return `${name} = off\n`;
+  return '';
+}
+
+/**
  * Пробует применить изменение горячим путём, без перезагрузки ядра.
  *
  * Возвращает текст ответа при успехе и `null`, если горячим путём не вышло, — вызывающий тогда
@@ -516,7 +529,9 @@ export async function configureAwgHandler(
     i5,
     headerProtectionKey,
     peers,
-    ipv6Mode
+    ipv6Mode,
+    randomTrailers,
+    disableCookies
   } = call.request;
 
   try {
@@ -603,6 +618,8 @@ export async function configureAwgHandler(
     if (cleanI4) configContent += `I4 = ${cleanI4}\n`;
     if (cleanI5) configContent += `I5 = ${cleanI5}\n`;
     if (cleanHeaderProtectionKey) configContent += `HeaderProtectionKey = ${cleanHeaderProtectionKey}\n`;
+    configContent += awgBoolDirective('RandomTrailers', randomTrailers);
+    configContent += awgBoolDirective('DisableCookies', disableCookies);
 
     if (Array.isArray(peers)) {
       for (const peer of peers) {
