@@ -78,10 +78,29 @@ async function parseDkmsConf(dkmsConfPath: string): Promise<DkmsPackageInfo> {
   };
 }
 
+/**
+ * Установлен ли модуль ИМЕННО под это ядро, по выводу `dkms status`.
+ *
+ * `dkms status` перечисляет сборки под все ядра, где модуль когда-либо ставился. Первая версия
+ * проверяла только слово «installed» во всём выводе, и это ломалось после обновления ядра: модуль
+ * стоит под старое ядро, проверка говорила «установлен», сборка пропускалась, и `modprobe`
+ * падал с «Module amneziawg not found in directory /lib/modules/<новое ядро>» (живой случай
+ * 2026-09-28, фронт на 6.8.0-139-generic). Строки бывают двух форматов, по версии dkms:
+ * `amneziawg/1.0.0, 6.8.0-139-generic, x86_64: installed` и
+ * `amneziawg, 1.0.0, 6.8.0-139-generic, x86_64: installed`.
+ */
+export function isDkmsInstalledForKernel(statusOutput: string, kernelRelease: string): boolean {
+  return statusOutput.split('\n').some((line) => {
+    const [head, state] = line.split(/:\s*/, 2);
+    if (!head || !state || !/^installed\b/i.test(state.trim())) return false;
+    return head.split(',').map((part) => part.trim()).includes(kernelRelease);
+  });
+}
+
 async function isDkmsModuleInstalled(name: string, version: string): Promise<boolean> {
   try {
     const { stdout } = await execAsync(`dkms status -m ${name} -v ${version}`);
-    return /installed/i.test(stdout);
+    return isDkmsInstalledForKernel(stdout, os.release());
   } catch {
     return false;
   }
@@ -108,7 +127,7 @@ async function installDkmsKernelModule(buildDir: string): Promise<{ name: string
 
   const alreadyInstalled = await isDkmsModuleInstalled(pkg.name, pkg.version);
   if (alreadyInstalled) {
-    logger.info({ name: pkg.name, version: pkg.version }, 'DKMS module already installed for this version, skipping rebuild');
+    logger.info({ name: pkg.name, version: pkg.version, kernel: os.release() }, 'DKMS module already installed for this version and the running kernel, skipping rebuild');
   } else if (process.env.NODE_ENV !== 'test') {
     logger.info({ name: pkg.name, version: pkg.version }, 'Installing DKMS build dependencies (dkms/build-essential/linux-headers)...');
     await execAsync('apt-get update -y', { timeout: 120000 });
