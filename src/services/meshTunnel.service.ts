@@ -10,6 +10,7 @@ import { execAsync } from '../utils/exec.js';
 import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
 import { getMeshAwgInterfaceName } from '../utils/awg.js';
 import { invalidateMeshAwgKernelStatusCache } from '../utils/telemetry.js';
+import { ensureMeshUdpPortAllowed } from '../utils/firewall.js';
 
 const logger = pino({ level: 'info' });
 
@@ -383,6 +384,8 @@ export async function configureMeshTunnelHandler(
     await fs.writeFile(meshConfigPath, configContent, 'utf-8');
 
     if (process.env.NODE_ENV !== 'test') {
+      await ensureMeshUdpPortAllowed(Number(listenPort));
+
       // `systemctl reload` runs the unit's ExecReload (`awg syncconf %i <(awg-quick strip %i)`)
       // — `awg-quick strip` (same as upstream wg-quick strip) drops `Address =` before handing
       // the config to `wg syncconf`, because Address is a wg-quick-only directive, never applied

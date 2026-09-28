@@ -30,6 +30,31 @@ export async function isUfwInstalled(): Promise<boolean> {
 }
 
 /**
+ * Открыть UDP-порт меш-туннеля в ufw (2026-09-28).
+ *
+ * До этого порт меша не открывал никто: `syncEgressFirewall` знает только порты hysteria2/tuic из
+ * конфига sing-box. Туннель работал там, где сторона слала первой: ответы по её потоку ufw
+ * пропускает сам. Но рукопожатие начинает только egress, и на фронте с ufw его пакеты в закрытый
+ * порт отбрасывались бы.
+ *
+ * `ufw allow` повторно правило не добавляет («Skipping adding existing rule»), так что звать можно
+ * на каждой настройке меша. В кэш `syncEgressFirewall` порт не пишется, и тот его не закроет.
+ * Порт проверяется до вызова: в командную строку уходит только число.
+ */
+export async function ensureMeshUdpPortAllowed(port: number): Promise<void> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  if (!(await isUfwInstalled())) return;
+
+  try {
+    const { stdout } = await execAsync(`sudo ufw allow ${port}/udp`);
+    logger.info({ port, stdout: stdout.trim() }, 'Mesh tunnel UDP port allowed in ufw');
+  } catch (err: unknown) {
+    const stderr = (err as { stderr?: string }).stderr || (err as Error).message;
+    logger.warn({ port, stderr }, 'Failed to allow mesh tunnel UDP port in ufw');
+  }
+}
+
+/**
  * Читает список ранее открытых портов из локального файла-кэша
  */
 export async function readActivePortsCache(): Promise<number[]> {
