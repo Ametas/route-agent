@@ -411,6 +411,12 @@ message AwgConfigPayload {
   string i3 = 23;
   string i4 = 24;
   string i5 = 25;
+  // AWG 3.1 flags from the node's Architect template (2026-09-28): "on" | "off" | "" (not set —
+  // the directive is left out of the config). RandomTrailers must match on both sides: a receiver
+  // accepts an oversized handshake packet only when its own flag is on. DisableCookies is the
+  // receiver's own load policy, so it only matters here, on the server.
+  string random_trailers = 26;
+  string disable_cookies = 27;
 }
 
 message AwgConfigResponse {
