@@ -75,9 +75,17 @@ export async function writeActivePortsCache(ports: number[]): Promise<void> {
   await fs.writeFile(ACTIVE_PORTS_CACHE_PATH, JSON.stringify(ports, null, 2), 'utf-8');
 }
 
+/** Адреса, на которых инбаунд снаружи недоступен в принципе: открывать его порт в ufw незачем. */
+const LOOPBACK_LISTEN_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost']);
+
 /**
  * Извлекает из объекта конфигурации sing-box уникальные порты входящих
  * соединений типов hysteria2/tuic, работающих поверх UDP
+ *
+ * Инбаунды на loopback пропускаются (2026-09-28). TUIC и Hysteria2 слушают 127.0.0.1 за
+ * диспетчером на 443/udp (его порт открывает install.sh), и их порты 20001–20009 открывались в
+ * ufw зря — наружу они не слушают. Открытые раньше закроются сами: они есть в кэше прошлой
+ * синхронизации и уйдут в `toClose`.
  */
 export function extractUdpTunnelPorts(configObj: Record<string, unknown>): number[] {
   const inbounds = Array.isArray(configObj?.inbounds) ? (configObj.inbounds as Record<string, unknown>[]) : [];
@@ -86,6 +94,7 @@ export function extractUdpTunnelPorts(configObj: Record<string, unknown>): numbe
   for (const inbound of inbounds) {
     if (!inbound || typeof inbound !== 'object') continue;
     if (typeof inbound.type === 'string' && !UDP_TUNNEL_INBOUND_TYPES.has(inbound.type)) continue;
+    if (typeof inbound.listen === 'string' && LOOPBACK_LISTEN_ADDRESSES.has(inbound.listen.trim())) continue;
 
     const rawPort = inbound.listen_port ?? inbound.port;
     const port = Number(rawPort);

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { planFirewallSync } from '../src/utils/firewall.js';
+import { extractUdpTunnelPorts, planFirewallSync } from '../src/utils/firewall.js';
 
 /**
  * ПЕРЕЗАГРУЗКА ФАЕРВОЛА ТОЛЬКО КОГДА ЕСТЬ ЧТО ПРИМЕНЯТЬ (аудит 2026-09-21).
@@ -68,5 +68,30 @@ describe('план синхронизации фаервола', () => {
 
   it('пусто с обеих сторон — тоже без перезагрузки', () => {
     assert.strictEqual(planFirewallSync([], []).needsReload, false);
+  });
+});
+
+/**
+ * 2026-09-28: TUIC и Hysteria2 слушают 127.0.0.1 за диспетчером на 443, и их порты открывались
+ * в ufw зря. Открывается только то, что слушает наружу.
+ */
+describe('порты UDP-инбаундов для фаервола', () => {
+  it('пропускает инбаунды на loopback и берёт слушающие наружу', () => {
+    const ports = extractUdpTunnelPorts({
+      inbounds: [
+        { type: 'direct', tag: 'quic-dispatch', listen: '0.0.0.0', listen_port: 443 },
+        { type: 'tuic', listen: '127.0.0.1', listen_port: 20001 },
+        { type: 'hysteria2', listen: '::1', listen_port: 20002 },
+        { type: 'hysteria2', listen: '0.0.0.0', listen_port: 2053 },
+        { type: 'tuic', listen_port: 40013 },
+      ],
+    });
+    assert.deepEqual(ports.sort((a, b) => a - b), [2053, 40013]);
+  });
+
+  it('открытые раньше порты loopback-инбаундов уходят в закрытие', () => {
+    const plan = planFirewallSync([], [20001, 20002]);
+    assert.deepEqual(plan.toClose, [20001, 20002]);
+    assert.equal(plan.needsReload, true);
   });
 });
