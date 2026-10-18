@@ -98,6 +98,89 @@ export function isDkmsInstalledForKernel(statusOutput: string, kernelRelease: st
   });
 }
 
+/**
+ * Версии модуля, которые знает dkms, по выводу `dkms status -m <имя>` — под любое ядро и в любом
+ * состоянии (`added`, `built`, `installed`). Форматы строк те же два, что у `isDkmsInstalledForKernel`,
+ * плюс короткая строка без ядра: `amneziawg/1.0.0: added`.
+ */
+export function dkmsKnownVersions(statusOutput: string, name: string): string[] {
+  const versions = new Set<string>();
+  for (const line of statusOutput.split('\n')) {
+    const head = line.split(':')[0]?.trim() ?? '';
+    const parts = head.split(',').map((part) => part.trim());
+    if (parts[0]?.startsWith(`${name}/`)) {
+      const version = parts[0].slice(name.length + 1);
+      if (version) versions.add(version);
+    } else if (parts[0] === name && parts[1]) {
+      versions.add(parts[1]);
+    }
+  }
+  return [...versions];
+}
+
+/**
+ * Снять прежние деревья модуля в dkms перед установкой зависимостей (2026-10-18).
+ *
+ * Живой случай: хостинг обновил ядро, `linux-headers` нового ядра при настройке запускают
+ * autoinstall всех модулей dkms, старое дерево amneziawg под новое ядро не собирается — и падает
+ * уже не наша сборка, а `apt-get install` целиком («dpkg: error processing package
+ * linux-headers-…»). Пакеты остаются полунастроенными, и каждая следующая попытка падает там же.
+ * Сюда доходим, только когда модуля под работающее ядро нет, так что снимать нечего ценного:
+ * свежее дерево ставится ниже. `dpkg --configure -a` дозаканчивает настройку, брошенную прошлым сбоем.
+ */
+async function removeStaleDkmsTrees(name: string): Promise<void> {
+  const { stdout } = await execAsync(`dkms status -m ${name}`, { timeout: 30000 }).catch(() => ({ stdout: '' }));
+  for (const version of dkmsKnownVersions(stdout, name)) {
+    await execAsync(`dkms remove -m ${name} -v ${version} --all`, { timeout: 60000 })
+      .then(() => logger.info({ name, version }, 'Removed stale DKMS tree before reinstall'))
+      .catch((err: Error) => logger.warn({ name, version, err: err.message }, 'Failed to remove stale DKMS tree'));
+  }
+  await execAsync('dpkg --configure -a', { timeout: 300000 }).catch((err: Error) => {
+    logger.warn({ err: err.message }, 'dpkg --configure -a failed; apt-get install below will report the cause');
+  });
+}
+
+/**
+ * Совместимость с заголовками РАБОТАЮЩЕГО ядра, а не с номером его версии (2026-10-18).
+ *
+ * `compat/compat.h` у amneziawg решает по `LINUX_VERSION_CODE < 7.1.5`, что `setup_udp_tunnel_sock`
+ * и `udp_tunnel_sock_release` ещё принимают `struct socket *`, и переопределяет их макросами,
+ * передающими `sk->sk_socket`. Ubuntu перенесла новую сигнатуру (`struct sock *`) в своё 7.0.0-38,
+ * номер версии остался 7.0 — и сборка падала на «incompatible pointer type». Поэтому макрос
+ * снимается, если заголовок ядра уже объявляет функцию со `struct sock *`. Заголовка нет или
+ * сигнатура старая — исходник не трогается.
+ */
+export function patchCompatForKernelHeaders(compatSource: string, udpTunnelHeader: string): { source: string; dropped: string[] } {
+  const takesSock: Array<[string, RegExp]> = [
+    ['setup_udp_tunnel_sock', /setup_udp_tunnel_sock\s*\(\s*struct\s+net\s*\*\s*\w*\s*,\s*struct\s+sock\s*\*/],
+    ['udp_tunnel_sock_release', /udp_tunnel_sock_release\s*\(\s*struct\s+sock\s*\*/],
+  ];
+  const dropped: string[] = [];
+  let source = compatSource;
+  for (const [fn, signature] of takesSock) {
+    if (!signature.test(udpTunnelHeader)) continue;
+    const macro = new RegExp(`^[ \\t]*#define[ \\t]+${fn}\\(.*\\n?`, 'm');
+    if (!macro.test(source)) continue;
+    source = source.replace(macro, '');
+    dropped.push(fn);
+  }
+  return { source, dropped };
+}
+
+async function patchCompatForRunningKernel(srcDir: string): Promise<void> {
+  const compatPath = path.join(srcDir, 'compat', 'compat.h');
+  const headerPath = `/lib/modules/${os.release()}/build/include/net/udp_tunnel.h`;
+  const [compat, header] = await Promise.all([
+    fs.readFile(compatPath, 'utf-8').catch(() => null),
+    fs.readFile(headerPath, 'utf-8').catch(() => null),
+  ]);
+  if (compat === null || header === null) return;
+  const { source, dropped } = patchCompatForKernelHeaders(compat, header);
+  if (dropped.length === 0) return;
+  await fs.writeFile(compatPath, source, 'utf-8');
+  logger.info({ kernel: os.release(), dropped }, 'Dropped compat macros: the running kernel headers already use struct sock *');
+}
+
 async function isDkmsModuleInstalled(name: string, version: string): Promise<boolean> {
   try {
     const { stdout } = await execAsync(`dkms status -m ${name} -v ${version}`);
@@ -130,10 +213,14 @@ async function installDkmsKernelModule(buildDir: string): Promise<{ name: string
   if (alreadyInstalled) {
     logger.info({ name: pkg.name, version: pkg.version, kernel: os.release() }, 'DKMS module already installed for this version and the running kernel, skipping rebuild');
   } else if (process.env.NODE_ENV !== 'test') {
+    await removeStaleDkmsTrees(pkg.name);
+
     logger.info({ name: pkg.name, version: pkg.version }, 'Installing DKMS build dependencies (dkms/build-essential/linux-headers)...');
     await execAsync('apt-get update -y', { timeout: 120000 });
     await execAsync('apt-get install -y dkms build-essential linux-headers-$(uname -r)', { timeout: 300000 });
 
+    // До `make dkms-install`: он копирует исходник в /usr/src, откуда собирает dkms (и autoinstall при следующем ядре).
+    await patchCompatForRunningKernel(pkg.srcDir);
     await execAsync(`make -C "${pkg.srcDir}" dkms-install`, { timeout: 60000 });
 
     try {
