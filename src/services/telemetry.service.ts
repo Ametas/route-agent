@@ -2,6 +2,7 @@ import { ServerWritableStream, ServerUnaryCall, sendUnaryData } from '@grpc/grpc
 import { spawn } from 'child_process';
 import pino from 'pino';
 import { authenticateCall } from '../middleware/auth.js';
+import { getHostNetwork, hostNetworkFields } from '../utils/hostNetwork.js';
 import {
   getCpuUsage,
   getMemoryUsage,
@@ -84,7 +85,7 @@ export async function streamTelemetryHandler(
     if (isCleanedUp || call.destroyed) return;
 
     try {
-      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface] = await Promise.all([
+      const [{ cpuUsage, newStats }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface, hostNet] = await Promise.all([
         getCpuUsage(streamCpuStats),
         getMemoryUsage(),
         getConnectionCount(),
@@ -95,7 +96,8 @@ export async function streamTelemetryHandler(
         getAmneziaWgGoVersionCached(),
         getAwgStatus(),
         getMeshAwgKernelStatusCached(),
-        getMeshTunnelInterfaceStatus()
+        getMeshTunnelInterfaceStatus(),
+        getHostNetwork()
       ]);
       streamCpuStats = newStats;
 
@@ -119,7 +121,8 @@ export async function streamTelemetryHandler(
           meshAwgKernelVersion: meshKernel.version,
           meshTunnelInterfaceStatus: meshIface.status,
           meshTunnelActivePeers: meshIface.activePeers,
-          meshTunnelLivePeerKeys: meshIface.livePeerKeys
+          meshTunnelLivePeerKeys: meshIface.livePeerKeys,
+          ...hostNetworkFields(hostNet)
         });
       } catch {
         cleanup();
@@ -170,7 +173,7 @@ export async function getTelemetryHandler(
 
   try {
     let streamCpuStats: CpuStats = { idle: 0, total: 0 };
-    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface] = await Promise.all([
+    const [{ cpuUsage }, mem, conns, webrtc, sbVersion, awgPeers, awgToolsVer, awgGoVer, awgStat, meshKernel, meshIface, hostNet] = await Promise.all([
       getCpuUsage(streamCpuStats),
       getMemoryUsage(),
       getConnectionCount(),
@@ -181,7 +184,8 @@ export async function getTelemetryHandler(
       getAmneziaWgGoVersionCached(),
       getAwgStatus(),
       getMeshAwgKernelStatusCached(),
-      getMeshTunnelInterfaceStatus()
+      getMeshTunnelInterfaceStatus(),
+      getHostNetwork()
     ]);
 
     return callback(null, {
@@ -201,7 +205,8 @@ export async function getTelemetryHandler(
       meshAwgKernelVersion: meshKernel.version,
       meshTunnelInterfaceStatus: meshIface.status,
       meshTunnelActivePeers: meshIface.activePeers,
-      meshTunnelLivePeerKeys: meshIface.livePeerKeys
+      meshTunnelLivePeerKeys: meshIface.livePeerKeys,
+      ...hostNetworkFields(hostNet)
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);

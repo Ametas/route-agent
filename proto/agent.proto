@@ -277,6 +277,11 @@ message TelemetryResponse {
   // Public keys of mesh peers with a handshake in the last 180s — the orchestrator routes a
   // front's ring traffic to an egress node over the tunnel only while that pair is live.
   repeated string mesh_tunnel_live_peer_keys = 17;
+  // Трафик машины (2026-10-21): счётчики ядра с загрузки на интерфейсе маршрута по умолчанию.
+  // Пустое имя интерфейса — данных нет. Скорость считает оркестратор разницей замеров.
+  string host_net_iface = 18;
+  uint64 host_net_rx_bytes = 19;
+  uint64 host_net_tx_bytes = 20;
 }
 
 message UpgradePayload {
