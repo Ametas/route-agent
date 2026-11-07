@@ -34,6 +34,7 @@
 
 | Дата | Коммит в `main` | Что | Повторено в Go |
 |---|---|---|---|
+| 2026-11-07 | `c662f0b` | SelfUpdate: канал через `x-agent-channel`, `git fetch --force` | да — `internal/update` (канал из заголовка и файла `bin/channel`); fetch у Go-агента нет |
 
 ## Как ведётся работа
 
