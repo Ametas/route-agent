@@ -266,16 +266,13 @@ func TestGetTelemetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	bad, err := h.client.GetTelemetry(withSecret(ctx, "nope"), &agentpb.TelemetryRequest{})
-	if err != nil {
-		t.Fatal(err)
+	// A wrong secret is UNAUTHENTICATED, not an OK placeholder frame (architecture §6 item 13),
+	// and nothing is probed.
+	if _, err := h.client.GetTelemetry(withSecret(ctx, "nope"), &agentpb.TelemetryRequest{}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("want UNAUTHENTICATED, got %v", err)
 	}
-	if bad.SystemLogs != "Error: Unauthorized secret token mismatch" || bad.WebrtcStatus != "unauthorized" ||
-		bad.AwgStatus != "unauthorized" || bad.SingboxVersion != "unknown" || bad.AwgVersion != "unknown" ||
-		bad.AwgToolsVersion != "unknown" || bad.AwgGoVersion != "unknown" || bad.MeshAwgKernelStatus != "unknown" ||
-		bad.MeshAwgKernelVersion != "" || bad.MeshTunnelInterfaceStatus != "unknown" || bad.CpuUsage != 0 ||
-		bad.ActiveConnections != 0 || bad.HostNetIface != "" || bad.Timestamp <= 0 || len(r.fake.Calls()) != 0 {
-		t.Fatalf("%v", bad)
+	if len(r.fake.Calls()) != 0 {
+		t.Fatalf("probes ran for an unauthenticated call: %v", r.fake.Calls())
 	}
 
 	t0 := time.Now()

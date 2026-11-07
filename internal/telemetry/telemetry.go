@@ -138,10 +138,11 @@ func (s *Service) StreamTelemetry(req *agentpb.TelemetryRequest, stream grpc.Ser
 func (s *Service) GetTelemetry(ctx context.Context, req *agentpb.TelemetryRequest) (resp *agentpb.TelemetryResponse, err error) {
 	if !s.Auth.MetadataOrBody(ctx, req.GetOrchestratorSecret()) {
 		s.Log.Warn("Unauthorized GetTelemetry Unary request blocked")
-		// TODO(architecture §6 item 13): a failed secret answers status OK with placeholder values,
-		// and the orchestrator caches them as live telemetry (the node shows as online). Kept
-		// as in TS until the owner decides; StreamTelemetry answers UNAUTHENTICATED instead.
-		return UnauthorizedBody(s.now()), nil
+		// Architecture §6 item 13, owner decision 2026-11-07: UNAUTHENTICATED, like StreamTelemetry.
+		// TS answered status OK with placeholder values, and the orchestrator cached them as live
+		// telemetry, so a node with a wrong secret showed as online. fetchTelemetryUnary
+		// (orch GrpcTelemetryStreamManager.ts) takes the error path: success:false, lastError set.
+		return nil, auth.Unauthenticated()
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -153,24 +154,6 @@ func (s *Service) GetTelemetry(ctx context.Context, req *agentpb.TelemetryReques
 	frame.SystemLogs = "OK"
 	frame.Timestamp = s.now().UnixMilli()
 	return frame, nil
-}
-
-// UnauthorizedBody is the sentinel answer of an unauthenticated GetTelemetry
-// (telemetry.service.ts:151-172); the host-net fields are absent there, so "" and 0.
-func UnauthorizedBody(now time.Time) *agentpb.TelemetryResponse {
-	return &agentpb.TelemetryResponse{
-		SystemLogs:                "Error: Unauthorized secret token mismatch",
-		Timestamp:                 now.UnixMilli(),
-		WebrtcStatus:              "unauthorized",
-		SingboxVersion:            unknown,
-		AwgVersion:                unknown,
-		AwgStatus:                 "unauthorized",
-		AwgToolsVersion:           unknown,
-		AwgGoVersion:              unknown,
-		MeshAwgKernelStatus:       unknown,
-		MeshTunnelInterfaceStatus: unknown,
-		MeshTunnelLivePeerKeys:    []string{},
-	}
 }
 
 // internalErrorBody is the catch branch of telemetry.service.ts:211-233 (a panicking source).
