@@ -13,6 +13,12 @@
 // "already in progress" and starts nothing — TS ran two pipelines in parallel, R-5), timeouts on
 // every download and command, SHA-256 verification against the release checksums file, a
 // `--version` smoke test of the candidate, an atomic swap, and route-agent.prev kept for rollback.
+//
+// Channels (docs/go-rewrite/update.md): `stable` takes the latest release, `nightly` the moving
+// prerelease built from branch alpha. The orchestrator picks one with the metadata header
+// x-agent-channel (the proto stays as it is); without it the channel persisted next to the binary
+// is used. A reply to a call with the header carries the token `channel=<value>`, by which the
+// orchestrator tells an agent that understood the header from an old one that ignored it.
 package update
 
 import (
@@ -28,8 +34,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
+	"unicode/utf8"
+
+	"google.golang.org/grpc/metadata"
 
 	"github.com/Ametas/route-agent/internal/agentpb"
 	"github.com/Ametas/route-agent/internal/runner"
@@ -45,9 +54,24 @@ const (
 	MsgAlreadyRunning = "Self-update sequence already in progress."
 )
 
+// Update channels and the metadata header that selects one (exact lowercase values).
+const (
+	ChannelStable  = "stable"
+	ChannelNightly = "nightly"
+	ChannelHeader  = "x-agent-channel"
+)
+
 // DefaultReleaseBaseURL serves the latest release's assets by name (GitHub redirects
 // /releases/latest/download/<asset> to the asset of the newest non-prerelease release).
 const DefaultReleaseBaseURL = "https://github.com/Ametas/route-agent/releases/latest/download"
+
+// NightlyReleaseBaseURL serves the assets of the prerelease `nightly`, which CI rebuilds on every
+// push to branch alpha.
+const NightlyReleaseBaseURL = "https://github.com/Ametas/route-agent/releases/download/nightly"
+
+// ChannelFileName is the file next to the installed binary that holds the channel of the
+// installed build: one line, `stable` or `nightly`. bridge-to-go.sh and install-go.sh write it too.
+const ChannelFileName = "channel"
 
 // ChecksumsAsset is the sha256sum-format file attached to every release.
 const ChecksumsAsset = "checksums.txt"
@@ -69,6 +93,104 @@ func AssetName(goarch string) string { return "route-agent-linux-" + goarch }
 // PrevPath is where the replaced binary is kept: <binary>.prev.
 func PrevPath(binaryPath string) string { return binaryPath + ".prev" }
 
+// ChannelPath is the persisted channel file for a binary: <dir of binary>/channel.
+func ChannelPath(binaryPath string) string {
+	return filepath.Join(filepath.Dir(binaryPath), ChannelFileName)
+}
+
+// ValidChannel reports whether ch is a known channel.
+func ValidChannel(ch string) bool { return ch == ChannelStable || ch == ChannelNightly }
+
+// ReleaseBaseURLFor is the default asset base of a channel.
+func ReleaseBaseURLFor(channel string) string {
+	if channel == ChannelNightly {
+		return NightlyReleaseBaseURL
+	}
+	return DefaultReleaseBaseURL
+}
+
+// ReadChannel returns the persisted channel; a missing, unreadable or garbage file means stable.
+func ReadChannel(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 64 {
+		return ChannelStable
+	}
+	if ch := strings.TrimSpace(string(data)); ValidChannel(ch) {
+		return ch
+	}
+	return ChannelStable
+}
+
+// WriteChannel persists channel atomically (temp + rename), mode 0644.
+func WriteChannel(path, channel string) error {
+	if !ValidChannel(channel) {
+		return fmt.Errorf("unknown update channel %q", channel)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".new-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := io.WriteString(tmp, channel+"\n"); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	ok = true
+	syncDir(dir)
+	return nil
+}
+
+// channelFromMetadata returns the x-agent-channel header and whether it was sent at all. An
+// empty value counts as sent (and is refused as an unknown channel).
+func channelFromMetadata(ctx context.Context) (string, bool) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", false
+	}
+	vals := md.Get(ChannelHeader)
+	if len(vals) == 0 {
+		return "", false
+	}
+	return vals[0], true
+}
+
+// unknownChannelMessage quotes at most 32 characters of the refused value, kept valid UTF-8 so
+// the reply still marshals.
+func unknownChannelMessage(value string) string {
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	if utf8.RuneCountInString(value) > 32 {
+		value = string([]rune(value)[:32])
+	}
+	return fmt.Sprintf("Unknown update channel '%s'.", value)
+}
+
+func initiatedMessage(channel string) string {
+	return fmt.Sprintf("Self-update sequence initiated (channel=%s). Agent will pull code and restart in 1 second.", channel)
+}
+
+func alreadyRunningMessage(channel string) string {
+	return fmt.Sprintf("Self-update sequence already in progress (channel=%s).", channel)
+}
+
 // Updater performs SelfUpdate.
 type Updater struct {
 	Auth      *auth.Verifier
@@ -79,8 +201,9 @@ type Updater struct {
 
 	// BinaryPath is the installed agent binary that gets replaced (the running executable).
 	BinaryPath string
-	// ReleaseBaseURL is where assets are fetched from; empty means DefaultReleaseBaseURL.
-	ReleaseBaseURL string
+	// ReleaseBaseURLs overrides the asset base per channel (tests); a channel without an entry
+	// uses ReleaseBaseURLFor.
+	ReleaseBaseURLs map[string]string
 	// Arch is the GOARCH whose asset is fetched.
 	Arch string
 	// Unit is restarted at the end ("route-agent").
@@ -92,7 +215,9 @@ type Updater struct {
 	// OnDone, if set, receives the outcome of each background run (tests).
 	OnDone func(error)
 
-	running atomic.Bool
+	mu             sync.Mutex
+	running        bool
+	runningChannel string
 }
 
 // SelfUpdate is the RPC handler.
@@ -101,16 +226,45 @@ func (u *Updater) SelfUpdate(ctx context.Context, _ *agentpb.SelfUpdatePayload) 
 		u.Log.Warn("Unauthorized SelfUpdate request blocked")
 		return &agentpb.SelfUpdateResponse{Success: false, Message: auth.InvalidSecretMessage}, nil
 	}
-	if !u.running.CompareAndSwap(false, true) {
-		u.Log.Warn("SelfUpdate requested while an update is already running; ignoring")
-		return &agentpb.SelfUpdateResponse{Success: true, Message: MsgAlreadyRunning}, nil
+	requested, sent := channelFromMetadata(ctx)
+	if sent && !ValidChannel(requested) {
+		msg := unknownChannelMessage(requested)
+		u.Log.Warn("SelfUpdate rejected: unknown update channel", "message", msg)
+		return &agentpb.SelfUpdateResponse{Success: false, Message: msg}, nil
 	}
-	go u.background()
-	return &agentpb.SelfUpdateResponse{Success: true, Message: MsgInitiated}, nil
+	channel := requested
+	if !sent {
+		channel = ReadChannel(ChannelPath(u.BinaryPath))
+	}
+
+	u.mu.Lock()
+	if u.running {
+		runningChannel := u.runningChannel
+		u.mu.Unlock()
+		u.Log.Warn("SelfUpdate requested while an update is already running; ignoring", "channel", runningChannel)
+		msg := MsgAlreadyRunning
+		if sent {
+			msg = alreadyRunningMessage(runningChannel)
+		}
+		return &agentpb.SelfUpdateResponse{Success: true, Message: msg}, nil
+	}
+	u.running, u.runningChannel = true, channel
+	u.mu.Unlock()
+
+	go u.background(channel)
+	msg := MsgInitiated
+	if sent {
+		msg = initiatedMessage(channel)
+	}
+	return &agentpb.SelfUpdateResponse{Success: true, Message: msg}, nil
 }
 
-func (u *Updater) background() {
-	defer u.running.Store(false)
+func (u *Updater) background(channel string) {
+	defer func() {
+		u.mu.Lock()
+		u.running, u.runningChannel = false, ""
+		u.mu.Unlock()
+	}()
 	time.Sleep(u.Delay)
 	budget := u.Budget
 	if budget <= 0 {
@@ -118,8 +272,8 @@ func (u *Updater) background() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	u.Log.Info("Starting agent self-update sequence...")
-	err := u.Run(ctx)
+	u.Log.Info("Starting agent self-update sequence...", "channel", channel)
+	err := u.Run(ctx, channel)
 	if err != nil {
 		u.Log.Error("Failed to execute self-update sequence", "err", err.Error())
 	}
@@ -128,13 +282,16 @@ func (u *Updater) background() {
 	}
 }
 
-// Run does the update synchronously: fetch checksums, download and verify the binary, smoke
-// test it, swap it in (keeping .prev) and restart the unit. Any failure before the swap leaves
-// the installed binary untouched.
-func (u *Updater) Run(ctx context.Context) error {
-	base := strings.TrimRight(u.ReleaseBaseURL, "/")
+// Run does the update synchronously from channel: fetch checksums, download and verify the
+// binary, smoke test it, swap it in (keeping .prev), persist the channel and restart the unit. Any
+// failure before the swap leaves the installed binary and the channel file untouched.
+func (u *Updater) Run(ctx context.Context, channel string) error {
+	if !ValidChannel(channel) {
+		return fmt.Errorf("unknown update channel %q", channel)
+	}
+	base := strings.TrimRight(u.ReleaseBaseURLs[channel], "/")
 	if base == "" {
-		base = DefaultReleaseBaseURL
+		base = ReleaseBaseURLFor(channel)
 	}
 	asset := AssetName(u.Arch)
 
@@ -195,7 +352,13 @@ func (u *Updater) Run(ctx context.Context) error {
 	}
 	swapped = true
 	syncDir(dir)
-	u.Log.Info("Agent binary replaced; restarting", "version", newVersion, "prev", PrevPath(u.BinaryPath))
+	// The channel file follows the installed binary. A failure here does not stop the restart:
+	// the new binary is already in place, and a half-done update (new file on disk, old process
+	// running) is worse than a stale channel, which the next update with the header corrects.
+	if err := WriteChannel(ChannelPath(u.BinaryPath), channel); err != nil {
+		u.Log.Error("Could not persist the update channel", "channel", channel, "err", err.Error())
+	}
+	u.Log.Info("Agent binary replaced; restarting", "version", newVersion, "channel", channel, "prev", PrevPath(u.BinaryPath))
 
 	sc := u.Systemctl
 	if sc.Timeout <= 0 {
