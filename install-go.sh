@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installer of the Go route-agent (docs/go-rewrite/cutover.md). install.sh stays the TypeScript
-# installer until the final commit of the go-rewrite branch, which replaces it with this file.
+# installer until the cutover commit (branch alpha merged into main), which replaces it with this
+# file.
 #
 # Run it with bash explicitly (`curl … | bash -s -- …` or `bash install-go.sh …`): the repository
 # is edited on Windows, the exec bit does not survive.
@@ -14,14 +15,17 @@
 #                    route-agent.service.ts-backup), restarts and checks the agent within 30 s;
 #                    on failure restores the TS unit and starts the TS agent again.
 #   --rollback       puts route-agent.service.ts-backup back and starts the TS agent.
-#   --channel stable|preview
+#   --channel stable|nightly
 #                    stable  → <repo>/releases/latest/download (the latest real release)
-#                    preview → <repo>/releases/download/go-preview (prerelease built from go-rewrite)
+#                    nightly → <repo>/releases/download/nightly (prerelease built from branch alpha)
+#                    The channel is written to /opt/route-agent/bin/channel: the agent's SelfUpdate
+#                    keeps updating from it (docs/go-rewrite/update.md).
 #
 # What a box gets (spec A §12.3, minus the Node/npm/git parts the Go agent does not need):
 #   /opt/route-agent/.env (0600), /etc/route-agent/certs/{ca.crt,agent.crt,agent.key(0600)},
 #   /opt/route-agent/bin/route-agent (SHA-256 against checksums.txt, `--version` shape checked
 #   before it is installed; the previous binary is kept as route-agent.prev),
+#   /opt/route-agent/bin/channel (0644, `stable` or `nightly`),
 #   /etc/systemd/system/route-agent.service with ExecStart=/opt/route-agent/bin/route-agent.
 #
 # No sudoers rule: the Go agent runs as root and calls ufw directly, without sudo. The old
@@ -37,10 +41,10 @@
 # same failure cases against both.
 set -euo pipefail
 
-# Default channel. On the go-rewrite branch it is `preview`: before the merge releases/latest has
-# no Go assets, and the orchestrator's install wrapper cannot pass --channel. The final cutover
-# commit switches it to `stable` (docs/go-rewrite/cutover.md §B).
-DEFAULT_CHANNEL="preview"
+# Default channel. On branch alpha it is `nightly`: before the cutover releases/latest has no Go
+# assets, and the orchestrator's install wrapper cannot pass --channel. The cutover commit
+# switches it to `stable` (docs/go-rewrite/cutover.md §B).
+DEFAULT_CHANNEL="nightly"
 
 ROOT="${ROUTE_AGENT_ROOT:-}"
 AGENT_DIR="/opt/route-agent"
@@ -92,8 +96,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$CHANNEL" in
-  stable|preview) ;;
-  *) die "--channel must be stable or preview, got '$CHANNEL'" ;;
+  stable|nightly) ;;
+  *) die "--channel must be stable or nightly, got '$CHANNEL'" ;;
 esac
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "--port must be a number, got '$PORT'"
 
@@ -110,7 +114,7 @@ release_base() {
   if [[ "$CHANNEL" == "stable" ]]; then
     printf '%s/releases/latest/download' "$repo"
   else
-    printf '%s/releases/download/go-preview' "$repo"
+    printf '%s/releases/download/nightly' "$repo"
   fi
 }
 
@@ -178,6 +182,12 @@ install_staged() {
   fi
   mv -f "$STAGED_PATH" "$dest"
   say "Installed $BIN_PATH ($STAGED_VERSION)"
+}
+
+# write_channel: the channel of the installed binary, next to it; SelfUpdate reads it when the
+# orchestrator does not name a channel (internal/update, ChannelFileName).
+write_channel() {
+  printf '%s\n' "$CHANNEL" | write_file "$(dirname "$(r "$BIN_PATH")")/channel" 0644
 }
 
 # --- unit --------------------------------------------------------------------------------------
@@ -333,6 +343,7 @@ do_convert() {
   say "Converting this box to the Go agent (channel: $CHANNEL)."
   stage_binary "$(release_base)"   # any failure here: nothing on the box has changed
   install_staged                   # the TS agent does not use bin/
+  write_channel
   backup_ts_unit
   if ! is_ts_unit "$unit" && [[ ! -f "$(r "$UNIT_BACKUP")" ]]; then
     warn "the current unit is not the TypeScript one and there is no $UNIT_BACKUP: no automatic rollback"
@@ -445,6 +456,7 @@ EOT
   )
 
   install_staged
+  write_channel
   backup_ts_unit
   go_unit | write_file "$(r "$UNIT_PATH")" 0644
   systemctl daemon-reload

@@ -2,21 +2,30 @@
 # Cutover bridge TypeScript → Go (docs/go-rewrite/architecture.md §4, cutover.md §B).
 #
 # The first update of every existing box into the Go agent is run by the OLD TypeScript agent's
-# hard-coded SelfUpdate (spec A §8.3):
+# SelfUpdate (spec A §8.3):
 #   cd /opt/route-agent && git fetch --all --tags && git reset --hard @{u} && git clean -fd \
 #     && npm ci && npm run build && systemctl restart route-agent
-# with the unit running `node /opt/route-agent/dist/index.js`. In the cutover commit
-# package.json keeps its dependencies and says "build": "bash scripts/bridge-to-go.sh", so this
-# script runs between `npm ci` and the restart. It:
-#   1. downloads route-agent-linux-<arch> and checksums.txt of the latest release, checks the
-#      SHA-256 and that `--version` prints vX.Y.Z[-N-gHASH];
-#   2. installs the binary as /opt/route-agent/bin/route-agent (previous one → route-agent.prev);
+# or, when the orchestrator names a channel (x-agent-channel, docs/go-rewrite/update.md), the
+# same chain that first moves the checkout to the channel's branch (nightly → alpha):
+#   … git fetch --tags origin +refs/heads/alpha:refs/remotes/origin/alpha \
+#     && git checkout -q -f -B alpha HEAD && git branch -q --set-upstream-to=origin/alpha alpha \
+#     && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart …
+# with the unit running `node /opt/route-agent/dist/index.js`. package.json keeps its
+# dependencies and says "build": "bash scripts/bridge-to-go.sh --channel <channel>" (nightly on
+# branch alpha, stable in the cutover commit on main), so this script runs between `npm ci` and
+# the restart. It:
+#   1. downloads route-agent-linux-<arch> and checksums.txt of the channel's release (stable: the
+#      latest release, nightly: the prerelease `nightly`), checks the SHA-256 and that
+#      `--version` prints vX.Y.Z[-N-gHASH];
+#   2. installs the binary as /opt/route-agent/bin/route-agent (previous one → route-agent.prev)
+#      and writes the channel to /opt/route-agent/bin/channel (the Go SelfUpdate reads it);
 #   3. keeps the TypeScript unit as route-agent.service.ts-backup and writes the Go unit;
 #   4. systemctl daemon-reload;
 #   5. schedules a guard (systemd-run, 120 s): if the Go agent is not active by then or keeps
 #      restarting, the guard puts the TypeScript unit back, returns the checkout to the commit it
-#      had before the update (so the TS agent reports its old version and the orchestrator sees
-#      the switch failed) and restarts the TS agent.
+#      had before the update, on branch main (so the TS agent reports its old version, the
+#      orchestrator sees the switch failed, and the next plain update does not pull alpha again)
+#      and restarts the TS agent.
 # Any failure in 1–4 exits non-zero with the unit as it was, so `&&` stops the chain before
 # `systemctl restart` and the old agent keeps running: its dist/ is gitignored (survives
 # `git clean -fd`), `npm run build` no longer runs tsup (which wiped dist/), and `npm ci` restored
@@ -27,19 +36,22 @@
 #
 # Manual rollback on a box (what the guard does):
 #   cp /etc/systemd/system/route-agent.service.ts-backup /etc/systemd/system/route-agent.service
-#   git -C /opt/route-agent reset --hard "$(cat /opt/route-agent/bin/ts-rollback-commit)"
+#   git -C /opt/route-agent checkout -q -f -B main "$(cat /opt/route-agent/bin/ts-rollback-commit)"
+#   git -C /opt/route-agent branch -q --set-upstream-to=origin/main main
 #   systemctl daemon-reload && systemctl restart route-agent
+# (on a checkout that already is on main: git -C /opt/route-agent reset --hard "<commit>").
 #
 # Testing only (scripts/test-delivery.sh): ROUTE_AGENT_ROOT prefixes every filesystem path,
-# ROUTE_AGENT_RELEASE_BASE replaces the download base URL, ROUTE_AGENT_GUARD_DELAY the guard delay.
+# ROUTE_AGENT_RELEASE_BASE replaces the download base URL of any channel, ROUTE_AGENT_GUARD_DELAY
+# the guard delay.
 #
 # The helpers repeat install-go.sh on purpose (see the note there): that file is fetched alone
 # with `curl | bash`, and this one is deleted once the fleet is on Go.
 set -euo pipefail
 
 ROOT="${ROUTE_AGENT_ROOT:-}"
-RELEASE_BASE="${ROUTE_AGENT_RELEASE_BASE:-https://github.com/Ametas/route-agent/releases/latest/download}"
-RELEASE_BASE="${RELEASE_BASE%/}"
+STABLE_RELEASE_BASE="https://github.com/Ametas/route-agent/releases/latest/download"
+NIGHTLY_RELEASE_BASE="https://github.com/Ametas/route-agent/releases/download/nightly"
 GUARD_DELAY="${ROUTE_AGENT_GUARD_DELAY:-120}"
 GUARD_UNIT="route-agent-bridge-guard"
 GUARD_MAX_RESTARTS=3
@@ -52,6 +64,7 @@ UNIT_PATH="/etc/systemd/system/route-agent.service"
 UNIT_BACKUP="$UNIT_PATH.ts-backup"
 SUDOERS_RULE="/etc/sudoers.d/route-agent-ufw"
 TS_COMMIT_FILE="$AGENT_DIR/bin/ts-rollback-commit"
+CHANNEL_FILE="$AGENT_DIR/bin/channel"
 VERSION_RE='^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+-g[0-9a-f]+)?$'
 
 r() { printf '%s%s' "$ROOT" "$1"; }
@@ -98,6 +111,24 @@ EOT
 
 # --- guard: runs ~GUARD_DELAY s after the bridge, as a transient systemd unit ------------------
 
+# restore_checkout <repo> <commit>: the checkout back at <commit> on branch main. A box switched
+# to nightly sits on branch alpha (upstream origin/alpha): left there, the TS agent's next plain
+# SelfUpdate would pull alpha and run this bridge again. The upstream is set only when
+# origin/main is known, and its failure is a warning, never a failed guard.
+restore_checkout() {
+  local repo="$1" commit="$2" branch
+  branch="$(git -C "$repo" symbolic-ref -q --short HEAD 2>/dev/null || true)"
+  if [[ "$branch" == "main" ]]; then
+    git -C "$repo" reset -q --hard "$commit"
+    return
+  fi
+  git -C "$repo" checkout -q -f -B main "$commit" || return 1
+  if git -C "$repo" show-ref -q --verify refs/remotes/origin/main; then
+    git -C "$repo" branch -q --set-upstream-to=origin/main main \
+      || warn "guard: could not set origin/main as the upstream of main"
+  fi
+}
+
 guard() {
   local unit backup state restarts
   unit="$(r "$UNIT_PATH")"
@@ -133,8 +164,8 @@ guard() {
   commit_file="$(r "$TS_COMMIT_FILE")"
   if [[ -f "$commit_file" ]] && command -v git >/dev/null 2>&1; then
     commit="$(head -n 1 "$commit_file")"
-    if [[ "$commit" =~ ^[0-9a-f]{40,64}$ ]] && git -C "$(r "$AGENT_DIR")" reset -q --hard "$commit"; then
-      say "guard: checkout back at $commit (the version the TS agent reported before)"
+    if [[ "$commit" =~ ^[0-9a-f]{40,64}$ ]] && restore_checkout "$(r "$AGENT_DIR")" "$commit"; then
+      say "guard: checkout back at $commit on branch main (the version the TS agent reported before)"
     else
       warn "guard: could not put the checkout back at '$commit'; the TS agent will report the cutover version"
     fi
@@ -147,7 +178,25 @@ if [[ "${1:-}" == "--guard" ]]; then
   guard
   exit 0
 fi
-[[ $# -eq 0 ]] || die "unknown argument: $1"
+
+CHANNEL="stable"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --channel)
+      [[ $# -ge 2 && -n "$2" ]] || die "--channel needs a value"
+      CHANNEL="$2"
+      shift 2
+      ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+case "$CHANNEL" in
+  stable) RELEASE_BASE="$STABLE_RELEASE_BASE" ;;
+  nightly) RELEASE_BASE="$NIGHTLY_RELEASE_BASE" ;;
+  *) die "--channel must be stable or nightly, got '$CHANNEL'" ;;
+esac
+RELEASE_BASE="${ROUTE_AGENT_RELEASE_BASE:-$RELEASE_BASE}"
+RELEASE_BASE="${RELEASE_BASE%/}"
 
 # --- bridge --------------------------------------------------------------------------------------
 
@@ -168,7 +217,7 @@ sums="$(mktemp "$(dirname "$bin")/.checksums.XXXXXX")"
 staged="$(mktemp "$(dirname "$bin")/.route-agent.new.XXXXXX")"
 TEMP_FILES+=("$sums" "$staged")
 
-say "downloading $RELEASE_BASE/checksums.txt"
+say "channel $CHANNEL: downloading $RELEASE_BASE/checksums.txt"
 fetch "$RELEASE_BASE/checksums.txt" -o "$sums" || die "cannot download checksums.txt from $RELEASE_BASE"
 expected="$(awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n) } NF == 2 && n == a { print tolower($1); exit }' "$sums")"
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "checksums.txt has no valid entry for $asset"
@@ -197,6 +246,13 @@ else
   mv -f "$staged" "$bin"
   say "installed $BIN_PATH ($version)"
 fi
+# The channel follows the installed binary: the Go SelfUpdate keeps updating from it.
+channel_tmp="$(mktemp "$(dirname "$bin")/.channel.XXXXXX")"
+TEMP_FILES+=("$channel_tmp")
+printf '%s\n' "$CHANNEL" > "$channel_tmp"
+chmod 0644 "$channel_tmp"
+mv -f "$channel_tmp" "$(r "$CHANNEL_FILE")"
+say "channel $CHANNEL written to $CHANNEL_FILE"
 
 # 3. keep the TS unit, write the Go unit
 if is_ts_unit "$unit"; then

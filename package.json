@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup",
+    "build": "bash scripts/bridge-to-go.sh --channel nightly",
+    "build:ts": "tsup",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",

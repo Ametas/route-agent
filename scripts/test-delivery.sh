@@ -9,7 +9,8 @@
 #
 # The release is real: binaries built by scripts/build-release.sh and a real checksums.txt,
 # served by `python3 -m http.server` (ROUTE_AGENT_RELEASE_BASE). Variants: good, checksum
-# mismatch, binary with a bad --version, missing asset, missing release.
+# mismatch, binary with a bad --version, missing asset, missing release. The default release URLs
+# of each channel (no ROUTE_AGENT_RELEASE_BASE) are checked with a fake curl that only records.
 #
 # SC2016 (file-wide): the single-quoted bodies of the generated fakes and of `bash -c` checks
 # expand later, on purpose.
@@ -69,9 +70,9 @@ cp "$REL/good"/route-agent-linux-* "$REL/badsum/"
 awk -v a="$ASSET" '$2 == a { $1 = "0000000000000000000000000000000000000000000000000000000000000000" } { print $1 "  " $2 }' \
   "$REL/good/checksums.txt" > "$REL/badsum/checksums.txt"
 
-# A binary whose version is not vX.Y.Z[-N-gHASH] (e.g. built from the moving go-preview tag).
+# A binary whose version is not vX.Y.Z[-N-gHASH] (e.g. built from the moving nightly tag).
 (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH="$HOST_ARCH" go build -trimpath \
-  -ldflags "-s -w -X github.com/Ametas/route-agent/internal/version.Version=go-preview-1-gdeadbee" \
+  -ldflags "-s -w -X github.com/Ametas/route-agent/internal/version.Version=nightly-1-gdeadbee" \
   -o "$REL/badver/$ASSET" ./cmd/route-agent)
 (cd "$REL/badver" && sha256sum "$ASSET" > checksums.txt)
 
@@ -131,6 +132,14 @@ printf '#!/usr/bin/env bash\necho "(fake journal of $*)"\n' > "$FAKEBIN/journalc
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKEBIN/sleep"
 chmod +x "$FAKEBIN"/*
 export PATH="$FAKEBIN:$PATH"
+# A curl that records its arguments and fails like a 404: put first on PATH to see which URL a
+# script asks for without the network.
+FAKECURL="$WORK/fakecurl"
+mkdir -p "$FAKECURL"
+printf '#!/usr/bin/env bash\necho "curl $*" >> "$FAKE_LOG"\nexit 22\n' > "$FAKECURL/curl"
+chmod +x "$FAKECURL/curl"
+STABLE_URL="https://github.com/Ametas/route-agent/releases/latest/download"
+NIGHTLY_URL="https://github.com/Ametas/route-agent/releases/download/nightly"
 
 # --- fixtures --------------------------------------------------------------------------------------
 TS_UNIT='[Unit]
@@ -205,6 +214,10 @@ backup_is_ts() { cmp -s "$(BACKUP_F)" "$WORK/ts-unit"; }
 no_backup() { [[ ! -e "$(BACKUP_F)" ]]; }
 bin_is_good() { [[ -x "$(BIN_F)" ]] && [[ "$(cd / && "$(BIN_F)" --version)" == "$GOOD_VERSION" ]]; }
 no_bin() { [[ ! -e "$(BIN_F)" ]]; }
+CHANNEL_F() { printf '%s' "$ROOT/opt/route-agent/bin/channel"; }
+# channel_is <stable|nightly>: bin/channel holds exactly that line, mode 644.
+channel_is() { [[ "$(cat "$(CHANNEL_F)" 2>/dev/null)" == "$1" && "$(stat -c %a "$(CHANNEL_F)")" == 644 ]]; }
+no_channel() { [[ ! -e "$(CHANNEL_F)" ]]; }
 called() { grep -qF -- "$1" "$LOG"; }
 not_called_x() { ! grep -qxF -- "$1" "$LOG"; }
 not_called() { ! grep -qF -- "$1" "$LOG"; }
@@ -227,6 +240,7 @@ expect_untouched() { # expect_untouched <message fragment>
   check "unit unchanged" unit_is_ts
   check "no backup written" no_backup
   check "no binary installed" no_bin
+  check "no channel file written" no_channel
   check "no daemon-reload / stop / start" not_called "systemctl daemon-reload"
   check "no stop of route-agent" not_called_x "systemctl stop route-agent"
   check ".env, certs, dist/ unchanged" state_kept
@@ -248,9 +262,30 @@ check "does not stop route-agent itself" not_called_x "systemctl stop route-agen
 check "no 'systemctl restart route-agent'" not_called "systemctl restart route-agent"
 check "rollback guard scheduled via systemd-run" called "systemd-run --unit=route-agent-bridge-guard --on-active=120"
 check "insecure sudoers rule removed (root sudo works)" sudoers_gone
+check "bin/channel = stable (the default), mode 644" channel_is stable
 check ".env, certs, dist/ unchanged" state_kept
 check "no temp files left" no_temp_left
 BRIDGE_ROOT="$ROOT"
+
+new_case "bridge: --channel nightly"
+make_ts_box
+ROUTE_AGENT_RELEASE_BASE="$BASE/good" run scripts/bridge-to-go.sh --channel nightly
+check "exits 0" rc_zero
+check "unit runs the Go binary" unit_is_go
+check "binary installed" bin_is_good
+check "bin/channel = nightly, mode 644" channel_is nightly
+check "says the channel" said "channel nightly"
+check "no temp files left" no_temp_left
+
+new_case "bridge: default release URL per channel (no override)"
+make_ts_box
+PATH="$FAKECURL:$PATH" run scripts/bridge-to-go.sh --channel nightly
+check "nightly fails without the network" rc_nonzero
+check "nightly asks $NIGHTLY_URL/checksums.txt" called "$NIGHTLY_URL/checksums.txt"
+PATH="$FAKECURL:$PATH" run scripts/bridge-to-go.sh
+check "no --channel asks $STABLE_URL/checksums.txt" called "$STABLE_URL/checksums.txt"
+check "box untouched" unit_is_ts
+check "no channel file" no_channel
 
 new_case "bridge: second run is idempotent"
 cp -a "$BRIDGE_ROOT/." "$ROOT/"
@@ -271,7 +306,7 @@ expect_untouched "checksum mismatch"
 new_case "bridge: bad --version"
 make_ts_box
 ROUTE_AGENT_RELEASE_BASE="$BASE/badver" run scripts/bridge-to-go.sh
-expect_untouched "reports version 'go-preview-1-gdeadbee'"
+expect_untouched "reports version 'nightly-1-gdeadbee'"
 
 new_case "bridge: missing asset"
 make_ts_box
@@ -316,7 +351,7 @@ make_ts_box
 g() { git -C "$ROOT/opt/route-agent" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 printf 'dist/\n.env\nbin/\n' > "$ROOT/opt/route-agent/.gitignore"
 echo old > "$ROOT/opt/route-agent/marker"
-g init -q && g add -A && g commit -qm old
+g init -q -b main && g add -A && g commit -qm old
 OLD_COMMIT="$(g rev-parse HEAD)"
 echo cutover > "$ROOT/opt/route-agent/marker"
 g commit -qam cutover
@@ -328,7 +363,58 @@ FAKE_GO_HEALTHY=0 run scripts/bridge-to-go.sh --guard
 check "TS unit restored" unit_is_ts
 check "checkout back at the pre-update commit" test "$(g rev-parse HEAD)" = "$OLD_COMMIT"
 check "tracked file back to its old content" grep -qx old "$ROOT/opt/route-agent/marker"
+check "still on branch main" test "$(g symbolic-ref --short HEAD)" = main
 check "dist/ and .env survive" state_kept
+
+# A box the orchestrator sent to nightly: the TS agent ran its channel chain (branch alpha) from
+# main, and the bridge from alpha. The guard must bring the checkout back to main, upstream
+# origin/main, or the next plain TS update would pull alpha again.
+new_case "bridge guard: rollback from branch alpha returns to main"
+make_ts_box
+ORIGIN="$ROOT.origin"
+og() { git -C "$ORIGIN" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+mkdir -p "$ORIGIN"
+og init -q -b main
+printf 'dist/\n.env\nbin/\n' > "$ORIGIN/.gitignore"
+echo old > "$ORIGIN/marker"
+og add -A && og commit -qm old
+OLD_COMMIT="$(og rev-parse HEAD)"
+og checkout -q -b alpha && echo nightly > "$ORIGIN/marker" && og commit -qam nightly && og checkout -q main
+g init -q -b main && g remote add origin "$ORIGIN" && g fetch -q origin && g reset -q --hard origin/main \
+  && g branch -q --set-upstream-to=origin/main main
+# The git part of the TS agent's SelfUpdate with x-agent-channel: nightly (src/services/system.service.ts).
+g fetch -q --tags origin +refs/heads/alpha:refs/remotes/origin/alpha && g checkout -q -f -B alpha HEAD \
+  && g branch -q --set-upstream-to=origin/alpha alpha && g reset -q --hard '@{u}' && g clean -qfd
+check "TS chain: checkout on alpha" test "$(g symbolic-ref --short HEAD)" = alpha
+check "TS chain: ORIG_HEAD is the pre-update commit" test "$(g rev-parse ORIG_HEAD)" = "$OLD_COMMIT"
+ROUTE_AGENT_RELEASE_BASE="$BASE/good" run scripts/bridge-to-go.sh --channel nightly
+check "bridge exits 0" rc_zero
+check "pre-update commit recorded" grep -qx "$OLD_COMMIT" "$ROOT/opt/route-agent/bin/ts-rollback-commit"
+check "bin/channel = nightly" channel_is nightly
+FAKE_GO_HEALTHY=0 run scripts/bridge-to-go.sh --guard
+check "guard exits 0" rc_zero
+check "TS unit restored" unit_is_ts
+check "back on branch main" test "$(g symbolic-ref --short HEAD)" = main
+check "main at the pre-update commit" test "$(g rev-parse HEAD)" = "$OLD_COMMIT"
+check "upstream of main is origin/main" test "$(g rev-parse --abbrev-ref 'main@{u}')" = origin/main
+check "tracked file back to its old content" grep -qx old "$ROOT/opt/route-agent/marker"
+check "dist/ and .env survive" state_kept
+
+new_case "bridge guard: rollback from alpha without origin/main"
+make_ts_box
+printf 'dist/\n.env\nbin/\n' > "$ROOT/opt/route-agent/.gitignore"
+echo old > "$ROOT/opt/route-agent/marker"
+g init -q -b alpha && g add -A && g commit -qm old
+OLD_COMMIT="$(g rev-parse HEAD)"
+echo nightly > "$ROOT/opt/route-agent/marker"
+g commit -qam nightly
+g update-ref ORIG_HEAD "$OLD_COMMIT"
+ROUTE_AGENT_RELEASE_BASE="$BASE/good" run scripts/bridge-to-go.sh --channel nightly
+FAKE_GO_HEALTHY=0 run scripts/bridge-to-go.sh --guard
+check "guard exits 0" rc_zero
+check "TS unit restored" unit_is_ts
+check "on branch main at the pre-update commit" test "$(g symbolic-ref --short HEAD) $(g rev-parse HEAD)" = "main $OLD_COMMIT"
+check "no upstream set" test -z "$(g config --get branch.main.merge || true)"
 
 # --- install-go.sh --convert -----------------------------------------------------------------------
 section "install-go.sh --convert"
@@ -345,8 +431,24 @@ check "daemon-reload before start" order "systemctl daemon-reload" "systemctl st
 check "checked is-active" called "systemctl is-active route-agent"
 check ".env, certs, dist/ untouched" state_kept
 check "insecure sudoers rule removed" sudoers_gone
+check "bin/channel = nightly (default channel on branch alpha)" channel_is nightly
 check "no temp files left" no_temp_left
 CONVERT_ROOT="$ROOT"
+
+new_case "convert: --channel stable"
+make_ts_box
+ROUTE_AGENT_RELEASE_BASE="$BASE/good" run install-go.sh --convert --channel stable
+check "exits 0" rc_zero
+check "bin/channel = stable" channel_is stable
+
+new_case "convert: default release URL per channel (no override)"
+make_ts_box
+PATH="$FAKECURL:$PATH" run install-go.sh --convert
+check "default channel fails without the network" rc_nonzero
+check "default channel (nightly) asks $NIGHTLY_URL/checksums.txt" called "$NIGHTLY_URL/checksums.txt"
+PATH="$FAKECURL:$PATH" run install-go.sh --convert --channel stable
+check "stable asks $STABLE_URL/checksums.txt" called "$STABLE_URL/checksums.txt"
+check "box untouched" unit_is_ts
 
 new_case "convert: Go agent does not come up → rollback to TS"
 make_ts_box
@@ -366,7 +468,7 @@ expect_untouched "checksum mismatch"
 new_case "convert: bad --version"
 make_ts_box
 ROUTE_AGENT_RELEASE_BASE="$BASE/badver" run install-go.sh --convert
-expect_untouched "reports version 'go-preview-1-gdeadbee'"
+expect_untouched "reports version 'nightly-1-gdeadbee'"
 
 new_case "convert: missing asset"
 make_ts_box
@@ -395,6 +497,7 @@ check ".env mode 600" test "$(stat -c %a "$ROOT/opt/route-agent/.env")" = 600
 check ".env has PORT=9443 and the secret from the bundle" bash -c 'grep -qx "PORT=9443" "$1" && grep -qx "EGRESS_CONTROL_SECRET=$2" "$1" && grep -qx "RELOAD_COMMAND=systemctl reload sing-box" "$1" && [[ $(wc -l < "$1") -eq 8 ]]' _ "$ROOT/opt/route-agent/.env" "$SECRET_HEX"
 check "unit runs the Go binary" unit_is_go
 check "binary installed" bin_is_good
+check "bin/channel = nightly (default channel on branch alpha)" channel_is nightly
 check "enable + restart" order "systemctl enable route-agent" "systemctl restart route-agent"
 check "ufw opens the agent port" called "ufw allow 9443/tcp"
 check "no sudoers rule written" test ! -e "$ROOT/etc/sudoers.d/route-agent-ufw"
@@ -405,8 +508,9 @@ check "secret never on a command line of a recorded tool" not_called "$SECRET_HE
 new_case "fresh: raw secret, existing sing-box config kept"
 mkdir -p "$ROOT/etc/sing-box"
 echo '{"pushed":"by orchestrator"}' > "$ROOT/etc/sing-box/config.json"
-ROUTE_AGENT_RELEASE_BASE="$BASE/good" run install-go.sh --secret "$SECRET_HEX"
+ROUTE_AGENT_RELEASE_BASE="$BASE/good" run install-go.sh --secret "$SECRET_HEX" --channel stable
 check "exits 0" rc_zero
+check "bin/channel = stable" channel_is stable
 check ".env has the raw secret and PORT=8081" bash -c 'grep -qx "EGRESS_CONTROL_SECRET=$2" "$1" && grep -qx "PORT=8081" "$1"' _ "$ROOT/opt/route-agent/.env" "$SECRET_HEX"
 check "no certificates written" test ! -e "$ROOT/etc/route-agent/certs/agent.key"
 check "existing sing-box config not overwritten" grep -q 'by orchestrator' "$ROOT/etc/sing-box/config.json"
@@ -417,10 +521,11 @@ check "exits non-zero" rc_nonzero
 check "no .env" test ! -e "$ROOT/opt/route-agent/.env"
 check "no unit" test ! -e "$(UNIT_F)"
 check "no certificates" test ! -e "$ROOT/etc/route-agent/certs/agent.key"
+check "no channel file" no_channel
 
 new_case "CLI errors"
-run install-go.sh --channel nightly --secret x
-check "--channel nightly refused" rc_nonzero
+run install-go.sh --channel preview --secret x
+check "--channel preview (old name) refused" rc_nonzero
 run install-go.sh --bogus
 check "unknown flag → exit 1" test "$RC" -eq 1
 run install-go.sh --port
@@ -429,6 +534,11 @@ run install-go.sh
 check "missing --secret refused" said "--secret parameter is required"
 run scripts/bridge-to-go.sh --bogus
 check "bridge: unknown argument refused" rc_nonzero
+run scripts/bridge-to-go.sh --channel preview
+check "bridge: --channel preview (old name) refused" rc_nonzero
+check "bridge: says which channels exist" said "--channel must be stable or nightly"
+run scripts/bridge-to-go.sh --channel
+check "bridge: --channel without a value refused" rc_nonzero
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
