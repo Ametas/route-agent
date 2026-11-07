@@ -6,10 +6,15 @@ import (
 	"time"
 
 	"github.com/Ametas/route-agent/internal/agentinfo"
+	"github.com/Ametas/route-agent/internal/awg"
 	"github.com/Ametas/route-agent/internal/caddy"
 	"github.com/Ametas/route-agent/internal/certs"
+	"github.com/Ametas/route-agent/internal/firewall"
+	"github.com/Ametas/route-agent/internal/kernel"
 	"github.com/Ametas/route-agent/internal/lifecycle"
+	"github.com/Ametas/route-agent/internal/mesh"
 	"github.com/Ametas/route-agent/internal/server"
+	"github.com/Ametas/route-agent/internal/shaper"
 	"github.com/Ametas/route-agent/internal/singbox"
 	"github.com/Ametas/route-agent/internal/systemd"
 	"github.com/Ametas/route-agent/internal/update"
@@ -61,9 +66,20 @@ func buildHandlers(d deps) *server.Handlers {
 	h.ConfigureCaddy = cdy.ConfigureCaddy
 	// Group C — binaries, rule sets, kernel source (spec C; cmd/route-agent/wire_binaries.go).
 	wireBinaries(h, newBinaries(d))
-	// Group D — TODO: ConfigureAwg, GetAwgObservation, ConfigureMeshTunnel, ManageFirewall, ApplyTrafficThrottle.
+	// Group D — AWG, mesh tunnel, firewall, traffic shaping (spec D). The mesh telemetry readers
+	// (mesh.Status) and the AWG health loop (startPreBindLoops) are what group E formats.
+	fw := &firewall.Service{Auth: d.auth, Runner: d.runner, Log: d.log, Locks: d.locks}
+	h.ManageFirewall = fw.ManageFirewall
+	awgSvc := &awg.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Firewall: fw, Locks: d.locks}
+	h.ConfigureAwg = awgSvc.ConfigureAwg
+	h.GetAwgObservation = awgSvc.GetAwgObservation
+	meshSvc := &mesh.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Firewall: fw, Locks: d.locks}
+	h.ConfigureMeshTunnel = meshSvc.ConfigureMeshTunnel
+	thr := &shaper.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Log: d.log}
+	h.ApplyTrafficThrottle = thr.ApplyTrafficThrottle
 	// Group E — TODO: StreamTelemetry, GetTelemetry, PullNodeWarnings, RunNetworkDiagnostic, GetWarpKeyHealth.
-	// Group F — TODO: ConfigureRearSingbox, GetRearConnections, SyncOlcrtcInstance, DeleteOlcrtcInstance, StreamOlcrtcEvents.
+	// Group F — rear (sing-box/mihomo), WARP guard, Olcrtc (spec F; cmd/route-agent/wire_groupf.go).
+	wireGroupF(h, d)
 	return h
 }
 
@@ -91,8 +107,10 @@ func startPreBindLoops(ctx context.Context, bg *lifecycle.Group, d deps) {
 	_ = ctx
 	_ = bg
 	_ = d
-	// TODO(group D/E): AWG health and self-heal, every 30 s (spec A §10.3, E §2.5):
-	//   bg.Start(ctx, lifecycle.Loop{Name: "awg-health", Interval: 30 * time.Second, Tick: awgHealth.Tick})
+	// AWG health and self-heal, every 30 s, ticks never overlap (spec A §10.3, D §4, E §2.5). Group E
+	// reads its Status(); hoist the instance into deps when telemetry lands.
+	awgHealth := &awg.Health{Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Locks: d.locks}
+	bg.Start(ctx, lifecycle.Loop{Name: "awg-health", Interval: awg.HealthInterval, FirstDelay: time.Second, Tick: awgHealth.Tick})
 }
 
 // startPostBind is startServer step 9: after a successful bind.
@@ -100,6 +118,7 @@ func startPostBind(ctx context.Context, bg *lifecycle.Group, d deps) {
 	_ = ctx
 	_ = bg
 	_ = d
-	// TODO(group D): kernel tuning, one-shot (spec A §10.5) — bg.Go(ctx, "kernel-tuning", tuning.Apply)
-	// TODO(group F): rear WARP guard every REAR_WARP_GUARD_INTERVAL_MS (spec A §10.4)
+	bg.Go(ctx, "kernel-tuning", (&kernel.Tuning{Runner: d.runner, FS: d.fs, Log: d.log, ProfilePath: d.cfg.SysctlProfilePath}).Run) // spec A §10.5, D §10
+	// Rear WARP guard (spec A §10.4, F §3; cmd/route-agent/wire_groupf.go).
+	startRearWarpGuard(ctx, bg, d)
 }

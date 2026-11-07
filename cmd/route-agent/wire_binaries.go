@@ -21,6 +21,8 @@ func newBinaries(d deps) *binaries.Service {
 		Cfg:       d.cfg,
 		Log:       d.log,
 		Locks:     d.locks,
+		Rear:      newRear(d),   // group F
+		Olcrtc:    newOlcrtc(d), // group F
 	})
 }
 
