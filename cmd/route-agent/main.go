@@ -21,15 +21,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Ametas/route-agent/internal/awg"
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/contract"
 	"github.com/Ametas/route-agent/internal/fsx"
 	"github.com/Ametas/route-agent/internal/lifecycle"
 	"github.com/Ametas/route-agent/internal/locks"
+	"github.com/Ametas/route-agent/internal/mesh"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
+	"github.com/Ametas/route-agent/internal/telemetry"
 	"github.com/Ametas/route-agent/internal/version"
 )
 
@@ -93,6 +96,13 @@ type deps struct {
 	// locks is the ONE area lock registry of the process (internal/locks): every group's service
 	// gets this instance, so RPCs of different groups on the same area serialize.
 	locks *locks.Registry
+	// awgHealth, meshStatus and telemetry are the ONE instance each of state shared between groups
+	// (cmd/route-agent/wire_telemetry.go, withShared): the AWG health loop and the telemetry frame
+	// read the same health state; telemetry, the mesh service and the kernel-module upload share
+	// the kernel status cache; the binary uploads invalidate the telemetry version caches.
+	awgHealth  *awg.Health
+	meshStatus *mesh.Status
+	telemetry  *telemetry.Collector
 }
 
 func run(cfg *config.Config, log *slog.Logger) error {
@@ -115,6 +125,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		exe:       exe,
 		locks:     locks.New(),
 	}
+	d = withShared(d)
 
 	bg := &lifecycle.Group{Log: log}
 	lifecycle.RunSteps(ctx, log, preBindSteps(d))

@@ -30,9 +30,10 @@ import (
 // Pass d.locks (the shared area lock registry, internal/locks) to every service that changes an
 // area; its package doc lists which RPC takes which lock and the order for nesting.
 //
-// Fields left nil answer codes.Unimplemented (internal/server/stubs.go).
+// Fields left nil answer codes.Unimplemented (internal/server/stubs.go); since group E landed all
+// 31 are set (TestAllRPCsWired).
 func buildHandlers(d deps) *server.Handlers {
-	d = withLocks(d)
+	d = withShared(d)
 	h := &server.Handlers{}
 
 	// Group A — process, security, lifecycle (spec A).
@@ -67,7 +68,7 @@ func buildHandlers(d deps) *server.Handlers {
 	// Group C — binaries, rule sets, kernel source (spec C; cmd/route-agent/wire_binaries.go).
 	wireBinaries(h, newBinaries(d))
 	// Group D — AWG, mesh tunnel, firewall, traffic shaping (spec D). The mesh telemetry readers
-	// (mesh.Status) and the AWG health loop (startPreBindLoops) are what group E formats.
+	// (d.meshStatus) and the AWG health loop (d.awgHealth) are what group E formats.
 	fw := &firewall.Service{Auth: d.auth, Runner: d.runner, Log: d.log, Locks: d.locks}
 	h.ManageFirewall = fw.ManageFirewall
 	awgSvc := &awg.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Firewall: fw, Locks: d.locks}
@@ -77,7 +78,9 @@ func buildHandlers(d deps) *server.Handlers {
 	h.ConfigureMeshTunnel = meshSvc.ConfigureMeshTunnel
 	thr := &shaper.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Log: d.log}
 	h.ApplyTrafficThrottle = thr.ApplyTrafficThrottle
-	// Group E — TODO: StreamTelemetry, GetTelemetry, PullNodeWarnings, RunNetworkDiagnostic, GetWarpKeyHealth.
+	// Group E — telemetry, node warnings, network diagnostic, WARP key health (spec E;
+	// cmd/route-agent/wire_telemetry.go).
+	wireGroupE(h, d)
 	// Group F — rear (sing-box/mihomo), WARP guard, Olcrtc (spec F; cmd/route-agent/wire_groupf.go).
 	wireGroupF(h, d)
 	return h
@@ -104,13 +107,10 @@ func preBindSteps(d deps) []lifecycle.Step {
 
 // startPreBindLoops is startServer step 5: loops TS started before the credentials check.
 func startPreBindLoops(ctx context.Context, bg *lifecycle.Group, d deps) {
-	_ = ctx
-	_ = bg
-	_ = d
-	// AWG health and self-heal, every 30 s, ticks never overlap (spec A §10.3, D §4, E §2.5). Group E
-	// reads its Status(); hoist the instance into deps when telemetry lands.
-	awgHealth := &awg.Health{Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Locks: d.locks}
-	bg.Start(ctx, lifecycle.Loop{Name: "awg-health", Interval: awg.HealthInterval, FirstDelay: time.Second, Tick: awgHealth.Tick})
+	d = withShared(d)
+	// AWG health and self-heal, every 30 s, ticks never overlap (spec A §10.3, D §4, E §2.5).
+	// Telemetry reads the same instance's Status() (d.awgHealth).
+	bg.Start(ctx, lifecycle.Loop{Name: "awg-health", Interval: awg.HealthInterval, FirstDelay: time.Second, Tick: d.awgHealth.Tick})
 }
 
 // startPostBind is startServer step 9: after a successful bind.

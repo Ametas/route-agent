@@ -9,9 +9,9 @@ import (
 // Group C wiring lives in its own file so wire.go only gains two call lines (and no import that
 // would collide with the other groups' edits of the import block).
 
-// newBinaries builds the group C service. Groups D/E/F plug their implementations in here when
-// they land: Rear (RearHooks), Olcrtc (OlcrtcHooks), Mesh (MeshKernelInstaller) and the Telemetry
-// cache-invalidation callbacks; nil keeps the defaults, which reproduce the TS behaviour.
+// newBinaries builds the group C service with the other groups' hooks: Rear and Olcrtc (group F),
+// the Telemetry cache invalidations (group E: sing-box and AWG version caches, the mesh kernel
+// status); Mesh (MeshKernelInstaller) keeps its default, dkms.Installer.
 func newBinaries(d deps) *binaries.Service {
 	return binaries.New(binaries.Deps{
 		Auth:      d.auth,
@@ -21,8 +21,9 @@ func newBinaries(d deps) *binaries.Service {
 		Cfg:       d.cfg,
 		Log:       d.log,
 		Locks:     d.locks,
-		Rear:      newRear(d),   // group F
-		Olcrtc:    newOlcrtc(d), // group F
+		Rear:      newRear(d),            // group F
+		Olcrtc:    newOlcrtc(d),          // group F
+		Telemetry: telemetryCallbacks(d), // group E (wire_telemetry.go)
 	})
 }
 

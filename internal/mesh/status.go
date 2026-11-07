@@ -56,6 +56,10 @@ type Status struct {
 	Cfg    *config.Config
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// LinkExists answers whether a network interface exists; nil runs `ip link show <iface>`
+	// (exit 0 ⇔ it exists). The agent wires telemetry.SysfsLinkExists (a /sys/class/net lookup)
+	// so a frame does not spawn a process for it every 2 s (spec E §8.1).
+	LinkExists func(iface string) bool
 
 	mu        sync.Mutex
 	cached    *KernelStatus
@@ -119,7 +123,7 @@ func (s *Status) InvalidateKernel() {
 // `awg show <iface> dump` → up with the live peers (handshake ≤ 180 s); a failed dump → up, 0, [].
 func (s *Status) Interface(ctx context.Context) InterfaceStatus {
 	iface := Iface(s.Cfg)
-	if _, err := s.Runner.Run(ctx, runner.Cmd{Name: "ip", Args: []string{"link", "show", iface}, Timeout: awg.IPTimeout}); err != nil {
+	if !s.linkExists(ctx, iface) {
 		return InterfaceStatus{Status: InterfaceAbsent, LivePeerKeys: []string{}}
 	}
 	res, err := s.Runner.Run(ctx, runner.Cmd{Name: "awg", Args: []string{"show", iface, "dump"}, Timeout: awg.ShowTimeout})
@@ -128,4 +132,12 @@ func (s *Status) Interface(ctx context.Context) InterfaceStatus {
 	}
 	keys := awg.LivePeers(res.Stdout, s.now().Unix())
 	return InterfaceStatus{Status: InterfaceUp, ActivePeers: uint32(len(keys)), LivePeerKeys: keys}
+}
+
+func (s *Status) linkExists(ctx context.Context, iface string) bool {
+	if s.LinkExists != nil {
+		return s.LinkExists(iface)
+	}
+	_, err := s.Runner.Run(ctx, runner.Cmd{Name: "ip", Args: []string{"link", "show", iface}, Timeout: awg.IPTimeout})
+	return err == nil
 }
