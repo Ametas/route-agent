@@ -99,4 +99,8 @@ jobs:
           # (refused, nothing installed), never a binary paired with a stale but "valid" sum.
           gh release upload "$tag" dist-go/route-agent-linux-amd64 dist-go/route-agent-linux-arm64 --clobber
           gh release upload "$tag" dist-go/checksums.txt --clobber
+          # The prerelease of the old preview channel (branch go-rewrite, now alpha): its tag
+          # `go-preview` was moved on every push — the very thing the comment above forbids — so it
+          # goes away together with its release. Idempotent: does nothing once it is gone.
+          gh release delete go-preview --yes --cleanup-tag 2>/dev/null || true
           gh release view "$tag" --json tagName,isPrerelease,assets --jq '{tagName, isPrerelease, assets: [.assets[].name]}'
