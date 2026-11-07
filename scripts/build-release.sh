@@ -8,7 +8,7 @@
 #            self-updated every 6 hours.
 #   out-dir  default dist-go (relative to the current directory)
 #
-# One script for every producer — go.yml (CI of the branch and the go-preview prerelease),
+# One script for every producer — go.yml (CI of branch alpha and the nightly prerelease),
 # release.yml (assets of a semantic-release release) and scripts/test-delivery.sh — so the asset
 # names, the ldflags and the checksums format cannot drift between them.
 set -euo pipefail

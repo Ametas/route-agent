@@ -6,8 +6,8 @@
 # теге, агент на узле читает её `git describe --tags` (system.service.ts).
 #
 # Релиз — только после зелёной проверки и только на main. За релизом — вложения Go-агента
-# (задание go-assets). Задание check пока проверяет TypeScript; его переключает на Go последний
-# коммит ветки go-rewrite (docs/go-rewrite/cutover.md §B).
+# (задание go-assets). Задание check пока проверяет TypeScript; его переключает на Go коммит
+# перехода — слияние ветки alpha в main (docs/go-rewrite/cutover.md §B).
 name: ci
 
 on:

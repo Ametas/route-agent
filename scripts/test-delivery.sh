@@ -70,7 +70,7 @@ cp "$REL/good"/route-agent-linux-* "$REL/badsum/"
 awk -v a="$ASSET" '$2 == a { $1 = "0000000000000000000000000000000000000000000000000000000000000000" } { print $1 "  " $2 }' \
   "$REL/good/checksums.txt" > "$REL/badsum/checksums.txt"
 
-# A binary whose version is not vX.Y.Z[-N-gHASH] (e.g. built from the moving nightly tag).
+# A binary whose version is not vX.Y.Z[-N-gHASH] (e.g. `git describe --tags` that picked the nightly tag).
 (cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH="$HOST_ARCH" go build -trimpath \
   -ldflags "-s -w -X github.com/Ametas/route-agent/internal/version.Version=nightly-1-gdeadbee" \
   -o "$REL/badver/$ASSET" ./cmd/route-agent)
