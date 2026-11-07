@@ -3,7 +3,6 @@ package rear
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -54,9 +53,9 @@ func CurrentSelection(payload any) (string, bool) {
 func (s *Service) selectWarpMember(ctx context.Context, ep clashapi.Endpoint, member string) error {
 	body := jsjson.NewObject()
 	body.Set("name", member)
-	_, err := s.request(ctx, http.MethodPut, ep, "/proxies/"+WarpSelectorTag, []byte(jsjson.Stringify(body, "")), clashTimeout, false)
+	err := s.clash(clashTimeout, false).Put(ctx, ep, "/proxies/"+WarpSelectorTag, []byte(jsjson.Stringify(body, "")))
 	if err != nil {
-		if code, ok := statusCode(err); ok {
+		if code, ok := clashapi.StatusCode(err); ok {
 			return errors.New("clash api responded " + strconv.Itoa(code) + " selecting " + member)
 		}
 		return err

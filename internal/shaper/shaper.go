@@ -34,6 +34,12 @@ const (
 	ipTimeout = 10 * time.Second
 )
 
+// IncompleteRetryInterval bounds how often an incomplete layout is rebuilt for an identical
+// delivery. A rebuild resets the drop counters of every prefix, and a prefix tc rejects
+// permanently would otherwise trigger one on every delivery; within the interval such a delivery
+// is answered exactly like TS's "Unchanged".
+const IncompleteRetryInterval = 10 * time.Minute
+
 // Entry is one requested limit.
 type Entry struct {
 	Prefix, Rate, Burst string
@@ -46,11 +52,13 @@ type Counter struct {
 }
 
 // State is the persisted layout: the interface and the entries in prio order. Incomplete marks a
-// layout where some filter failed to install (Go only, see apply).
+// layout where some filter failed to install, LastAttempt when that rebuild ran (Go only, see
+// Apply; persisted as "incomplete" and "lastAttemptMs" so the retry bound survives restarts).
 type State struct {
-	Interface  string
-	Entries    []Entry
-	Incomplete bool
+	Interface   string
+	Entries     []Entry
+	Incomplete  bool
+	LastAttempt time.Time
 }
 
 // Service implements ApplyTrafficThrottle.
@@ -61,6 +69,8 @@ type Service struct {
 	Log    *slog.Logger
 	// StatePath overrides DefaultStatePath (tests use FS.Root instead).
 	StatePath string
+	// Now is the clock for the incomplete-layout retry bound; nil means time.Now (tests).
+	Now func() time.Time
 	// mu serializes deliveries: tc rebuilds must not interleave (spec D R17). Throttle is its own
 	// area — no other RPC touches the ingress qdisc — so it is not in internal/locks.
 	mu sync.Mutex
@@ -71,6 +81,13 @@ func (s *Service) statePath() string {
 		return DefaultStatePath
 	}
 	return s.StatePath
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s *Service) tc(ctx context.Context, args ...string) (runner.Result, error) {
@@ -92,7 +109,12 @@ func NormalizeEntries(entries []Entry) []Entry {
 // IsSame is isSameThrottle: same interface and the same prefix/rate/burst at every index. A
 // layout recorded as incomplete is never "the same": the next delivery retries the failed filters.
 func IsSame(a *State, b State) bool {
-	if a == nil || a.Incomplete || a.Interface != b.Interface || len(a.Entries) != len(b.Entries) {
+	return a != nil && !a.Incomplete && sameLayout(a, b)
+}
+
+// sameLayout compares interface and entries only, whatever Incomplete says.
+func sameLayout(a *State, b State) bool {
+	if a == nil || a.Interface != b.Interface || len(a.Entries) != len(b.Entries) {
 		return false
 	}
 	for i := range a.Entries {
@@ -101,6 +123,17 @@ func IsSame(a *State, b State) bool {
 		}
 	}
 	return true
+}
+
+// RetryDeferred tells whether an incomplete stored layout identical to desired was rebuilt less
+// than IncompleteRetryInterval before now, so this delivery must not rebuild it again. A missing
+// stamp (state from an earlier build) or a clock that went backwards allows the retry.
+func RetryDeferred(a *State, desired State, now time.Time) bool {
+	if a == nil || !a.Incomplete || a.LastAttempt.IsZero() || !sameLayout(a, desired) {
+		return false
+	}
+	elapsed := now.Sub(a.LastAttempt)
+	return elapsed >= 0 && elapsed < IncompleteRetryInterval
 }
 
 var (
@@ -167,6 +200,11 @@ func (s *Service) readState() (st *State, ifaceSet bool) {
 	if inc, ok := obj.Get("incomplete"); ok {
 		st.Incomplete, _ = inc.(bool)
 	}
+	if v, ok := obj.Get("lastAttemptMs"); ok {
+		if ms, ok := v.(float64); ok && ms > 0 && ms < 1e15 {
+			st.LastAttempt = time.UnixMilli(int64(ms))
+		}
+	}
 	ev, ok := obj.Get("entries")
 	arr, isArr := ev.([]any)
 	if !ok || !isArr {
@@ -202,6 +240,7 @@ func (s *Service) writeState(st State) error {
 	obj.Set("entries", entries)
 	if st.Incomplete {
 		obj.Set("incomplete", true)
+		obj.Set("lastAttemptMs", float64(st.LastAttempt.UnixMilli()))
 	}
 	if err := s.FS.WriteFile(s.statePath(), []byte(jsjson.Stringify(obj, "  ")+"\n"), fsx.WriteOptions{}); err != nil {
 		return errors.New(fsx.NodeError("open", s.statePath(), err))
@@ -248,8 +287,10 @@ type Result struct {
 }
 
 // Apply is applyThrottle (trafficShaper.ts:178-218). Differences (deviations.md): a layout where
-// some filter failed is stored as incomplete, so the next identical delivery rebuilds instead of
-// answering "Unchanged" forever (spec D R10); a layout that moved to another interface removes the
+// some filter failed is stored as incomplete, so an identical delivery rebuilds it instead of
+// answering "Unchanged" forever (spec D R10) — but at most once per IncompleteRetryInterval,
+// otherwise it gets TS's "Unchanged" answer (a permanently rejected prefix must not reset every
+// prefix's drop counters on each delivery); a layout that moved to another interface removes the
 // ingress qdisc it left on the old one.
 func (s *Service) Apply(ctx context.Context, entries []Entry) (Result, error) {
 	iface := s.resolveIface(ctx)
@@ -260,6 +301,12 @@ func (s *Service) Apply(ctx context.Context, entries []Entry) (Result, error) {
 	desired := State{Interface: iface, Entries: NormalizeEntries(entries)}
 	prev, _ := s.readState()
 	if IsSame(prev, desired) {
+		return Result{Applied: len(desired.Entries), Message: "Unchanged"}, nil
+	}
+	now := s.now()
+	if RetryDeferred(prev, desired, now) {
+		s.Log.Debug("Incomplete traffic throttle unchanged — retry deferred",
+			"iface", iface, "lastAttempt", prev.LastAttempt, "retryAfter", prev.LastAttempt.Add(IncompleteRetryInterval))
 		return Result{Applied: len(desired.Entries), Message: "Unchanged"}, nil
 	}
 	if prev != nil && prev.Interface != "" && prev.Interface != iface {
@@ -287,6 +334,9 @@ func (s *Service) Apply(ctx context.Context, entries []Entry) (Result, error) {
 		applied++
 	}
 	desired.Incomplete = applied < len(desired.Entries)
+	if desired.Incomplete {
+		desired.LastAttempt = now
+	}
 	if err := s.writeState(desired); err != nil {
 		return Result{}, err
 	}

@@ -1,13 +1,9 @@
 package rear
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"math"
-	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,68 +19,12 @@ import (
 
 // --- transport ------------------------------------------------------------------------------
 
-// errStatus is a non-2xx answer; the caller words it.
-type errStatus struct{ code int }
-
-func (e *errStatus) Error() string { return "status " + strconv.Itoa(e.code) }
-
-// request is one bounded call to the rear Clash API. Bearer: "" sends no Authorization header
-// unless alwaysBearer (the rule-provider probe sent `Bearer ` with an empty secret). Transport
-// error texts follow undici's, so log and response lines read as before.
-func (s *Service) request(ctx context.Context, method string, ep clashapi.Endpoint, p string, body []byte, timeout time.Duration, alwaysBearer bool) (any, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	rawURL := "http://" + ep.Address + p
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return nil, errors.New("Failed to parse URL from " + rawURL)
-	}
-	var rd io.Reader
-	if body != nil {
-		rd = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
-	if err != nil {
-		return nil, errors.New("Failed to parse URL from " + rawURL)
-	}
-	if ep.Secret != "" || alwaysBearer {
-		req.Header.Set("Authorization", "Bearer "+ep.Secret)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := s.httpClient().Do(req)
-	if err != nil {
-		return nil, transportError(ctx)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
-		return nil, &errStatus{code: resp.StatusCode}
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxClashBody))
-	if err != nil {
-		return nil, transportError(ctx)
-	}
-	if body != nil {
-		return nil, nil // PUT: the answer (204) has no body worth parsing
-	}
-	return jsjson.Parse(string(data))
-}
-
-func transportError(ctx context.Context) error {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return errors.New("The operation was aborted due to timeout")
-	}
-	return errors.New("fetch failed")
-}
-
-func statusCode(err error) (int, bool) {
-	var e *errStatus
-	if errors.As(err, &e) {
-		return e.code, true
-	}
-	return 0, false
+// clash is the shared Clash API client (internal/clashapi) with the rear's bounds: timeout per
+// call (5 s, 3 s for the rule-provider probe), 64 MiB body cap, the agent's HTTP client.
+// Transport error texts are undici's (clashapi), so log and response lines read as before; a
+// non-2xx answer is a *clashapi.StatusError that each caller words itself.
+func (s *Service) clash(timeout time.Duration, alwaysBearer bool) clashapi.Client {
+	return clashapi.Client{HTTP: s.httpClient(), Timeout: timeout, MaxBody: maxClashBody, AlwaysBearer: alwaysBearer}
 }
 
 // --- GetRearConnections ---------------------------------------------------------------------
@@ -116,9 +56,9 @@ func (s *Service) collectConnections(ctx context.Context) ([]clashapi.Record, er
 		s.Log.Debug("Rear core is not active on this node, no connections to report")
 		return nil, nil
 	}
-	payload, err := s.request(ctx, http.MethodGet, api.Endpoint, "/connections", nil, clashTimeout, false)
+	payload, err := s.clash(clashTimeout, false).Get(ctx, api.Endpoint, "/connections")
 	if err != nil {
-		if code, ok := statusCode(err); ok {
+		if code, ok := clashapi.StatusCode(err); ok {
 			return nil, errors.New("rear clash api responded " + strconv.Itoa(code))
 		}
 		return nil, err
@@ -249,14 +189,8 @@ func ParseWarpKeyHealth(payload any) []WarpKeyHealth {
 
 // fetchProxies is GET /proxies, bearer only with a secret, 5 s.
 func (s *Service) fetchProxies(ctx context.Context, ep clashapi.Endpoint) (any, error) {
-	payload, err := s.request(ctx, http.MethodGet, ep, "/proxies", nil, clashTimeout, false)
-	if err != nil {
-		if code, ok := statusCode(err); ok {
-			return nil, errors.New("clash api responded " + strconv.Itoa(code) + " for /proxies")
-		}
-		return nil, err
-	}
-	return payload, nil
+	// The non-2xx text is clashapi's own: "clash api responded <code> for /proxies".
+	return s.clash(clashTimeout, false).Get(ctx, ep, "/proxies")
 }
 
 // FetchWarpKeyHealth is fetchWarpKeyHealth: GET /proxies of ep and ParseWarpKeyHealth.
@@ -373,7 +307,7 @@ func (s *Service) DetectEmptyRuleProviders(ctx context.Context) *agentpb.NodeWar
 	if api == nil {
 		return nil
 	}
-	payload, err := s.request(ctx, http.MethodGet, api.Endpoint, "/providers/rules", nil, ruleProvidersTimeout, true)
+	payload, err := s.clash(ruleProvidersTimeout, true).Get(ctx, api.Endpoint, "/providers/rules")
 	if err != nil {
 		return nil
 	}

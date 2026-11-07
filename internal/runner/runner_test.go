@@ -119,3 +119,76 @@ func TestFakeRecordsAndScripts(t *testing.T) {
 		t.Fatalf("calls %v", got)
 	}
 }
+
+func TestPerCallCapOverridesRunnerCap(t *testing.T) {
+	res, err := Exec{MaxOutput: 4}.Run(context.Background(), Cmd{Name: "cat", Stdin: []byte("abcdefgh"), MaxOutput: 6, Timeout: 5 * time.Second})
+	if err != nil || res.Stdout != "abcdef" {
+		t.Fatalf("%v %q", err, res.Stdout)
+	}
+	if got := (Cmd{}).Limit(0); got != DefaultMaxOutput {
+		t.Fatalf("default limit %d", got)
+	}
+	if got := (Cmd{}).Limit(9); got != 9 {
+		t.Fatalf("runner limit %d", got)
+	}
+}
+
+func TestOverflowTruncatesByDefault(t *testing.T) {
+	// The command finishes and reports its own outcome; only the kept output is cut.
+	res, err := Exec{}.Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "printf 0123456789; echo done >&2; exit 2"}, MaxOutput: 4, Timeout: 5 * time.Second})
+	var e *Error
+	if !errors.As(err, &e) || e.Overflow != "" || e.Code != 2 || IsOverflow(err) {
+		t.Fatalf("want plain exit error, got %#v", err)
+	}
+	if res.Stdout != "0123" || res.Stderr != "done" || err.Error() != "Command failed: sh -c printf 0123456789; echo done >&2; exit 2\ndone" {
+		t.Fatalf("res %+v err %q", res, err.Error())
+	}
+}
+
+func TestFailOnOverflowKillsLikeNode(t *testing.T) {
+	// Node: maxBuffer exceeded → child killed, reject with "stdout maxBuffer length exceeded".
+	start := time.Now()
+	res, err := Exec{KillGrace: time.Second}.Run(context.Background(), Cmd{
+		Name: "sh", Args: []string{"-c", "printf 0123456789; sleep 30"},
+		MaxOutput: 4, FailOnOverflow: true, Timeout: 20 * time.Second,
+	})
+	var e *Error
+	if !errors.As(err, &e) || e.Overflow != "stdout" || !IsOverflow(err) {
+		t.Fatalf("want overflow error, got %#v", err)
+	}
+	if err.Error() != "stdout maxBuffer length exceeded" || e.Killed || e.Signal != "SIGTERM" {
+		t.Fatalf("err %q fields %+v", err.Error(), e)
+	}
+	if res.Stdout != "0123" || e.Stdout != "0123" {
+		t.Fatalf("kept %q", res.Stdout)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %v; overflow did not kill the child", d)
+	}
+
+	_, err = Exec{}.Run(context.Background(), Cmd{Name: "sh", Args: []string{"-c", "printf 0123456789 >&2"}, MaxOutput: 4, FailOnOverflow: true, Timeout: 5 * time.Second})
+	if err == nil || err.Error() != "stderr maxBuffer length exceeded" {
+		t.Fatalf("stderr: %v", err)
+	}
+	// Within the cap nothing changes.
+	res, err = Exec{}.Run(context.Background(), Cmd{Name: "printf", Args: []string{"0123"}, MaxOutput: 4, FailOnOverflow: true, Timeout: 5 * time.Second})
+	if err != nil || res.Stdout != "0123" {
+		t.Fatalf("%v %q", err, res.Stdout)
+	}
+}
+
+func TestFakeAppliesCap(t *testing.T) {
+	f := &Fake{Handler: func(Cmd) (Result, error) { return Result{Stdout: "0123456789"}, nil }}
+	res, err := f.Run(context.Background(), Cmd{Name: "x", MaxOutput: 4, Timeout: time.Second})
+	if err != nil || res.Stdout != "0123" {
+		t.Fatalf("truncate: %v %q", err, res.Stdout)
+	}
+	_, err = f.Run(context.Background(), Cmd{Name: "x", MaxOutput: 4, FailOnOverflow: true, Timeout: time.Second})
+	if !IsOverflow(err) || err.Error() != "stdout maxBuffer length exceeded" {
+		t.Fatalf("overflow: %v", err)
+	}
+	res, err = f.Run(context.Background(), Cmd{Name: "x", MaxOutput: 10, FailOnOverflow: true, Timeout: time.Second})
+	if err != nil || res.Stdout != "0123456789" {
+		t.Fatalf("fits: %v %q", err, res.Stdout)
+	}
+}

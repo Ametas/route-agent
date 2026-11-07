@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/metadata"
 
@@ -243,22 +244,109 @@ func TestNoDefaultRoute(t *testing.T) {
 	}
 }
 
-// Deviation (spec D R10): a failed filter does not freeze the layout as "Unchanged".
+// Deviation (spec D R10): a failed filter does not freeze the layout as "Unchanged" — it is
+// retried, but an identical delivery rebuilds it at most once per IncompleteRetryInterval.
 func TestFailedFilterIsRetried(t *testing.T) {
 	e := newTC(t)
-	e.fail["tc filter add dev eth0 parent ffff: protocol ip prio 2 u32 match ip src bad police rate 1mbit burst 5k conform-exceed drop/ok"] = "Illegal \"match\""
+	clock := time.UnixMilli(1_788_000_000_000)
+	e.svc.Now = func() time.Time { return clock }
+	bad := "tc filter add dev eth0 parent ffff: protocol ip prio 2 u32 match ip src bad police rate 1mbit burst 5k conform-exceed drop/ok"
+	e.fail[bad] = "Illegal \"match\""
 	rq := req(ent("10.0.0.0/8", "1mbit", "5k"), ent("bad", "1mbit", "5k"))
 	r, _ := e.svc.ApplyTrafficThrottle(md(), rq)
-	if !r.Success || r.Applied != 1 || !r.Changed {
+	if !r.Success || r.Applied != 1 || !r.Changed || r.Message != "Applied" {
 		t.Fatalf("%+v", r)
 	}
-	if !strings.Contains(e.state(), `"incomplete": true`) {
+	if !strings.Contains(e.state(), `"incomplete": true`) || !strings.Contains(e.state(), `"lastAttemptMs": 1788000000000`) {
 		t.Fatalf("%s", e.state())
 	}
-	delete(e.fail, "tc filter add dev eth0 parent ffff: protocol ip prio 2 u32 match ip src bad police rate 1mbit burst 5k conform-exceed drop/ok")
+
+	// Within the interval: TS's Unchanged answer, no tc rebuild (drop counters survive).
+	for _, d := range []time.Duration{time.Second, IncompleteRetryInterval - time.Millisecond} {
+		clock = time.UnixMilli(1_788_000_000_000).Add(d)
+		n := len(e.fake.Calls())
+		r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
+		if !r.Success || r.Message != "Unchanged" || r.Changed || r.Applied != 2 {
+			t.Fatalf("+%v: %+v", d, r)
+		}
+		for _, c := range e.fake.Displays()[n:] {
+			if strings.HasPrefix(c, "tc qdisc") || strings.HasPrefix(c, "tc filter add") || strings.HasPrefix(c, "tc filter del") {
+				t.Fatalf("+%v: rebuilt (%s)", d, c)
+			}
+		}
+	}
+
+	// The bound survives a restart: a fresh Service reads the stamp from the state file.
+	e.svc = &Service{Auth: e.svc.Auth, Runner: e.fake, FS: e.svc.FS, Log: e.svc.Log, Now: e.svc.Now}
 	r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
-	if r.Message != "Applied" || r.Applied != 2 || strings.Contains(e.state(), "incomplete") {
+	if r.Message != "Unchanged" {
+		t.Fatalf("after restart: %+v", r)
+	}
+
+	// Interval elapsed and the prefix still rejected: rebuilt once more, new stamp.
+	clock = time.UnixMilli(1_788_000_000_000).Add(IncompleteRetryInterval)
+	r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
+	if r.Message != "Applied" || !r.Changed || r.Applied != 1 || !strings.Contains(e.state(), `"lastAttemptMs": 1788000600000`) {
+		t.Fatalf("retry: %+v %s", r, e.state())
+	}
+	r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
+	if r.Message != "Unchanged" {
+		t.Fatalf("second retry not deferred: %+v", r)
+	}
+
+	// Next retry after the interval succeeds: complete layout, stamp gone, then plain Unchanged.
+	delete(e.fail, bad)
+	clock = clock.Add(IncompleteRetryInterval)
+	r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
+	if r.Message != "Applied" || r.Applied != 2 || strings.Contains(e.state(), "incomplete") || strings.Contains(e.state(), "lastAttemptMs") {
 		t.Fatalf("not retried: %+v %s", r, e.state())
+	}
+	r, _ = e.svc.ApplyTrafficThrottle(md(), rq)
+	if r.Message != "Unchanged" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestIncompleteRetryBound(t *testing.T) {
+	e := newTC(t)
+	t0 := time.UnixMilli(1_788_000_000_000)
+	clock := t0
+	e.svc.Now = func() time.Time { return clock }
+	bad := "tc filter add dev eth0 parent ffff: protocol ip prio 1 u32 match ip src bad police rate 1mbit burst 5k conform-exceed drop/ok"
+	e.fail[bad] = "Illegal \"match\""
+	e.fail[strings.Replace(bad, "1mbit", "2mbit", 1)] = "Illegal \"match\""
+	_, _ = e.svc.ApplyTrafficThrottle(md(), req(ent("bad", "1mbit", "5k")))
+
+	// A changed layout is not held back by the stamp.
+	clock = t0.Add(time.Minute)
+	r, _ := e.svc.ApplyTrafficThrottle(md(), req(ent("bad", "2mbit", "5k")))
+	if r.Message != "Applied" || !r.Changed {
+		t.Fatalf("changed layout deferred: %+v", r)
+	}
+
+	// Clock went backwards: the retry is allowed rather than stuck until the clock catches up.
+	clock = t0.Add(-time.Hour)
+	r, _ = e.svc.ApplyTrafficThrottle(md(), req(ent("bad", "2mbit", "5k")))
+	if r.Message != "Applied" {
+		t.Fatalf("backwards clock: %+v", r)
+	}
+
+	// A state file from an earlier build (incomplete, no stamp) is retried once, then stamped.
+	if err := os.WriteFile(filepath.Join(e.root, DefaultStatePath),
+		[]byte(`{"interface":"eth0","entries":[{"prefix":"bad","rate":"2mbit","burst":"5k"}],"incomplete":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = e.svc.ApplyTrafficThrottle(md(), req(ent("bad", "2mbit", "5k")))
+	if r.Message != "Applied" {
+		t.Fatalf("unstamped: %+v", r)
+	}
+	r, _ = e.svc.ApplyTrafficThrottle(md(), req(ent("bad", "2mbit", "5k")))
+	if r.Message != "Unchanged" || r.Applied != 1 || r.Changed {
+		t.Fatalf("stamped: %+v", r)
+	}
+
+	if RetryDeferred(nil, State{}, t0) {
+		t.Fatal("nil state")
 	}
 }
 

@@ -198,3 +198,56 @@ func TestFetch(t *testing.T) {
 		t.Fatal("default timeout must be 5 s")
 	}
 }
+
+func TestGetPutAndBearer(t *testing.T) {
+	type seen struct{ method, path, auth, ctype, body string }
+	var mu sync.Mutex
+	var got []seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, 64)
+		n, _ := r.Body.Read(b)
+		mu.Lock()
+		got = append(got, seen{r.Method, r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Content-Type"), string(b[:n])})
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/proxies":
+			_, _ = w.Write([]byte(`{"proxies":{"warp":{"now":"a"}}}`))
+		case "/proxies/warp":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+
+	v, err := Client{}.Get(context.Background(), Endpoint{Address: addr}, "/proxies")
+	if err != nil || jsjson.Stringify(v, "") != `{"proxies":{"warp":{"now":"a"}}}` {
+		t.Fatalf("get: %v %v", err, v)
+	}
+	if err := (Client{}).Put(context.Background(), Endpoint{Address: addr, Secret: "s"}, "/proxies/warp", []byte(`{"name":"b"}`)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	_, err = Client{AlwaysBearer: true}.Get(context.Background(), Endpoint{Address: addr}, "/providers/rules")
+	if code, ok := StatusCode(err); !ok || code != 503 || err.Error() != "clash api responded 503 for /providers/rules" {
+		t.Fatalf("status: %v", err)
+	}
+	if _, ok := StatusCode(nil); ok {
+		t.Fatal("StatusCode(nil)")
+	}
+	want := []seen{
+		{"GET", "/proxies", "", "", ""},
+		{"PUT", "/proxies/warp", "Bearer s", "application/json", `{"name":"b"}`},
+		{"GET", "/providers/rules", "Bearer", "", ""}, // "Bearer " on the wire; net/http trims it
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != len(want) {
+		t.Fatalf("requests %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("request %d: got %+v want %+v", i, got[i], want[i])
+		}
+	}
+}

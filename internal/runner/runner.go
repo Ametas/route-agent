@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -34,9 +35,10 @@ import (
 // bounded (architecture §2).
 var ErrNoTimeout = errors.New("runner: command has no timeout")
 
-// DefaultMaxOutput caps how much of stdout and of stderr is kept in memory per call. Output past
-// the cap is read and discarded (the child is not killed, unlike Node's 1 MiB maxBuffer, which
-// spec A §6 calls a bug not worth emulating).
+// DefaultMaxOutput caps how much of stdout and of stderr is kept in memory per call. By default
+// output past the cap is read and discarded (the child is not killed, unlike Node's 1 MiB
+// maxBuffer, which spec A §6 calls a bug not worth emulating). A caller whose result is useless
+// when cut short sets Cmd.FailOnOverflow to get Node's behaviour instead (see Cmd).
 const DefaultMaxOutput = 8 << 20
 
 // DefaultKillGrace is how long a timed-out command gets between SIGTERM and SIGKILL.
@@ -59,6 +61,28 @@ type Cmd struct {
 	Env []string
 	// Dir is the working directory; empty means the agent's cwd.
 	Dir string
+	// MaxOutput caps kept stdout and stderr bytes each for this call; 0 means the runner's cap
+	// (Exec.MaxOutput, else DefaultMaxOutput).
+	MaxOutput int
+	// FailOnOverflow selects what happens when stdout or stderr outgrows the cap:
+	//   - false (default): the excess is read and discarded, the command runs to completion and its
+	//     outcome is reported as usual with the output truncated at the cap;
+	//   - true: Node's maxBuffer behaviour — the process group gets SIGTERM at once and the call
+	//     fails with an *Error whose Overflow is "stdout" or "stderr" and whose Error() is Node's
+	//     "<stream> maxBuffer length exceeded" (ERR_CHILD_PROCESS_STDIO_MAXBUFFER). Use it where a
+	//     partial result would be silently wrong (e.g. `conntrack -L`, awgFlows.ts:194).
+	FailOnOverflow bool
+}
+
+// Limit is the effective per-stream cap for c given the runner's own cap (0 = DefaultMaxOutput).
+func (c Cmd) Limit(runnerMax int) int {
+	switch {
+	case c.MaxOutput > 0:
+		return c.MaxOutput
+	case runnerMax > 0:
+		return runnerMax
+	}
+	return DefaultMaxOutput
 }
 
 // Display is the command text Node would put after "Command failed: ".
@@ -98,9 +122,22 @@ type Error struct {
 	Spawn error
 	// SpawnCode is the Node-style errno name for a spawn failure ("ENOENT", "EACCES").
 	SpawnCode string
+	// Overflow is "stdout" or "stderr" when Cmd.FailOnOverflow was set and that stream outgrew
+	// the cap; Error() is then Node's "<stream> maxBuffer length exceeded". Stdout and Stderr hold
+	// what was kept up to the cap.
+	Overflow string
+}
+
+// IsOverflow reports whether err is a FailOnOverflow failure.
+func IsOverflow(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Overflow != ""
 }
 
 func (e *Error) Error() string {
+	if e.Overflow != "" {
+		return e.Overflow + " maxBuffer length exceeded"
+	}
 	if e.Spawn != nil {
 		name := e.Cmd
 		if i := strings.IndexByte(name, ' '); i >= 0 {
@@ -125,7 +162,8 @@ func StderrOrMessage(err error) string {
 
 // Exec is the real Runner.
 type Exec struct {
-	// MaxOutput caps kept stdout/stderr bytes each; 0 means DefaultMaxOutput.
+	// MaxOutput caps kept stdout/stderr bytes each when the Cmd sets none; 0 means
+	// DefaultMaxOutput.
 	MaxOutput int
 	// KillGrace is the SIGTERM→SIGKILL delay on timeout; 0 means DefaultKillGrace.
 	KillGrace time.Duration
@@ -151,10 +189,7 @@ func (x Exec) Run(ctx context.Context, c Cmd) (Result, error) {
 	if c.Timeout <= 0 {
 		return Result{ExitCode: -1}, ErrNoTimeout
 	}
-	maxOut := x.MaxOutput
-	if maxOut <= 0 {
-		maxOut = DefaultMaxOutput
-	}
+	maxOut := c.Limit(x.MaxOutput)
 	grace := x.KillGrace
 	if grace <= 0 {
 		grace = DefaultKillGrace
@@ -162,12 +197,16 @@ func (x Exec) Run(ctx context.Context, c Cmd) (Result, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
+	// runCtx is ctx plus the overflow kill: FailOnOverflow cancels it, which signals the group
+	// through cmd.Cancel exactly like a timeout, but ctx.Err() stays nil so it is not "Killed".
+	runCtx, overflowKill := context.WithCancel(ctx)
+	defer overflowKill()
 
 	var cmd *exec.Cmd
 	if c.Shell {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", c.Name)
+		cmd = exec.CommandContext(runCtx, "/bin/sh", "-c", c.Name)
 	} else {
-		cmd = exec.CommandContext(ctx, c.Name, c.Args...)
+		cmd = exec.CommandContext(runCtx, c.Name, c.Args...)
 	}
 	if c.Env != nil {
 		cmd.Env = c.Env
@@ -178,8 +217,13 @@ func (x Exec) Run(ctx context.Context, c Cmd) (Result, error) {
 	if c.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(c.Stdin)
 	}
+	var overflow overflowMark
 	stdout := &capBuffer{max: maxOut}
 	stderr := &capBuffer{max: maxOut}
+	if c.FailOnOverflow {
+		stdout.onOverflow = func() { overflow.set("stdout"); overflowKill() }
+		stderr.onOverflow = func() { overflow.set("stderr"); overflowKill() }
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	setProcessGroup(cmd)
@@ -188,6 +232,22 @@ func (x Exec) Run(ctx context.Context, c Cmd) (Result, error) {
 
 	runErr := cmd.Run()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+	if stream := overflow.get(); stream != "" {
+		// Node rejects with the maxBuffer error whatever the exit status turned out to be.
+		e := &Error{Cmd: c.Display(), Stdout: res.Stdout, Stderr: res.Stderr, Code: -1, Overflow: stream}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				e.Signal = signalName(ws.Signal())
+			} else {
+				e.Code = exitErr.ExitCode()
+			}
+		} else if runErr == nil {
+			e.Code = 0
+		}
+		res.ExitCode = e.Code
+		return res, e
+	}
 	if runErr == nil {
 		return res, nil
 	}
@@ -242,18 +302,51 @@ func signalName(s syscall.Signal) string {
 	return s.String()
 }
 
-// capBuffer keeps the first max bytes written and silently drops the rest.
+// overflowMark records the first stream that overflowed (stdout and stderr are copied by
+// separate goroutines).
+type overflowMark struct {
+	mu     sync.Mutex
+	stream string
+}
+
+func (o *overflowMark) set(s string) {
+	o.mu.Lock()
+	if o.stream == "" {
+		o.stream = s
+	}
+	o.mu.Unlock()
+}
+
+func (o *overflowMark) get() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.stream
+}
+
+// capBuffer keeps the first max bytes written and drops the rest; onOverflow, if set, is called
+// once when the first dropped byte arrives. It keeps accepting (and dropping) writes so the child
+// never blocks on a full pipe while it is being killed.
 type capBuffer struct {
-	buf bytes.Buffer
-	max int
+	buf        bytes.Buffer
+	max        int
+	onOverflow func()
+	overflowed bool
 }
 
 func (b *capBuffer) Write(p []byte) (int, error) {
-	if room := b.max - b.buf.Len(); room > 0 {
-		if len(p) <= room {
-			b.buf.Write(p)
-		} else {
-			b.buf.Write(p[:room])
+	room := b.max - b.buf.Len()
+	if room < 0 {
+		room = 0
+	}
+	if len(p) <= room {
+		b.buf.Write(p)
+		return len(p), nil
+	}
+	b.buf.Write(p[:room])
+	if !b.overflowed {
+		b.overflowed = true
+		if b.onOverflow != nil {
+			b.onOverflow()
 		}
 	}
 	return len(p), nil

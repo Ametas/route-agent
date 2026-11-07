@@ -6,6 +6,7 @@
 package clashapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -24,7 +25,7 @@ import (
 // FetchTimeout bounds the whole GET (AbortSignal.timeout(5000) in TS).
 const FetchTimeout = 5 * time.Second
 
-// maxBody caps the /connections response kept in memory.
+// maxBody is the default cap on a response kept in memory (Client.MaxBody).
 const maxBody = 256 << 20
 
 // Endpoint is the external_controller address and secret of a clash_api block.
@@ -166,12 +167,38 @@ func Parse(payload any, closed bool) []Record {
 	return out
 }
 
-// Client fetches /connections.
+// Client calls a local Clash API (sing-box's here, the rear core's in internal/rear).
 type Client struct {
 	// HTTP is the client to use; nil means a plain client (the per-call timeout still applies).
 	HTTP *http.Client
-	// Timeout overrides FetchTimeout (tests).
+	// Timeout bounds each whole call; 0 means FetchTimeout.
 	Timeout time.Duration
+	// MaxBody caps the response body kept in memory; 0 means 256 MiB.
+	MaxBody int64
+	// AlwaysBearer sends `Authorization: Bearer <secret>` even with an empty secret (the rear
+	// rule-provider probe did, rearRuleProviders.ts); otherwise the header goes only with a
+	// non-empty secret.
+	AlwaysBearer bool
+}
+
+// StatusError is a non-2xx answer. Its text is the one Fetch has always returned ("clash api
+// responded <code> for <path>"); callers with their own wording read Code (see StatusCode).
+type StatusError struct {
+	Code int
+	Path string
+}
+
+func (e *StatusError) Error() string {
+	return "clash api responded " + strconv.Itoa(e.Code) + " for " + e.Path
+}
+
+// StatusCode returns the HTTP status of a *StatusError.
+func StatusCode(err error) (int, bool) {
+	var e *StatusError
+	if errors.As(err, &e) {
+		return e.Code, true
+	}
+	return 0, false
 }
 
 // Fetch is fetchConnections: exactly ONE `GET http://<address>/connections` (there is no
@@ -180,25 +207,65 @@ type Client struct {
 // Error texts follow undici's so log lines read as before: "clash api responded <code> for
 // /connections", "fetch failed", "The operation was aborted due to timeout", V8's JSON error.
 func (c Client) Fetch(ctx context.Context, ep Endpoint) ([]Record, error) {
+	payload, err := c.Get(ctx, ep, "/connections")
+	if err != nil {
+		return nil, err
+	}
+	return Parse(payload, false), nil
+}
+
+// Get is one bounded `GET http://<address><path>` with the JSON body parsed by jsjson.Parse
+// (V8 semantics). Errors: "Failed to parse URL from <url>", *StatusError for a non-2xx answer,
+// "fetch failed" / "The operation was aborted due to timeout" (undici's texts) for transport
+// failures, V8's JSON error for a malformed body.
+func (c Client) Get(ctx context.Context, ep Endpoint, path string) (any, error) {
+	data, err := c.do(ctx, http.MethodGet, ep, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return jsjson.Parse(string(data))
+}
+
+// Put is one bounded `PUT http://<address><path>` with a JSON body; the answer's body (204 on
+// success) is not read. Errors as in Get.
+func (c Client) Put(ctx context.Context, ep Endpoint, path string, body []byte) error {
+	if body == nil {
+		body = []byte{}
+	}
+	_, err := c.do(ctx, http.MethodPut, ep, path, body)
+	return err
+}
+
+func (c Client) do(ctx context.Context, method string, ep Endpoint, path string, body []byte) ([]byte, error) {
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = FetchTimeout
 	}
+	limit := c.MaxBody
+	if limit <= 0 {
+		limit = maxBody
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	const p = "/connections"
-	rawURL := "http://" + ep.Address + p
+	rawURL := "http://" + ep.Address + path
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		return nil, errors.New("Failed to parse URL from " + rawURL)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
 	if err != nil {
 		return nil, errors.New("Failed to parse URL from " + rawURL)
 	}
-	if ep.Secret != "" {
+	if ep.Secret != "" || c.AlwaysBearer {
 		req.Header.Set("Authorization", "Bearer "+ep.Secret)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	hc := c.HTTP
 	if hc == nil {
@@ -210,17 +277,18 @@ func (c Client) Fetch(ctx context.Context, ep Endpoint) ([]Record, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, errors.New("clash api responded " + strconv.Itoa(resp.StatusCode) + " for " + p)
+		// Drain a little so the keep-alive connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		return nil, &StatusError{Code: resp.StatusCode, Path: path}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if body != nil {
+		return nil, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, transportError(ctx)
 	}
-	payload, err := jsjson.Parse(string(body))
-	if err != nil {
-		return nil, err
-	}
-	return Parse(payload, false), nil
+	return data, nil
 }
 
 func transportError(ctx context.Context) error {

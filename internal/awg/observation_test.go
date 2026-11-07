@@ -132,6 +132,27 @@ func TestGetAwgObservation(t *testing.T) {
 			t.Fatalf("%+v", r)
 		}
 	})
+	t.Run("conntrack -L: 32 MiB cap, overflow fails like Node maxBuffer", func(t *testing.T) {
+		e := newEnv(t)
+		e.sc.ok("awg show awg0 dump", dump)
+		e.sc.ok("conntrack -L", conntrackCLI+strings.Repeat(" ", 32<<20))
+		r, _ := e.svc.GetAwgObservation(authed(), &agentpb.AwgObservationRequest{})
+		if !r.Success || r.ConntrackAvailable || len(r.Flows) != 0 || r.Message != "2 peer(s), 0 flow(s)." {
+			t.Fatalf("%+v", r)
+		}
+		var found bool
+		for _, c := range e.run.Calls() {
+			if c.Display() == "conntrack -L" {
+				found = true
+				if c.MaxOutput != 32<<20 || !c.FailOnOverflow {
+					t.Fatalf("conntrack cmd %+v", c)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("conntrack -L not run")
+		}
+	})
 	t.Run("neither", func(t *testing.T) {
 		e := newEnv(t)
 		e.sc.ok("awg show awg0 dump", dump)

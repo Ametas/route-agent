@@ -20,19 +20,11 @@ const (
 	conntrackTimeout = 30 * time.Second
 	// conntrackMaxOutput is the 32 MiB maxBuffer TS gave `conntrack -L` (awgFlows.ts:194): on
 	// kernels without CONFIG_NF_CONNTRACK_PROCFS that command is the only source, and the runner's
-	// default 8 MiB cap would cut a busy node's table short.
+	// default 8 MiB cap would cut a busy node's table short. Past it the call fails like Node's
+	// maxBuffer (runner.Cmd.FailOnOverflow) and the observation reports conntrackAvailable=false,
+	// rather than flows from an arbitrary part of the table.
 	conntrackMaxOutput = 32 << 20
 )
-
-// bigOutput returns the runner for `conntrack -L`: the real runner with the 32 MiB cap (runner.Cmd
-// has no per-call cap, see the report), a substituted one (tests) as is.
-func bigOutput(r runner.Runner) runner.Runner {
-	if x, ok := r.(runner.Exec); ok {
-		x.MaxOutput = conntrackMaxOutput
-		return x
-	}
-	return r
-}
 
 // Peer is one row of `awg show <iface> dump` (awgFlows.ts:78-107).
 type Peer struct {
@@ -170,7 +162,10 @@ func (s *Service) readConntrack(ctx context.Context) (string, bool) {
 		return string(raw), true
 	}
 	s.Log.Debug("Kernel conntrack procfs unavailable, falling back to the conntrack utility", "err", err.Error())
-	res, err := bigOutput(s.Runner).Run(ctx, runner.Cmd{Name: "conntrack", Args: []string{"-L"}, Timeout: conntrackTimeout})
+	res, err := s.Runner.Run(ctx, runner.Cmd{
+		Name: "conntrack", Args: []string{"-L"}, Timeout: conntrackTimeout,
+		MaxOutput: conntrackMaxOutput, FailOnOverflow: true,
+	})
 	if err != nil {
 		s.Log.Debug("Kernel conntrack table unreadable — reporting peer counters only", "err", err.Error())
 		return "", false
