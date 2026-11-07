@@ -1,0 +1,54 @@
+# CI of the Go rewrite (branch go-rewrite, docs/go-rewrite/README.md). The TypeScript checks in
+# release.yml keep running until the final commit of the branch switches CI over to Go.
+name: go
+
+on:
+  push:
+    branches: [go-rewrite]
+  pull_request:
+    branches: [go-rewrite]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # git describe needs tags and history for the version string.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: generated code matches proto/agent.proto
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "$tmp/protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip
+          unzip -q "$tmp/protoc.zip" -d "$tmp/protoc"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+          PROTOC="$tmp/protoc/bin/protoc" bash scripts/gen-proto.sh
+          git diff --exit-code -- internal/agentpb
+      - name: build linux/amd64 and linux/arm64
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always)"
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X github.com/Ametas/route-agent/internal/version.Version=${version}" \
+              -o "dist-go/route-agent-linux-${arch}" ./cmd/route-agent
+          done
+          (cd dist-go && sha256sum route-agent-linux-* > checksums.txt && cat checksums.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-agent-binaries
+          path: dist-go/

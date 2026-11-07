@@ -18,3 +18,4 @@ GEMINI.md
 repomix*
 repomix-output.*
 repomix.config.*
+dist-go/

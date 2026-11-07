@@ -1,0 +1,37 @@
+package server
+
+// rpcOwner says which porting group implements each RPC (docs/go-rewrite/spec/). Until that
+// group lands, its RPCs answer codes.Unimplemented from unimplementedRPC below.
+var rpcOwner = map[string]string{
+	"ApplyConfig":                "B",
+	"StreamTelemetry":            "E",
+	"GetTelemetry":               "E",
+	"UpgradeSingbox":             "C",
+	"SyncOlcrtcInstance":         "F",
+	"DeleteOlcrtcInstance":       "F",
+	"StreamOlcrtcEvents":         "F",
+	"SelfUpdate":                 "A",
+	"UploadSingboxBinary":        "C",
+	"UploadAwgToolsBinary":       "C",
+	"UploadAwgGoBinary":          "C",
+	"UploadCaddyBinary":          "C",
+	"UploadMihomoBinary":         "C",
+	"UploadRearRuleSet":          "C",
+	"GetAwgObservation":          "D",
+	"ConfigureAwg":               "D",
+	"ConfigureCaddy":             "B",
+	"UploadOlcrtcAgentSrvBinary": "C",
+	"UploadMeshAwgKernelSource":  "C",
+	"ConfigureMeshTunnel":        "D",
+	"ManageFirewall":             "D",
+	"GetAgentInfo":               "A",
+	"RunNetworkDiagnostic":       "E",
+	"GetManagedCertificate":      "A",
+	"GetSingBoxUserTraffic":      "B",
+	"GetSingBoxConnections":      "B",
+	"GetRearConnections":         "F",
+	"ApplyTrafficThrottle":       "D",
+	"ConfigureRearSingbox":       "F",
+	"GetWarpKeyHealth":           "E",
+	"PullNodeWarnings":           "E",
+}
