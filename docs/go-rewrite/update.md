@@ -14,10 +14,13 @@ npm и сборки на узле. Код — `internal/update`. Переход 
 
 Имя вложения — `route-agent-linux-<GOARCH>` (`update.AssetName`); агент берёт то, что совпадает с
 его собственной `runtime.GOARCH`. Версия вшивается при сборке:
-`-ldflags "-X github.com/Ametas/route-agent/internal/version.Version=$(git describe --tags --always)"`,
+`-ldflags "-X github.com/Ametas/route-agent/internal/version.Version=$(git describe --tags --match 'v*')"`,
 и бинарник релиза обязан печатать её по `route-agent --version` в форме `vX.Y.Z[-N-gHASH]`.
-Сборка этих вложений — `.github/workflows/go.yml` (пока как артефакт CI ветки; публикация
-вложений к релизу добавляется в release-задание последним коммитом ветки).
+Собирает их `scripts/build-release.sh` (версия — `git describe --tags --match 'v*'`, чтобы
+подвижный тег `go-preview` в неё не попадал). Публикуются они в двух местах: задание `go-assets`
+в `.github/workflows/release.yml` прикладывает их к каждому релизу semantic-release на `main`, а
+задание `preview` в `go.yml` кладёт сборку ветки в пре-релиз `go-preview`. Подробнее —
+[`cutover.md`](cutover.md).
 
 Откуда берётся: `https://github.com/Ametas/route-agent/releases/latest/download/<вложение>`
 (`update.DefaultReleaseBaseURL`) — GitHub отдаёт вложение последнего релиза (не пре-релиза) по

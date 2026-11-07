@@ -1,5 +1,6 @@
 # CI of the Go rewrite (branch go-rewrite, docs/go-rewrite/README.md). The TypeScript checks in
-# release.yml keep running until the final commit of the branch switches CI over to Go.
+# release.yml keep running until the final commit of the branch switches CI over to Go
+# (docs/go-rewrite/cutover.md §B).
 name: go
 
 on:
@@ -36,19 +37,62 @@ jobs:
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
           PROTOC="$tmp/protoc/bin/protoc" bash scripts/gen-proto.sh
           git diff --exit-code -- internal/agentpb
+      - name: delivery scripts (shellcheck + dry runs against a local fake release)
+        run: bash scripts/test-delivery.sh
       - name: build linux/amd64 and linux/arm64
-        env:
-          CGO_ENABLED: "0"
         run: |
           set -euo pipefail
-          version="$(git describe --tags --always)"
-          for arch in amd64 arm64; do
-            GOOS=linux GOARCH="$arch" go build -trimpath \
-              -ldflags "-s -w -X github.com/Ametas/route-agent/internal/version.Version=${version}" \
-              -o "dist-go/route-agent-linux-${arch}" ./cmd/route-agent
-          done
-          (cd dist-go && sha256sum route-agent-linux-* > checksums.txt && cat checksums.txt)
+          # --match 'v*': the moving go-preview tag (job preview below) must never become the
+          # version — the orchestrator only understands vX.Y.Z[-N-gHASH] (spec A §7.3).
+          version="$(git describe --tags --match 'v*')"
+          bash scripts/build-release.sh "$version" dist-go
       - uses: actions/upload-artifact@v4
         with:
           name: route-agent-binaries
           path: dist-go/
+
+  # Preview channel (docs/go-rewrite/cutover.md §A): every push to go-rewrite that passed the
+  # checks replaces the assets of the prerelease `go-preview`, so a test node can run the branch
+  # before the merge (install-go.sh --channel preview). A prerelease never becomes
+  # releases/latest, so production SelfUpdate (releases/latest/download) is unaffected.
+  preview:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/go-rewrite'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Two pushes in a row must not interleave their uploads; the later one simply runs second.
+    concurrency:
+      group: go-preview
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: route-agent-binaries
+          path: dist-go
+      - name: move the go-preview tag and replace the prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag=go-preview
+          if gh api "repos/${GH_REPO}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/${tag}" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${tag}" -f sha="$SHA" >/dev/null
+          fi
+          notes="Preview build of the Go agent from branch go-rewrite, commit ${SHA}."
+          notes+=" Not a release: production nodes never take it (releases/latest skips prereleases)."
+          notes+=" Test node: install-go.sh --channel preview (docs/go-rewrite/cutover.md)."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --prerelease --latest=false --title "Go agent preview" --notes "$notes"
+          else
+            gh release create "$tag" --verify-tag --prerelease --latest=false --title "Go agent preview" --notes "$notes"
+          fi
+          # Binaries first, checksums last: a node installing in between gets a checksum mismatch
+          # (refused, nothing installed), never a binary paired with a stale but "valid" sum.
+          gh release upload "$tag" dist-go/route-agent-linux-amd64 dist-go/route-agent-linux-arm64 --clobber
+          gh release upload "$tag" dist-go/checksums.txt --clobber
+          gh release view "$tag" --json tagName,isPrerelease,assets --jq '{tagName, isPrerelease, assets: [.assets[].name]}'

@@ -36,7 +36,7 @@ func md(s string) context.Context {
 // Item 32.
 func TestManageFirewall(t *testing.T) {
 	fake := &runner.Fake{Handler: func(c runner.Cmd) (runner.Result, error) {
-		if c.Display() == "sudo ufw allow 53/udp" {
+		if c.Display() == "ufw allow 53/udp" {
 			return runner.FailWith(c, 1, "", "ERROR")
 		}
 		if c.Timeout <= 0 || c.Timeout > UfwTimeout {
@@ -49,7 +49,7 @@ func TestManageFirewall(t *testing.T) {
 	if err != nil || !r.Success || r.Message != "Successfully updated firewall rules: opened 2 UDP and 2 TCP ports." {
 		t.Fatalf("%+v %v", r, err)
 	}
-	want := []string{"sudo ufw allow 53/udp", "sudo ufw allow 51820/udp", "sudo ufw allow 443/tcp", "sudo ufw allow 65535/tcp", "sudo ufw reload"}
+	want := []string{"ufw allow 53/udp", "ufw allow 51820/udp", "ufw allow 443/tcp", "ufw allow 65535/tcp", "ufw reload"}
 	if got := fake.Displays(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%v", got)
 	}
@@ -72,7 +72,7 @@ func TestAllowMeshUDPPort(t *testing.T) {
 	svc(fake, true).AllowMeshUDPPort(context.Background(), 0)
 	svc(fake, true).AllowMeshUDPPort(context.Background(), 65536)
 	svc(fake, false).AllowMeshUDPPort(context.Background(), 51821)
-	if got := fake.Displays(); !reflect.DeepEqual(got, []string{"sudo ufw allow 51821/udp"}) {
+	if got := fake.Displays(); !reflect.DeepEqual(got, []string{"ufw allow 51821/udp"}) {
 		t.Fatalf("%v", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestOpenCloseUDP(t *testing.T) {
 		t.Fatal("error expected")
 	}
 	s.CloseUDPAndReload(context.Background(), 51820)
-	want := []string{"sudo ufw allow 51820/udp", "sudo ufw delete allow 51820/udp", "sudo ufw reload"}
+	want := []string{"ufw allow 51820/udp", "ufw delete allow 51820/udp", "ufw reload"}
 	if got := fake.Displays(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%v", got)
 	}

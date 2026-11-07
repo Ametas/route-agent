@@ -185,7 +185,7 @@ func TestConfigureFresh(t *testing.T) {
 	if !r.Success || r.Message != "Mesh AWG tunnel interface awgmesh0 configured with 2 peer(s)" {
 		t.Fatalf("%+v", r)
 	}
-	want := []string{"sudo ufw allow 51821/udp", "ip -o addr show dev awgmesh0", "systemctl restart route-awg@awgmesh0", "systemctl enable route-awg@awgmesh0"}
+	want := []string{"ufw allow 51821/udp", "ip -o addr show dev awgmesh0", "systemctl restart route-awg@awgmesh0", "systemctl enable route-awg@awgmesh0"}
 	if got := e.run.Displays(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%v", got)
 	}
@@ -203,14 +203,14 @@ func TestConfigureNoUfwAndBadPort(t *testing.T) {
 	e := newEnv(t)
 	e.ufwOK = false
 	_, _ = e.svc.ConfigureMeshTunnel(mdCtx(secret), appPayload())
-	if hasPrefix(e.run.Displays(), "sudo ufw") {
+	if hasPrefix(e.run.Displays(), "ufw") {
 		t.Fatal("ufw without ufw")
 	}
 	e2 := newEnv(t)
 	req := appPayload()
 	req.ListenPort = 70000
 	_, _ = e2.svc.ConfigureMeshTunnel(mdCtx(secret), req)
-	if hasPrefix(e2.run.Displays(), "sudo ufw") {
+	if hasPrefix(e2.run.Displays(), "ufw") {
 		t.Fatal("ufw for an out-of-range port")
 	}
 }

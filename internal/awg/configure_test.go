@@ -153,8 +153,8 @@ func TestConfigureAwgFreshStart(t *testing.T) {
 		"iptables -t nat -C POSTROUTING -o ens3 -j MASQUERADE",
 		"iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE",
 		"ip6tables -C FORWARD -i awg0 -j REJECT --reject-with icmp6-adm-prohibited",
-		"sudo ufw allow 51820/udp",
-		"sudo ufw reload",
+		"ufw allow 51820/udp",
+		"ufw reload",
 	}
 	if got := e.calls(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("calls:\n%s", strings.Join(got, "\n"))
@@ -181,7 +181,7 @@ func TestConfigureAwgPortZeroAndIfaceName(t *testing.T) {
 		t.Fatalf("%+v", resp)
 	}
 	calls := e.calls()
-	if !has(calls, "systemctl start route-awg@wg7") || hasPrefix(calls, "sudo ufw") || hasPrefix(calls, "sysctl -w net.ipv6") {
+	if !has(calls, "systemctl start route-awg@wg7") || hasPrefix(calls, "ufw") || hasPrefix(calls, "sysctl -w net.ipv6") {
 		t.Fatalf("%v", calls)
 	}
 	if !has(calls, "iptables -C FORWARD -i awg0 -j ACCEPT") {
@@ -346,8 +346,8 @@ func TestConfigureAwgDisableStaysDisabled(t *testing.T) {
 		"systemctl stop awg-quick@awg0",
 		"awg-quick down awg0",
 		"systemctl disable route-awg@awg0",
-		"sudo ufw delete allow 51820/udp",
-		"sudo ufw reload",
+		"ufw delete allow 51820/udp",
+		"ufw reload",
 	}
 	if got := e.calls(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("calls:\n%s", strings.Join(got, "\n"))

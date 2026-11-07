@@ -107,7 +107,7 @@ func (s *Service) readActivePorts() []float64 {
 }
 
 func (s *Service) ufw(ctx context.Context, args ...string) (runner.Result, error) {
-	return s.Runner.Run(ctx, runner.Cmd{Name: "sudo", Args: append([]string{"ufw"}, args...), Timeout: ufwTimeout})
+	return s.Runner.Run(ctx, runner.Cmd{Name: "ufw", Args: args, Timeout: ufwTimeout})
 }
 
 // syncEgressFirewall never fails the caller. Differences from TS: the allow/delete commands run

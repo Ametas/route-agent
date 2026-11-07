@@ -58,7 +58,7 @@ func TestApplyFirewallSyncTakesFirewallArea(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("apply never finished")
 	}
-	if !strings.Contains(strings.Join(h.fake.Displays(), "\n"), "sudo ufw allow 2053/udp") {
+	if !strings.Contains(strings.Join(h.fake.Displays(), "\n"), "ufw allow 2053/udp") {
 		t.Fatalf("%q", h.fake.Displays())
 	}
 }

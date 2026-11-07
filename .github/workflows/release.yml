@@ -5,7 +5,9 @@
 # (chore, docs, refactor, test, ci) релиза не даёт. Коммитов в main бот не делает: версия живёт в
 # теге, агент на узле читает её `git describe --tags` (system.service.ts).
 #
-# Релиз — только после зелёной проверки и только на main.
+# Релиз — только после зелёной проверки и только на main. За релизом — вложения Go-агента
+# (задание go-assets). Задание check пока проверяет TypeScript; его переключает на Go последний
+# коммит ветки go-rewrite (docs/go-rewrite/cutover.md §B).
 name: ci
 
 on:
@@ -38,6 +40,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      # Тег, который поставил ИМЕННО этот прогон semantic-release; пусто — релиза не было.
+      tag: ${{ steps.released.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,8 +51,62 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: release tags on HEAD before semantic-release
+        id: before
+        run: echo "tags=$(git tag --points-at HEAD --list 'v*' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
       # Пресет @9, а не @10: @10 требует conventional-changelog-writer@9, а release-notes-generator
       # из semantic-release 25 грузит старый — заметки к релизу не собираются (проверено dry-run).
       - run: npx --yes -p semantic-release@25 -p conventional-changelog-conventionalcommits@9 semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # semantic-release ставит тег в этом же чекауте (git tag + push), поэтому новый тег на HEAD,
+      # которого не было до него, и есть его релиз. Повторный прогон того же коммита (Re-run all
+      # jobs) релиза не делает и тег новым не считает — Go-вложения не перезаливаются.
+      - name: tag created by this run
+        id: released
+        env:
+          BEFORE: ${{ steps.before.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tag=""
+          for t in $(git tag --points-at HEAD --list 'v*'); do
+            case " ${BEFORE} " in
+              *" ${t} "*) ;;
+              *) tag="$t" ;;
+            esac
+          done
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release tag of this run: '${tag}'"
+
+  # Вложения Go-агента к релизу (docs/go-rewrite/update.md): оба бинарника и checksums.txt.
+  # SelfUpdate Go-агента и мост перехода (scripts/bridge-to-go.sh) берут их с
+  # releases/latest/download, поэтому у КАЖДОГО релиза main они обязаны быть. Нет релиза — задание
+  # пропускается. Упало — «Re-run failed jobs» (выход release сохраняется); узлы до тех пор
+  # получают 404 и остаются на чём были.
+  go-assets:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build with the release tag as the version
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: bash scripts/build-release.sh "$TAG" dist-go
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Бинарники первыми, суммы последними (как в go.yml).
+          gh release upload "$TAG" dist-go/route-agent-linux-amd64 dist-go/route-agent-linux-arm64 --clobber
+          gh release upload "$TAG" dist-go/checksums.txt --clobber

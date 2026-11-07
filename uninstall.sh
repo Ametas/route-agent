@@ -81,6 +81,10 @@ rm -f /etc/sudoers.d/route-agent-ufw
 # 3. Удаление конфигурационных файлов systemd
 echo "📂 Purging systemd unit configurations..."
 rm -f /etc/systemd/system/route-agent.service
+# Юнит TS-агента, сохранённый при переходе на Go (install-go.sh --convert, scripts/bridge-to-go.sh),
+# и сторож отката моста, если он ещё не отработал.
+rm -f /etc/systemd/system/route-agent.service.ts-backup
+systemctl stop route-agent-bridge-guard.timer 2>/dev/null || true
 rm -f /etc/systemd/system/sing-box.service
 rm -f /etc/systemd/system/olcrtc-agent-srv@.service
 rm -f /etc/systemd/system/route-rear-singbox.service

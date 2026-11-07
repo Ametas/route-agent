@@ -373,13 +373,13 @@ func TestApplyFirewallSync(t *testing.T) {
 	ufwCmds := func() []string {
 		var out []string
 		for _, d := range h.fake.Displays() {
-			if strings.HasPrefix(d, "sudo ufw") {
+			if strings.HasPrefix(d, "ufw") {
 				out = append(out, d)
 			}
 		}
 		return out
 	}
-	if got := strings.Join(ufwCmds(), "|"); got != "sudo ufw allow 2053/udp|sudo ufw reload" {
+	if got := strings.Join(ufwCmds(), "|"); got != "ufw allow 2053/udp|ufw reload" {
 		t.Fatal(got)
 	}
 	if got := h.read(ActivePortsCachePath); got != "[\n  2053\n]" {
@@ -391,7 +391,7 @@ func TestApplyFirewallSync(t *testing.T) {
 		t.Fatal("unchanged port set must not touch ufw")
 	}
 	h.apply(egressCfg, false)
-	if got := strings.Join(ufwCmds()[n:], "|"); got != "sudo ufw delete allow 2053/udp|sudo ufw reload" {
+	if got := strings.Join(ufwCmds()[n:], "|"); got != "ufw delete allow 2053/udp|ufw reload" {
 		t.Fatal(got)
 	}
 	if got := h.read(ActivePortsCachePath); got != "[]" {

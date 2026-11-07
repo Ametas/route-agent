@@ -2,8 +2,8 @@
 // §8, §7.3 step 1): the ManageFirewall RPC, the mesh UDP port, and the ufw open/close steps of
 // ConfigureAwg. The egress port sync run by ApplyConfig lives with its caller (internal/singbox).
 //
-// Every ufw command runs as `sudo ufw …` (argv, no shell — the TS strings had sudo although the
-// agent is root, and the unit keeps working with or without the sudoers drop-in) with a timeout,
+// Every ufw command runs as `ufw …` (argv, no shell; the TS strings had `sudo` although the agent
+// is root — dropped together with the sudoers drop-in, architecture §6 item 2) with a timeout,
 // one at a time under locks.Firewall: ufw has no robust locking of its rule files (spec D R12).
 package firewall
 
@@ -55,7 +55,7 @@ func (s *Service) UfwInstalled() bool {
 }
 
 func (s *Service) ufw(ctx context.Context, args ...string) (runner.Result, error) {
-	return s.Runner.Run(ctx, runner.Cmd{Name: "sudo", Args: append([]string{"ufw"}, args...), Timeout: UfwTimeout})
+	return s.Runner.Run(ctx, runner.Cmd{Name: "ufw", Args: args, Timeout: UfwTimeout})
 }
 
 // lock takes locks.Firewall; a failure (cancelled while waiting, out of order) is logged and the
@@ -69,7 +69,7 @@ func (s *Service) lock(ctx context.Context) (context.Context, func(), bool) {
 	return held, unlock, true
 }
 
-// OpenUDPAndReload is ConfigureAwg's `sudo ufw allow <port>/udp` then `sudo ufw reload`; the
+// OpenUDPAndReload is ConfigureAwg's `ufw allow <port>/udp` then `ufw reload`; the
 // reload is skipped when the allow failed (they shared one try block). The error is returned for
 // the caller's warning.
 func (s *Service) OpenUDPAndReload(ctx context.Context, port uint32) error {
@@ -85,8 +85,8 @@ func (s *Service) OpenUDPAndReload(ctx context.Context, port uint32) error {
 	return err
 }
 
-// CloseUDPAndReload is the disable path's `sudo ufw delete allow <port>/udp || true` then
-// `sudo ufw reload || true`: both errors ignored.
+// CloseUDPAndReload is the disable path's `ufw delete allow <port>/udp || true` then
+// `ufw reload || true`: both errors ignored.
 func (s *Service) CloseUDPAndReload(ctx context.Context, port uint32) {
 	held, unlock, ok := s.lock(ctx)
 	if !ok {
@@ -98,7 +98,7 @@ func (s *Service) CloseUDPAndReload(ctx context.Context, port uint32) {
 }
 
 // AllowMeshUDPPort is ensureMeshUdpPortAllowed (firewall.ts:44-56): only a port in 1..65535 and
-// only with ufw installed; `sudo ufw allow <port>/udp`, no reload, not added to the egress
+// only with ufw installed; `ufw allow <port>/udp`, no reload, not added to the egress
 // active-ports cache (so the egress sync never closes it). Errors are warnings.
 func (s *Service) AllowMeshUDPPort(ctx context.Context, port uint32) {
 	if port < 1 || port > 65535 || !s.UfwInstalled() {
