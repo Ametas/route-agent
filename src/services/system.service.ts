@@ -89,6 +89,85 @@ export async function getAgentInfoHandler(
 }
 
 /**
+ * Канал обновления (2026-11-07, решение владельца): `stable` — ветка `main`, `nightly` — ветка `alpha`
+ * (Go-агент). Оркестратор не ходит на узлы по SSH, поэтому перевод узла на nightly — тот же
+ * SelfUpdate с заголовком `x-agent-channel` в metadata: прото не меняется, хеш договора прежний.
+ *
+ * Без заголовка — как раньше: подтянуть upstream текущей ветки, ответ байт в байт прежний
+ * (в команде добавлен только `--force` у fetch, см. ниже).
+ * С заголовком в ответе стоит `channel=<значение>`: по нему оркестратор узнаёт, что агент заголовок
+ * понял (старый агент его молча пропускает и отвечает старым текстом).
+ */
+export const UPDATE_CHANNEL_HEADER = 'x-agent-channel';
+
+/** Канал → ветка. Белый список: в команду попадает только значение отсюда, не ввод запроса. */
+export const UPDATE_CHANNEL_BRANCHES: Readonly<Record<string, string>> = Object.freeze({
+  stable: 'main',
+  nightly: 'alpha',
+});
+
+// `--force` у fetch: без него git отказывается сдвигать тег, который на узле уже есть («would
+// clobber existing tag»), и обновление встаёт на первом шаге навсегда — каждый следующий fetch
+// падает так же. Так ломал узлы подвижный тег пре-релиза Go-агента.
+const LEGACY_UPDATE_COMMAND =
+  'cd /opt/route-agent && git fetch --all --tags --force && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
+
+const LEGACY_UPDATE_MESSAGE = 'Self-update sequence initiated. Agent will pull code and restart in 1 second.';
+
+export type SelfUpdatePlan =
+  | { accepted: true; message: string; command: string }
+  | { accepted: false; message: string };
+
+/**
+ * Значение заголовка канала: `undefined`, если заголовка нет вовсе. Пустое значение — это
+ * присланный заголовок, и он отвергается как неизвестный канал.
+ */
+export function extractUpdateChannelFromMetadata(call: { metadata?: { get(key: string): unknown[] } }): string | undefined {
+  const values = call.metadata ? call.metadata.get(UPDATE_CHANNEL_HEADER) : [];
+  if (!values || values.length === 0) return undefined;
+  const first = values[0];
+  return Buffer.isBuffer(first) ? first.toString('utf-8') : String(first);
+}
+
+/**
+ * Что сделает SelfUpdate: ответ и команда обновления. Чистая функция, чтобы проверять без узла.
+ *
+ * Смена ветки — `checkout -B <ветка> HEAD`, затем `reset --hard @{u}`, а не сразу `checkout` на
+ * удалённую ветку: reset оставляет прежний коммит в ORIG_HEAD, и мост на Go-агента (ветка `alpha`)
+ * записывает его для отката.
+ */
+export function planSelfUpdate(channel: string | undefined): SelfUpdatePlan {
+  if (channel === undefined) {
+    return { accepted: true, message: LEGACY_UPDATE_MESSAGE, command: LEGACY_UPDATE_COMMAND };
+  }
+
+  const branch = Object.prototype.hasOwnProperty.call(UPDATE_CHANNEL_BRANCHES, channel)
+    ? UPDATE_CHANNEL_BRANCHES[channel]
+    : undefined;
+  if (!branch) {
+    return { accepted: false, message: `Unknown update channel '${channel.slice(0, 32)}'.` };
+  }
+
+  const command = [
+    'cd /opt/route-agent',
+    `git fetch --force --tags origin +refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    `git checkout -q -f -B ${branch} HEAD`,
+    `git branch -q --set-upstream-to=origin/${branch} ${branch}`,
+    'git reset --hard @{u}',
+    'git clean -fd',
+    'npm ci',
+    'npm run build',
+    'systemctl restart route-agent',
+  ].join(' && ');
+
+  return {
+    accepted: true,
+    message: `Self-update sequence initiated (channel=${channel}). Agent will switch to branch ${branch} and restart in 1 second.`,
+    command,
+  };
+}
+
+/**
  * RPC Обработчик SelfUpdate
  */
 export async function selfUpdateHandler(
@@ -101,18 +180,20 @@ export async function selfUpdateHandler(
     return callback(null, { success: false, message: 'Invalid orchestrator secret token.' });
   }
 
+  const plan = planSelfUpdate(extractUpdateChannelFromMetadata(call));
+  if (!plan.accepted) {
+    logger.warn({ message: plan.message }, 'SelfUpdate rejected: unknown update channel');
+    return callback(null, { success: false, message: plan.message });
+  }
+
   // 1. Отправляем успешный ответ клиенту до перезапуска службы
-  callback(null, {
-    success: true,
-    message: 'Self-update sequence initiated. Agent will pull code and restart in 1 second.'
-  });
+  callback(null, { success: true, message: plan.message });
 
   // 2. Асинхронно запускаем процесс обновления с задержкой в 1 секунду
   setTimeout(async () => {
     try {
       logger.info('Starting agent self-update sequence...');
-      const updateCmd = 'cd /opt/route-agent && git fetch --all --tags && git reset --hard @{u} && git clean -fd && npm ci && npm run build && systemctl restart route-agent';
-      await execAsync(updateCmd);
+      await execAsync(plan.command);
     } catch (err: any) {
       logger.error({ err: err.stderr || err.message }, 'Failed to execute self-update sequence');
     }
