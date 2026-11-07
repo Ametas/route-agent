@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Ametas/route-agent/internal/binaries/dkms"
+	"github.com/Ametas/route-agent/internal/locks"
 )
 
 const tarTimeout = 60 * time.Second
@@ -31,7 +32,7 @@ func (s *Service) UploadMeshAwgKernelSource(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadMeshAwgKernelSource", dir: s.tempDir(), prefix: "amneziawg_kernel_src_", suffix: ".tar.gz",
 		maxBytes: s.MaxKernelSrcBytes, unauthEmpty: msgNoValidSource, empty: msgNoValidSource,
-		failPrefix: prefixKernelFailed, lockKey: "mesh-kernel",
+		failPrefix: prefixKernelFailed, area: locks.Mesh,
 	}, s.applyMeshKernel)
 }
 

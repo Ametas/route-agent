@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 )
 
 const bashCheckTimeout = 15 * time.Second
 
-// awgLockKey: tools, awg-quick and amneziawg-go all restart the same AWG units, so their apply
-// steps are serialized together.
-const awgLockKey = "awg"
+// Tools, awg-quick and amneziawg-go all restart the same AWG units, so their apply steps share
+// one area lock, locks.AWG — the one ConfigureAwg (group D) takes too.
 
 func (s *Service) awgToolsPath() string { return or(s.cfg.AwgToolsBinaryPath, defaultAwgToolsPath) }
 func (s *Service) awgQuickPath() string { return or(s.cfg.AwgQuickBinaryPath, defaultAwgQuickPath) }
@@ -29,7 +29,7 @@ func (s *Service) UploadAwgToolsBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadAwgToolsBinary", dir: s.binaryTempDir(tools), prefix: ".awg-tools.upload-", suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: msgNoValidBinary, empty: msgNoValidBinary,
-		failPrefix: prefixUploadFailed, lockKey: awgLockKey,
+		failPrefix: prefixUploadFailed, area: locks.AWG,
 	}, s.applyAwgTools)
 }
 
@@ -70,7 +70,7 @@ func (s *Service) UploadAwgGoBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadAwgGoBinary", dir: s.binaryTempDir(target), prefix: tempPrefix(target), suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: msgNoValidBinary, empty: msgNoValidBinary,
-		failPrefix: prefixUploadFailed, lockKey: awgLockKey,
+		failPrefix: prefixUploadFailed, area: locks.AWG,
 	}, func(ctx context.Context, r received) (Result, error) {
 		if err := s.smokeELF(ctx, r.path, "--version"); err != nil {
 			return Result{}, err

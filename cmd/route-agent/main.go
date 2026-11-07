@@ -25,6 +25,7 @@ import (
 	"github.com/Ametas/route-agent/internal/contract"
 	"github.com/Ametas/route-agent/internal/fsx"
 	"github.com/Ametas/route-agent/internal/lifecycle"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server"
 	"github.com/Ametas/route-agent/internal/server/auth"
@@ -89,6 +90,9 @@ type deps struct {
 	auth      *auth.Verifier
 	version   *version.Resolver
 	exe       string
+	// locks is the ONE area lock registry of the process (internal/locks): every group's service
+	// gets this instance, so RPCs of different groups on the same area serialize.
+	locks *locks.Registry
 }
 
 func run(cfg *config.Config, log *slog.Logger) error {
@@ -109,6 +113,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		auth:      auth.New(cfg.EgressControlSecret),
 		version:   &version.Resolver{Runner: r},
 		exe:       exe,
+		locks:     locks.New(),
 	}
 
 	bg := &lifecycle.Group{Log: log}

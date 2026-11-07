@@ -4,8 +4,11 @@ import (
 	"context"
 	"strconv"
 
+	"google.golang.org/grpc/status"
+
 	"github.com/Ametas/route-agent/internal/agentpb"
 	"github.com/Ametas/route-agent/internal/jsjson"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/server/auth"
 )
 
@@ -28,11 +31,21 @@ func (s *Service) ApplyConfig(ctx context.Context, req *agentpb.ConfigPayload) (
 		s.Log.Warn("Unauthorized gRPC execution blocked")
 		return &agentpb.ConfigResponse{Success: false, Message: auth.InvalidSecretMessage}, nil
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
+	// One sing-box apply at a time, shared with UploadSingboxBinary (internal/locks). The wait
+	// honours the client: an orchestrator that gave up does not get its push applied later.
+	held, unlock, err := s.locks().Lock(ctx, locks.SingBox)
+	if err != nil {
+		if ctx.Err() != nil {
+			s.Log.Warn("ApplyConfig abandoned while waiting for the sing-box lock", "err", err.Error())
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		msg, _ := s.internalError(err)
+		return &agentpb.ConfigResponse{Success: false, Message: msg}, nil
+	}
+	defer unlock()
 	// The orchestrator's 60 s deadline must not cut a write+reload in half: TS kept working after
 	// the client gave up, and every step here has its own timeout.
-	msg, ok := s.apply(context.WithoutCancel(ctx), req.GetConfigJson(), req.GetForceReload())
+	msg, ok := s.apply(context.WithoutCancel(held), req.GetConfigJson(), req.GetForceReload())
 	return &agentpb.ConfigResponse{Success: ok, Message: msg}, nil
 }
 

@@ -22,8 +22,12 @@ import (
 //	h.ApplyConfig = sb.ApplyConfig
 //	h.ConfigureCaddy = sb.ConfigureCaddy
 //
+// Pass d.locks (the shared area lock registry, internal/locks) to every service that changes an
+// area; its package doc lists which RPC takes which lock and the order for nesting.
+//
 // Fields left nil answer codes.Unimplemented (internal/server/stubs.go).
 func buildHandlers(d deps) *server.Handlers {
+	d = withLocks(d)
 	h := &server.Handlers{}
 
 	// Group A — process, security, lifecycle (spec A).
@@ -49,11 +53,11 @@ func buildHandlers(d deps) *server.Handlers {
 	// sb is also what later groups reuse: sb.Version (E, C), sb.ValidateConfig (F),
 	// sb.DetectCoreNotListening (E, PullNodeWarnings); caddy.FixPermissions,
 	// caddy.ResolveBinary and caddy.LoadDNSProviderEnv are free functions.
-	sb := &singbox.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log}
+	sb := &singbox.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Locks: d.locks}
 	h.ApplyConfig = sb.ApplyConfig
 	h.GetSingBoxUserTraffic = sb.GetSingBoxUserTraffic
 	h.GetSingBoxConnections = sb.GetSingBoxConnections
-	cdy := &caddy.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log}
+	cdy := &caddy.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log, Locks: d.locks}
 	h.ConfigureCaddy = cdy.ConfigureCaddy
 	// Group C — binaries, rule sets, kernel source (spec C; cmd/route-agent/wire_binaries.go).
 	wireBinaries(h, newBinaries(d))

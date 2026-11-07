@@ -7,42 +7,17 @@ import (
 	"strings"
 
 	"github.com/Ametas/route-agent/internal/agentpb"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
-	"github.com/Ametas/route-agent/internal/systemd"
+	"github.com/Ametas/route-agent/internal/singbox"
 )
 
-func (s *Service) singboxPath() string { return or(s.cfg.SingboxBinaryPath, defaultSingboxPath) }
+func (s *Service) singboxPath() string { return or(s.cfg.SingboxBinaryPath, singbox.DefaultBinaryPath) }
 
-// SingboxUnit is the sing-box.service content (src/utils/singbox.ts:94-107, spec C §1 step 10),
-// byte-exact. It must NOT carry CapabilityBoundingSet/AmbientCapabilities: the bounding set
-// stripped CAP_KILL from ExecReload and broke reload on a node whose process belonged to another
-// user (mo-nl-node, 2026-09-04).
-//
-// TODO(group B landing): group B's singbox package also renders this unit; keep ONE copy (spec B
-// §5.2 and C §1 describe the same function) and call it from here.
-func SingboxUnit(bin, cfg string) string {
-	return "[Unit]\n" +
-		"Description=sing-box service\n" +
-		"After=network.target nss-lookup.target\n" +
-		"\n" +
-		"[Service]\n" +
-		"ExecStart=" + bin + " run -c " + cfg + "\n" +
-		"Restart=always\n" +
-		"RestartSec=5\n" +
-		"ExecReload=/bin/sh -c \"" + bin + " check -c " + cfg + " && /bin/kill -HUP $MAINPID\"\n" +
-		"\n" +
-		"[Install]\n" +
-		"WantedBy=multi-user.target\n"
-}
-
-// EnsureSingboxUnit is ensureSingboxSystemdUnit: write only on a byte difference, then
-// daemon-reload; reports whether it wrote. Errors are logged, never returned.
-func (s *Service) EnsureSingboxUnit(ctx context.Context) bool {
-	return systemd.EnsureUnit(ctx, s.fs, s.systemctl, s.log, "sing-box",
-		or(s.cfg.SingboxUnitFilePath, "/etc/systemd/system/sing-box.service"),
-		SingboxUnit(s.singboxPath(), or(s.cfg.SingboxConfigPath, "/etc/sing-box/config.json")))
-}
+// The sing-box.service unit (spec C §1 step 10, spec B §5.2 — the same TS function) has ONE
+// renderer: singbox.UnitContent / singbox.EnsureUnit (internal/singbox/unit.go), which also
+// carries why the unit has no CapabilityBoundingSet.
 
 // UploadSingboxBinary implements the RPC (spec C §1).
 func (s *Service) UploadSingboxBinary(stream UploadStream) error {
@@ -50,7 +25,7 @@ func (s *Service) UploadSingboxBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadSingboxBinary", dir: s.binaryTempDir(target), prefix: tempPrefix(target), suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: auth.InvalidSecretMessage, empty: msgNoData,
-		failPrefix: prefixUploadFailed, lockKey: "bin:" + target,
+		failPrefix: prefixUploadFailed, area: locks.SingBox,
 	}, func(ctx context.Context, r received) (Result, error) { return s.applySingbox(ctx, r, target) })
 }
 
@@ -75,7 +50,7 @@ func (s *Service) applySingbox(ctx context.Context, r received, target string) (
 			cfgPath + ". Прежний бинарь оставлен на месте, сервис не тронут.\n" + errText), nil
 	}
 
-	wasActive := s.unitActive(ctx, "sing-box")
+	wasActive := s.systemctl.Active(ctx, "sing-box")
 	hadPrev, err := s.install(r.path, target)
 	if err != nil {
 		return Result{}, err
@@ -86,7 +61,7 @@ func (s *Service) applySingbox(ctx context.Context, r received, target string) (
 
 	// Restart unconditionally, even when the unit file changed: only restart execs the new file
 	// (incident 2026-09-20; never RELOAD_COMMAND, never enable --now — singboxBinarySwap.test.ts).
-	if s.EnsureSingboxUnit(ctx) {
+	if singbox.EnsureUnit(ctx, s.fs, s.systemctl, s.log, s.cfg, "") {
 		if err := s.systemctl.Enable(ctx, "sing-box"); err != nil {
 			s.log.Warn("Failed to enable sing-box unit after provisioning", "err", err.Error())
 		}
@@ -122,11 +97,6 @@ func (s *Service) restartSingbox(ctx context.Context) error {
 		s.log.Warn("Restart command failed after binary upgrade", "err", err.Error())
 	}
 	return err
-}
-
-func (s *Service) unitActive(ctx context.Context, unit string) bool {
-	st, err := s.systemctl.IsActive(ctx, unit)
-	return err == nil && st == "active"
 }
 
 // verifySingboxAcceptsLiveConfigs is verifyBinaryAcceptsLiveConfigs (binary.service.ts:40-54):

@@ -8,12 +8,14 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
+
+	"google.golang.org/grpc/status"
 
 	"github.com/Ametas/route-agent/internal/agentpb"
 	"github.com/Ametas/route-agent/internal/certs"
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
@@ -42,9 +44,20 @@ type Service struct {
 	// CamouflageRoots overrides DefaultCamouflageRoots (tests); nil means the default.
 	CamouflageRoots []string
 
-	// mu serializes Caddy applies (spec B §4.6, R6): two calls no longer share Caddyfile.bak or
-	// interleave writes and reloads; the second waits and then usually hits "already current".
-	mu sync.Mutex
+	// Locks is the agent-wide area lock registry (internal/locks). ConfigureCaddy holds
+	// locks.Caddy (spec B §4.6, R6), shared with UploadCaddyBinary (group C): two applies no
+	// longer share Caddyfile.bak or interleave writes and reloads, and a binary swap never lands
+	// between a validate and a reload; the second waits and then usually hits "already current".
+	// nil means a registry private to this Service (tests).
+	Locks    *locks.Registry
+	ownLocks locks.Registry
+}
+
+func (s *Service) locks() *locks.Registry {
+	if s.Locks != nil {
+		return s.Locks
+	}
+	return &s.ownLocks
 }
 
 // ConfigureCaddy: auth M|B (CaddyConfigPayload has no body secret, so metadata only in
@@ -54,11 +67,21 @@ func (s *Service) ConfigureCaddy(ctx context.Context, req *agentpb.CaddyConfigPa
 		s.Log.Warn("Unauthorized ConfigureCaddy request blocked")
 		return &agentpb.CaddyConfigResponse{Success: false, Message: auth.InvalidSecretMessage}, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// The wait honours the client (a caller that gave up does not get its config applied later);
+	// the apply itself does not.
+	held, unlock, err := s.locks().Lock(ctx, locks.Caddy)
+	if err != nil {
+		if ctx.Err() != nil {
+			s.Log.Warn("ConfigureCaddy abandoned while waiting for the Caddy lock", "err", err.Error())
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		s.Log.Error("Failed to configure Caddy", "err", err.Error())
+		return &agentpb.CaddyConfigResponse{Success: false, Message: err.Error()}, nil
+	}
+	defer unlock()
 	// The orchestrator's deadline must not kill a reload half way: TS kept working after the
 	// client gave up, and every command here has its own timeout.
-	msg, ok := s.apply(context.WithoutCancel(ctx), req)
+	msg, ok := s.apply(context.WithoutCancel(held), req)
 	return &agentpb.CaddyConfigResponse{Success: ok, Message: msg}, nil
 }
 
@@ -152,13 +175,7 @@ func (s *Service) apply(ctx context.Context, req *agentpb.CaddyConfigPayload) (s
 	// 1. Validate with the binary that will run it, with the DNS-provider env merged in:
 	// EnvironmentFile= reaches only processes systemd starts, not this ad-hoc child.
 	bin := ResolveBinary(s.FS, s.Cfg)
-	_, err = s.Runner.Run(ctx, runner.Cmd{
-		Name:    bin,
-		Args:    []string{"validate", "--config", caddyfile},
-		Env:     mergedEnv(LoadDNSProviderEnv(s.FS, CloudflareEnvPath)),
-		Timeout: validateTimeout,
-	})
-	if err != nil {
+	if _, err = s.Runner.Run(ctx, ValidateCmd(s.FS, bin, caddyfile)); err != nil {
 		restore()
 		valMsg := validateFailureText(bin, caddyfile, err)
 		s.Log.Error("Caddyfile validation failed", "err", valMsg)
@@ -204,10 +221,7 @@ func validateFailureText(bin, caddyfile string, err error) string {
 	return msg
 }
 
-func (s *Service) caddyActive(ctx context.Context) bool {
-	state, err := s.Systemctl.IsActive(ctx, "caddy")
-	return err == nil && state == "active"
-}
+func (s *Service) caddyActive(ctx context.Context) bool { return s.Systemctl.Active(ctx, "caddy") }
 
 // sanitizeConfigInput strips CR/LF and trims (config.service.ts:27-30).
 func sanitizeConfigInput(v string) string {

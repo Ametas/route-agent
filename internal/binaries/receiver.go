@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/Ametas/route-agent/internal/agentpb"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/server/auth"
 )
 
@@ -43,8 +44,9 @@ type receiveSpec struct {
 	empty string
 	// failPrefix precedes an error text (receive or apply failure).
 	failPrefix string
-	// lockKey serializes apply steps of the same target; "" means no lock.
-	lockKey string
+	// area is the area lock (internal/locks) the apply step holds; "" means none. It is shared
+	// with the other groups' RPCs on the same area (ApplyConfig, ConfigureCaddy, ConfigureAwg…).
+	area locks.Name
 }
 
 // received is the completely received upload handed to apply.
@@ -147,12 +149,22 @@ func (s *Service) receive(stream UploadStream, spec receiveSpec, apply applyFunc
 	}
 	f = nil
 
+	// The wait for the area (e.g. behind an ApplyConfig holding sing-box) is part of the apply and
+	// detached from the client like the rest of it: once the half-close is in, the upload is
+	// applied (spec C §12 item 34). Only a programming error (lock order) fails here.
 	applyCtx := context.WithoutCancel(ctx)
+	unlock := func() {}
+	if spec.area != "" {
+		var err error
+		if applyCtx, unlock, err = s.locks.Lock(applyCtx, spec.area); err != nil {
+			_ = os.Remove(path)
+			s.log.Error("Failed to take the area lock", "rpc", spec.rpc, "err", err.Error())
+			return answer(stream, fail(spec.failPrefix+err.Error()))
+		}
+	}
 	var res Result
 	func() {
-		if spec.lockKey != "" {
-			defer s.lock(spec.lockKey)()
-		}
+		defer unlock()
 		var err error
 		res, err = apply(applyCtx, received{path: path, version: version, targetBinary: target, bytes: n})
 		if err != nil {

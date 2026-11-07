@@ -5,6 +5,7 @@ import (
 
 	"github.com/Ametas/route-agent/internal/fsx"
 	"github.com/Ametas/route-agent/internal/jsjson"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 )
 
@@ -111,12 +112,19 @@ func (s *Service) ufw(ctx context.Context, args ...string) (runner.Result, error
 
 // syncEgressFirewall never fails the caller. Differences from TS: the allow/delete commands run
 // one after another instead of in parallel (ufw is not safe for concurrent writers, spec B R17),
-// and the cache is written atomically.
+// and the cache is written atomically, under locks.Firewall (nested inside the SingBox lock that
+// ApplyConfig holds; group D's ManageFirewall takes the same lock) so ufw never sees two writers.
 func (s *Service) syncEgressFirewall(ctx context.Context, cfg any) {
 	if _, err := s.lookPath("ufw"); err != nil {
 		s.Log.Warn("ufw is not installed on this system; skipping egress firewall synchronization")
 		return
 	}
+	_, unlock, err := s.locks().Lock(ctx, locks.Firewall)
+	if err != nil {
+		s.Log.Error("Egress firewall sync skipped: could not take the firewall lock", "err", err.Error())
+		return
+	}
+	defer unlock()
 	newPorts := ExtractUDPTunnelPorts(cfg)
 	plan := PlanFirewallSync(newPorts, s.readActivePorts())
 	if !plan.NeedsReload {

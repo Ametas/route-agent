@@ -8,6 +8,7 @@ import (
 
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
@@ -63,7 +64,7 @@ func (s *Service) UploadOlcrtcAgentSrvBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadOlcrtcAgentSrvBinary", dir: s.binaryTempDir(target), prefix: tempPrefix(target), suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: auth.InvalidSecretMessage, empty: msgNoData,
-		failPrefix: prefixUploadFailed, lockKey: "bin:" + target,
+		failPrefix: prefixUploadFailed, area: locks.Olcrtc,
 	}, func(ctx context.Context, r received) (Result, error) { return s.applyOlcrtc(ctx, r, target) })
 }
 

@@ -17,12 +17,12 @@ package singbox
 import (
 	"log/slog"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/Ametas/route-agent/internal/clashapi"
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
@@ -65,8 +65,12 @@ type Service struct {
 	// Now is the clock of the listener warning; nil means time.Now.
 	Now func() time.Time
 
-	// applyMu serializes ApplyConfig (spec B §1.6, R6): one read-compare-write-reload at a time.
-	applyMu sync.Mutex
+	// Locks is the agent-wide area lock registry (internal/locks), shared with UploadSingboxBinary
+	// (group C) and ManageFirewall (group D). ApplyConfig holds locks.SingBox for its whole
+	// read-compare-write-reload (spec B §1.6, R6) and nests locks.Firewall around the ufw sync.
+	// nil means a registry private to this Service (tests).
+	Locks    *locks.Registry
+	ownLocks locks.Registry
 	// traffic is the per-connection baseline of GetSingBoxUserTraffic.
 	traffic trafficState
 }
@@ -81,6 +85,13 @@ func orDefault(v, def string) string {
 func (s *Service) configPath() string { return orDefault(s.Cfg.SingboxConfigPath, DefaultConfigPath) }
 func (s *Service) binaryPath() string { return orDefault(s.Cfg.SingboxBinaryPath, DefaultBinaryPath) }
 func (s *Service) unitPath() string   { return orDefault(s.Cfg.SingboxUnitFilePath, DefaultUnitPath) }
+
+func (s *Service) locks() *locks.Registry {
+	if s.Locks != nil {
+		return s.Locks
+	}
+	return &s.ownLocks
+}
 
 func (s *Service) lookPath(name string) (string, error) {
 	if s.LookPath != nil {

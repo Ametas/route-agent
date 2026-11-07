@@ -11,6 +11,7 @@ import (
 
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
@@ -80,7 +81,7 @@ func (s *Service) UploadMihomoBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadMihomoBinary", dir: s.binaryTempDir(target), prefix: tempPrefix(target), suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: auth.InvalidSecretMessage, empty: msgNoData,
-		failPrefix: prefixUploadFailed, lockKey: "bin:" + target,
+		failPrefix: prefixUploadFailed, area: locks.Rear,
 	}, func(ctx context.Context, r received) (Result, error) { return s.applyMihomo(ctx, r, target) })
 }
 
@@ -96,7 +97,7 @@ func (s *Service) applyMihomo(ctx context.Context, r received, target string) (R
 			cfgPath + ". Прежний бинарь оставлен на месте. " + truncate(errText, 400)), nil
 	}
 	unit, provisioned := s.rear.MihomoUnit()
-	wasActive := provisioned && s.unitActive(ctx, unit)
+	wasActive := provisioned && s.systemctl.Active(ctx, unit)
 	hadPrev, err := s.install(r.path, target)
 	if err != nil {
 		return Result{}, err
@@ -134,7 +135,7 @@ func (s *Service) UploadRearRuleSet(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadRearRuleSet", dir: s.tempDir(), prefix: "ruleset_", suffix: ".tmp",
 		maxBytes: s.MaxRuleSetBytes, unauthEmpty: auth.InvalidSecretMessage, empty: msgNoData,
-		failPrefix: prefixUploadFailed, lockKey: "ruleset",
+		failPrefix: prefixUploadFailed, area: locks.Rear,
 	}, s.applyRuleSet)
 }
 

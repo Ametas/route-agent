@@ -4,11 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/Ametas/route-agent/internal/config"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
 	"github.com/Ametas/route-agent/internal/systemd"
@@ -28,9 +28,6 @@ const (
 	defaultAwgToolsPath                = "/usr/local/bin/awg"
 	defaultAwgQuickPath                = "/usr/local/bin/awg-quick"
 	defaultAwgGoPath                   = "/usr/local/bin/amneziawg-go"
-	defaultSingboxPath                 = "/usr/local/bin/sing-box"
-	defaultCaddyCustomPath             = "/usr/local/bin/caddy-custom"
-	defaultCaddyfilePath               = "/etc/caddy/Caddyfile"
 	defaultSingboxRestartCommand       = "systemctl restart sing-box"
 )
 
@@ -70,6 +67,10 @@ type Deps struct {
 	Olcrtc    OlcrtcHooks
 	Mesh      MeshKernelInstaller
 	Telemetry Telemetry
+
+	// Locks is the agent-wide area lock registry (internal/locks) shared with the other groups'
+	// services; nil → a registry private to this Service.
+	Locks *locks.Registry
 }
 
 // Service implements the group C handlers.
@@ -99,21 +100,22 @@ type Service struct {
 	// "" → os.TempDir()). Binaries are received next to their target instead.
 	TempDir string
 
-	locksMu sync.Mutex
-	locks   map[string]*sync.Mutex
+	locks *locks.Registry
 }
 
 // New builds the service with production defaults.
 func New(d Deps) *Service {
 	s := &Service{
 		auth: d.Auth, runner: d.Runner, fs: d.FS, systemctl: d.Systemctl, cfg: d.Cfg, log: d.Log,
-		rear: d.Rear, olcrtc: d.Olcrtc, mesh: d.Mesh, telemetry: d.Telemetry,
+		rear: d.Rear, olcrtc: d.Olcrtc, mesh: d.Mesh, telemetry: d.Telemetry, locks: d.Locks,
 		Arch:              runtime.GOARCH,
 		MaxBinaryBytes:    DefaultMaxBinaryBytes,
 		MaxRuleSetBytes:   DefaultMaxRuleSetBytes,
 		MaxKernelSrcBytes: DefaultMaxKernelSrcBytes,
 		PostCheckSettle:   defaultPostCheckSettle,
-		locks:             map[string]*sync.Mutex{},
+	}
+	if s.locks == nil {
+		s.locks = locks.New()
 	}
 	if s.rear == nil {
 		s.rear = &DefaultRear{Runner: d.Runner, FS: d.FS, Systemctl: d.Systemctl, Cfg: d.Cfg, Log: d.Log}
@@ -125,23 +127,6 @@ func New(d Deps) *Service {
 		s.mesh = newDefaultMeshInstaller(d)
 	}
 	return s
-}
-
-// lock serializes apply steps per key (one upload of one target at a time). A second upload of
-// the same target waits for the first and then applies its own file (last one wins, in order).
-func (s *Service) lock(key string) func() {
-	s.locksMu.Lock()
-	if s.locks == nil {
-		s.locks = map[string]*sync.Mutex{}
-	}
-	m, found := s.locks[key]
-	if !found {
-		m = &sync.Mutex{}
-		s.locks[key] = m
-	}
-	s.locksMu.Unlock()
-	m.Lock()
-	return m.Unlock
 }
 
 func (s *Service) settle(ctx context.Context) {

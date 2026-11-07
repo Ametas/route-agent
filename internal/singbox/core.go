@@ -73,10 +73,7 @@ func (s *Service) IsFork(ctx context.Context) bool {
 
 // UnitActive is isSingboxUnitActive: `systemctl is-active sing-box` prints "active". Any other
 // state, and a failure to ask, is "not active".
-func (s *Service) UnitActive(ctx context.Context) bool {
-	state, err := s.Systemctl.IsActive(ctx, "sing-box")
-	return err == nil && state == "active"
-}
+func (s *Service) UnitActive(ctx context.Context) bool { return s.Systemctl.Active(ctx, "sing-box") }
 
 // ImageStale is isSingboxImageStale: the running sing-box executes a binary that has since been
 // replaced on disk (/proc/<MainPID>/exe ends with " (deleted)"). A reload would SIGHUP the same

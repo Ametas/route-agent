@@ -90,6 +90,13 @@ func (s Systemctl) IsActive(ctx context.Context, unit string) (string, error) {
 	return s.state(ctx, "is-active", unit)
 }
 
+// Active reports whether `systemctl is-active <unit>` prints "active". Any other state, and a
+// failure to ask, is "not active" (isSingboxUnitActive and its Caddy/mihomo twins in TS).
+func (s Systemctl) Active(ctx context.Context, unit string) bool {
+	state, err := s.IsActive(ctx, unit)
+	return err == nil && state == "active"
+}
+
 // IsEnabled runs `systemctl is-enabled <unit>` with the same conventions as IsActive.
 func (s Systemctl) IsEnabled(ctx context.Context, unit string) (string, error) {
 	return s.state(ctx, "is-enabled", unit)

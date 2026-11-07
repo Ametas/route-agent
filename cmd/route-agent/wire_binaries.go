@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/Ametas/route-agent/internal/binaries"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/server"
 )
 
@@ -19,7 +20,17 @@ func newBinaries(d deps) *binaries.Service {
 		Systemctl: d.systemctl,
 		Cfg:       d.cfg,
 		Log:       d.log,
+		Locks:     d.locks,
 	})
+}
+
+// withLocks gives deps built without a registry (tests) one, so the services buildHandlers wires
+// still share a single instance. run() always sets it.
+func withLocks(d deps) deps {
+	if d.locks == nil {
+		d.locks = locks.New()
+	}
+	return d
 }
 
 // wireBinaries assigns the group C handlers.

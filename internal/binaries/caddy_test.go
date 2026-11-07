@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Ametas/route-agent/internal/caddy"
 	"github.com/Ametas/route-agent/internal/runner"
 )
 
@@ -74,7 +75,9 @@ func TestCaddyRestartFailure(t *testing.T) {
 func TestCaddyValidatesBeforeSwap(t *testing.T) {
 	h := newHarness(t, nil)
 	h.write("/etc/caddy/Caddyfile", "example.com {\n}\n", 0o644)
-	h.write(CaddyCloudflareEnvPath, "# token\nCF_API_TOKEN=tok123\n\n", 0o600)
+	// Read by caddy.LoadDNSProviderEnv (JS trim: a BOM and CRLF are stripped, as in TS) — the same
+	// reader ConfigureCaddy validates with.
+	h.write(caddy.CloudflareEnvPath, "\uFEFFCF_API_TOKEN=tok123\r\n# token\n\n", 0o600)
 	h.write("/usr/local/bin/caddy-custom", "OLD", 0o755)
 	var env []string
 	h.on(func(c runner.Cmd) bool { return len(c.Args) > 0 && c.Args[0] == "validate" }, func(c runner.Cmd) (runner.Result, error) {

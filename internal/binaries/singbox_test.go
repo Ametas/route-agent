@@ -12,6 +12,7 @@ import (
 	"github.com/Ametas/route-agent/internal/agentpb"
 	"github.com/Ametas/route-agent/internal/runner"
 	"github.com/Ametas/route-agent/internal/server/auth"
+	"github.com/Ametas/route-agent/internal/singbox"
 )
 
 const sbUnit = "/etc/systemd/system/sing-box.service"
@@ -74,7 +75,7 @@ func TestSingboxUploadOrder(t *testing.T) {
 	}
 	// Unit byte-exact, no capability lines.
 	unit := h.read(sbUnit)
-	if unit != SingboxUnit("/usr/local/bin/sing-box", "/etc/sing-box/config.json") ||
+	if unit != singbox.UnitContent(h.svc.cfg) ||
 		strings.Contains(unit, "CapabilityBoundingSet") || strings.Contains(unit, "AmbientCapabilities") {
 		t.Fatalf("unit:\n%s", unit)
 	}
@@ -100,6 +101,24 @@ func TestSingboxUploadOrder(t *testing.T) {
 	}
 	if h.read("/usr/local/bin/sing-box.prev") != goodELF("v2") {
 		t.Fatal(".prev must hold the replaced binary")
+	}
+}
+
+// One renderer for sing-box.service (group B's singbox.UnitContent): the upload writes exactly
+// what group B renders, for custom paths too. Before the duplicate in this package was deleted,
+// both renderers were checked byte for byte against each other over default, custom and empty
+// (→ default) paths.
+func TestSingboxUnitIsGroupBs(t *testing.T) {
+	h := newHarness(t, map[string]string{"SINGBOX_BINARY_PATH": "/opt/sb/sing-box", "SINGBOX_CONFIG_PATH": "/srv/sb/c.json",
+		"SINGBOX_UNIT_FILE_PATH": "/etc/systemd/system/sb.service"})
+	expect(t, h.upload(h.svc.UploadSingboxBinary, mdCtx(secret), ch("", goodELF("x"), "1", "")), true,
+		"sing-box binary version 1 successfully updated and restarted")
+	want := "[Unit]\nDescription=sing-box service\nAfter=network.target nss-lookup.target\n\n[Service]\n" +
+		"ExecStart=/opt/sb/sing-box run -c /srv/sb/c.json\nRestart=always\nRestartSec=5\n" +
+		"ExecReload=/bin/sh -c \"/opt/sb/sing-box check -c /srv/sb/c.json && /bin/kill -HUP $MAINPID\"\n\n" +
+		"[Install]\nWantedBy=multi-user.target\n"
+	if got := h.read("/etc/systemd/system/sb.service"); got != want || got != singbox.UnitContent(h.cfg) {
+		t.Fatalf("unit:\n%q\nwant\n%q", got, want)
 	}
 }
 

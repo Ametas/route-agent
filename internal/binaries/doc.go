@@ -13,8 +13,10 @@
 // spec C §0.2/§11. Completion is the client half-close; is_final is never read (spec C §0.1).
 //
 // Each RPC then runs its apply step (validate → setcap → atomic swap keeping <target>.prev →
-// restart/reload → post-check → roll back to .prev if the post-check fails), under a per-target
-// lock so two uploads of the same artifact never interleave (spec C risk 7).
+// restart/reload → post-check → roll back to .prev if the post-check fails), under the area lock
+// of the shared registry (internal/locks: SingBox, Caddy, AWG, Mesh, Rear, Olcrtc), so two uploads
+// of the same artifact never interleave (spec C risk 7) and an upload never interleaves with
+// another group's RPC on the same area (ApplyConfig, ConfigureCaddy, ConfigureAwg, …).
 //
 // # Apply is detached from the client stream
 //

@@ -1,24 +1,21 @@
 package binaries
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"fmt"
 	"os"
-	"strings"
 
+	"github.com/Ametas/route-agent/internal/caddy"
 	"github.com/Ametas/route-agent/internal/fsx"
+	"github.com/Ametas/route-agent/internal/locks"
 	"github.com/Ametas/route-agent/internal/runner"
 )
 
-// Paths of the Caddy custom-binary drop-in (src/utils/caddy.ts:9-11).
-const (
-	CaddyOverridePath      = "/etc/systemd/system/caddy.service.d/override.conf"
-	CaddyCloudflareEnvPath = "/etc/caddy/cloudflare.env"
-)
+// CaddyOverridePath is the Caddy custom-binary drop-in (src/utils/caddy.ts:9-11). Its
+// EnvironmentFile is caddy.CloudflareEnvPath; the binary default is caddy.DefaultCustomBinaryPath
+// (shared with caddy.ResolveBinary, so ConfigureCaddy validates with what this upload installs).
+const CaddyOverridePath = "/etc/systemd/system/caddy.service.d/override.conf"
 
-func (s *Service) caddyPath() string { return or(s.cfg.CaddyBinaryPath, defaultCaddyCustomPath) }
+func (s *Service) caddyPath() string { return or(s.cfg.CaddyBinaryPath, caddy.DefaultCustomBinaryPath) }
 
 // CaddyOverride is the drop-in that switches the apt caddy.service to the custom binary.
 //
@@ -33,7 +30,7 @@ func CaddyOverride(bin, caddyfile string) string {
 		"ExecStart=" + bin + " run --config " + caddyfile + "\n" +
 		"ExecReload=\n" +
 		"ExecReload=" + bin + " reload --config " + caddyfile + " --force\n" +
-		"EnvironmentFile=-" + CaddyCloudflareEnvPath + "\n"
+		"EnvironmentFile=-" + caddy.CloudflareEnvPath + "\n"
 }
 
 // UploadCaddyBinary implements the RPC (spec C §5).
@@ -42,7 +39,7 @@ func (s *Service) UploadCaddyBinary(stream UploadStream) error {
 	return s.receive(stream, receiveSpec{
 		rpc: "UploadCaddyBinary", dir: s.binaryTempDir(target), prefix: tempPrefix(target), suffix: ".tmp",
 		maxBytes: s.MaxBinaryBytes, unauthEmpty: msgNoValidBinary, empty: msgNoValidBinary,
-		failPrefix: prefixUploadFailed, lockKey: "bin:" + target,
+		failPrefix: prefixUploadFailed, area: locks.Caddy,
 	}, func(ctx context.Context, r received) (Result, error) { return s.applyCaddy(ctx, r, target) })
 }
 
@@ -52,14 +49,14 @@ func (s *Service) applyCaddy(ctx context.Context, r received, target string) (Re
 	if err := s.smokeELF(ctx, r.path, "version"); err != nil {
 		return Result{}, err
 	}
-	caddyfile := or(s.cfg.CaddyfilePath, defaultCaddyfilePath)
+	caddyfile := or(s.cfg.CaddyfilePath, caddy.DefaultCaddyfilePath)
 	if errText, rejected := s.verifyCaddyAcceptsLiveConfig(ctx, r.path, caddyfile); rejected {
 		s.log.Error("Rejected uploaded Caddy binary: it does not accept the live Caddyfile", "version", r.version, "error", errText)
 		return fail("Бинарь Caddy " + r.version + " отвергнут: он не принимает уже применённый на узле конфиг " +
 			caddyfile + ". Прежний бинарь оставлен на месте, сервис не тронут.\n" + errText), nil
 	}
 
-	wasActive := s.unitActive(ctx, "caddy")
+	wasActive := s.systemctl.Active(ctx, "caddy")
 	hadPrev, err := s.install(r.path, target)
 	if err != nil {
 		return Result{}, err
@@ -102,37 +99,17 @@ func (s *Service) ensureCaddyOverride(ctx context.Context, bin, caddyfile string
 	return s.systemctl.DaemonReload(ctx)
 }
 
-// verifyCaddyAcceptsLiveConfig runs `<candidate> validate --config <Caddyfile>` with
-// cloudflare.env merged into the child environment (as ConfigureCaddy validates, spec B §25).
-// A missing Caddyfile is skipped (first install). The output is not logged beyond the error.
+// verifyCaddyAcceptsLiveConfig runs caddy.ValidateCmd — `<candidate> validate --config
+// <Caddyfile>` with cloudflare.env merged into the child environment by the same reader
+// ConfigureCaddy uses (caddy.LoadDNSProviderEnv, spec B §25). A missing Caddyfile is skipped
+// (first install). The output is not logged beyond the error.
 func (s *Service) verifyCaddyAcceptsLiveConfig(ctx context.Context, candidate, caddyfile string) (string, bool) {
 	real := s.fs.Path(caddyfile)
 	if _, err := os.Stat(real); err != nil {
 		return "", false
 	}
-	env := runner.ChildEnv()
-	if data, err := s.fs.ReadFile(CaddyCloudflareEnvPath); err == nil {
-		env = append(env, parseEnvFile(data)...)
-	}
-	_, err := s.runner.Run(ctx, runner.Cmd{Name: candidate, Args: []string{"validate", "--config", real}, Env: env, Timeout: checkTimeout})
-	if err != nil {
+	if _, err := s.runner.Run(ctx, caddy.ValidateCmd(s.fs, candidate, real)); err != nil {
 		return truncate(or(runner.StderrOrMessage(err), "unknown error"), 1000), true
 	}
 	return "", false
-}
-
-// parseEnvFile reads KEY=value lines (loadCaddyDnsProviderEnv, caddy.ts:44-56).
-func parseEnvFile(data []byte) []string {
-	var out []string
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if i := strings.IndexByte(line, '='); i > 0 {
-			out = append(out, fmt.Sprintf("%s=%s", line[:i], line[i+1:]))
-		}
-	}
-	return out
 }

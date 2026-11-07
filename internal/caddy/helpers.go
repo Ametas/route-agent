@@ -4,7 +4,8 @@
 // env file, the ownership fix-up under /var/lib/caddy (also run by every sing-box validation) and the xray
 // socket permissions (also a boot step, spec A §10.2). The caddy.service drop-in for the custom
 // binary (ensureCaddyCustomBinaryOverride) belongs to UploadCaddyBinary and lives in
-// internal/binaries (group C), as does the sing-box unit file.
+// internal/binaries (group C); that upload reuses ResolveBinary's default path, the env-file
+// reader and ValidateCmd from here rather than keeping copies.
 //
 // Permission model for the certificate store (architecture §6 item 1, deviations.md): TS ran
 // `chown -R caddy:caddy /var/lib/caddy` and then `chmod -R 755 /var/lib/caddy`, which made every
@@ -134,6 +135,20 @@ func LoadDNSProviderEnv(f fsx.FS, path string) map[string]string {
 		env[k] = v
 	}
 	return env
+}
+
+// ValidateCmd is `<bin> validate --config <caddyfile>` with the DNS-provider env file merged into
+// the child environment: EnvironmentFile= reaches only processes systemd starts, not an ad-hoc
+// child, and a Caddyfile with `dns cloudflare {env.CF_API_TOKEN}` fails validation without it.
+// ConfigureCaddy validates the new Caddyfile with the resolved binary; UploadCaddyBinary
+// (internal/binaries) validates the live Caddyfile with the candidate binary before the swap.
+func ValidateCmd(f fsx.FS, bin, caddyfile string) runner.Cmd {
+	return runner.Cmd{
+		Name:    bin,
+		Args:    []string{"validate", "--config", caddyfile},
+		Env:     mergedEnv(LoadDNSProviderEnv(f, CloudflareEnvPath)),
+		Timeout: validateTimeout,
+	}
 }
 
 // mergedEnv is {...process.env, ...extra} on top of the runner's child environment.
