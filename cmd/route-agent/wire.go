@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/Ametas/route-agent/internal/agentinfo"
+	"github.com/Ametas/route-agent/internal/caddy"
 	"github.com/Ametas/route-agent/internal/certs"
 	"github.com/Ametas/route-agent/internal/lifecycle"
 	"github.com/Ametas/route-agent/internal/server"
+	"github.com/Ametas/route-agent/internal/singbox"
 	"github.com/Ametas/route-agent/internal/systemd"
 	"github.com/Ametas/route-agent/internal/update"
 )
@@ -43,8 +45,18 @@ func buildHandlers(d deps) *server.Handlers {
 	crt := &certs.Service{Auth: d.auth, FS: d.fs, Log: d.log}
 	h.GetManagedCertificate = crt.GetManagedCertificate
 
-	// Group B — TODO: ApplyConfig, ConfigureCaddy, GetSingBoxUserTraffic, GetSingBoxConnections.
-	// Group C — TODO: Upload*Binary, UpgradeSingbox, UploadRearRuleSet, UploadMeshAwgKernelSource.
+	// Group B — config apply: sing-box, Caddy, Clash API observation (spec B).
+	// sb is also what later groups reuse: sb.Version (E, C), sb.ValidateConfig (F),
+	// sb.DetectCoreNotListening (E, PullNodeWarnings); caddy.FixPermissions,
+	// caddy.ResolveBinary and caddy.LoadDNSProviderEnv are free functions.
+	sb := &singbox.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log}
+	h.ApplyConfig = sb.ApplyConfig
+	h.GetSingBoxUserTraffic = sb.GetSingBoxUserTraffic
+	h.GetSingBoxConnections = sb.GetSingBoxConnections
+	cdy := &caddy.Service{Auth: d.auth, Runner: d.runner, FS: d.fs, Systemctl: d.systemctl, Cfg: d.cfg, Log: d.log}
+	h.ConfigureCaddy = cdy.ConfigureCaddy
+	// Group C — binaries, rule sets, kernel source (spec C; cmd/route-agent/wire_binaries.go).
+	wireBinaries(h, newBinaries(d))
 	// Group D — TODO: ConfigureAwg, GetAwgObservation, ConfigureMeshTunnel, ManageFirewall, ApplyTrafficThrottle.
 	// Group E — TODO: StreamTelemetry, GetTelemetry, PullNodeWarnings, RunNetworkDiagnostic, GetWarpKeyHealth.
 	// Group F — TODO: ConfigureRearSingbox, GetRearConnections, SyncOlcrtcInstance, DeleteOlcrtcInstance, StreamOlcrtcEvents.
@@ -55,7 +67,7 @@ func buildHandlers(d deps) *server.Handlers {
 // check. Each must never fail the boot.
 func preBindSteps(d deps) []lifecycle.Step {
 	return []lifecycle.Step{
-		// 1. TODO(group C): sanitizeAwgToolsSymlink (spec A §10.1).
+		{Name: "sanitizeAwgToolsSymlink", Run: newBinaries(d).SanitizeAwgToolsSymlink}, // 1. spec A §10.1, C §3
 		{Name: "ensureAwgSystemdUnit", Run: func(ctx context.Context) {
 			systemd.EnsureUnit(ctx, d.fs, d.systemctl, d.log, "AWG",
 				systemd.AwgUnitPath(d.cfg.AwgUnitFilePath), systemd.AwgUnit(d.cfg.AwgToolsBinaryPath))
@@ -64,7 +76,9 @@ func preBindSteps(d deps) []lifecycle.Step {
 			systemd.EnsureUnit(ctx, d.fs, d.systemctl, d.log, "olcrtc-agent-srv",
 				d.cfg.OlcrtcAgentSrvUnitFilePath, systemd.OlcrtcAgentSrvUnit(d.cfg.OlcrtcAgentSrvBinaryPath, d.cfg.OlcrtcAgentSrvConfigDir))
 		}},
-		// 4. TODO(group B): fixXraySocketPermissions (spec A §10.2).
+		{Name: "fixXraySocketPermissions", Run: func(ctx context.Context) {
+			caddy.FixXraySocketPermissions(ctx, d.runner, d.fs, d.log, caddy.XraySocketPaths)
+		}},
 	}
 }
 
