@@ -133,7 +133,7 @@ test('добавился инбаунд — только reload', () => {
 
 test('инбаунд неподдерживаемого протокола — только reload', () => {
   /**
-   * Ручка знает vless, tuic и hysteria2; на остальных она ответит 404. Узнать об этом ПОСЛЕ того,
+   * Ручка знает vless, tuic, hysteria2 и naive; на остальных она ответит 404. Узнать об этом ПОСЛЕ того,
    * как часть наборов уже применена, значит остаться в полуприменённом состоянии — поэтому список
    * протоколов проверяется до первой мутации, а не по ответу сокета.
    */
@@ -145,6 +145,22 @@ test('инбаунд неподдерживаемого протокола — �
   next.inbounds[0].users = [{ name: 'b' }];
 
   assert.strictEqual(planRosterUpdate(next, withShadowsocks), null);
+});
+
+test('naive — горячий путь, набор уходит как есть (логин в `username`)', () => {
+  /**
+   * Форк с 1.14.2-2 меняет набор naive на живую и принимает `username` синонимом `name`, поэтому
+   * агент шлёт абонентов из конфига без перекладки полей. Узел со старым форком ответит 404, и
+   * агент откатится к reload — оркестратор такому узлу naive и не шлёт.
+   */
+  const withNaive = {
+    ...BASE,
+    inbounds: [{ type: 'naive', tag: 'naive-in-f1', listen: '127.0.0.1', listen_port: 25001, network: 'udp', users: [{ username: 'a', password: 'p-a' }] }],
+  };
+  const next = clone(withNaive);
+  next.inbounds[0].users = [{ username: 'b', password: 'p-b' }];
+
+  assert.deepStrictEqual(planRosterUpdate(next, withNaive), [{ tag: 'naive-in-f1', users: [{ username: 'b', password: 'p-b' }] }]);
 });
 
 test('инбаунд без тега — только reload', () => {

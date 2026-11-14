@@ -118,6 +118,11 @@ func TestPlanRosterUpdate(t *testing.T) {
 	if _, ok, _ := PlanRosterUpdate(set(t, js(t, ss), "inbounds.0.users", js(t, `[{"name":"b"}]`)), js(t, ss)); ok {
 		t.Error("shadowsocks")
 	}
+	// naive goes out as it is: the fork's users-api takes `username` as an alias for `name`.
+	naive := `{"inbounds":[{"type":"naive","tag":"naive-in-f1","listen":"127.0.0.1","listen_port":25001,"network":"udp","users":[{"username":"a","password":"p-a"}]}]}`
+	if p, ok, _ := PlanRosterUpdate(set(t, js(t, naive), "inbounds.0.users", js(t, `[{"username":"b","password":"p-b"}]`)), js(t, naive)); !ok || len(p) != 1 || p[0].Tag != "naive-in-f1" || jsjson.Stringify(p[0].Users, "") != `[{"username":"b","password":"p-b"}]` {
+		t.Errorf("naive: %v %v", p, ok)
+	}
 	untagged := `{"inbounds":[{"type":"tuic","listen":"::","listen_port":8443,"users":[{"name":"a"}]}]}`
 	if _, ok, _ := PlanRosterUpdate(set(t, js(t, untagged), "inbounds.0.users", js(t, `[{"name":"b"}]`)), js(t, untagged)); ok {
 		t.Error("untagged")
