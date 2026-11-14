@@ -13,7 +13,11 @@ const UsersAPISocketPath = "/run/sing-box/users.sock"
 
 // hotSwappable are the inbound types the fork can re-roster live. The list is closed: another
 // type would get a 404 only AFTER part of the plan was applied (hotUsers.ts:40-47).
-var hotSwappable = map[string]bool{"vless": true, "tuic": true, "hysteria2": true}
+//
+// naive — fork 1.14.2-2+: its login lives in `username`, which users-api accepts as an alias for
+// `name`, so the roster goes out as it is in the config. An older fork answers 404 and the apply
+// falls back to a reload; the orchestrator sends naive only to nodes on the new fork.
+var hotSwappable = map[string]bool{"vless": true, "tuic": true, "hysteria2": true, "naive": true}
 
 // usersAPIService is {type:'users-api', tag:'users', path:<socket>} with that key order.
 func usersAPIService() *jsjson.Object {
