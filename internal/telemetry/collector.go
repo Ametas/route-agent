@@ -220,9 +220,29 @@ func (c *Collector) Frame(ctx context.Context, prev CPUStats, budget time.Durati
 		f.MeshTunnelInterfaceStatus = st.Status
 		f.MeshTunnelLivePeerKeys = st.LivePeerKeys
 		f.MeshTunnelActivePeers = uint32(len(st.LivePeerKeys))
+		f.MeshTunnelPeerStats, f.MeshTunnelPeerStatsReported = meshPeerStats(st.PeerStats)
 	})
 	wg.Wait()
 	return f, next
+}
+
+// meshPeerStats is the mesh_tunnel_peer_stats field and its "reported" flag: nil (the dump was
+// not read) → reported false, so the orchestrator shows "update the agent", not "no peers".
+func meshPeerStats(stats []awg.PeerStat) ([]*agentpb.MeshTunnelPeerStat, bool) {
+	if stats == nil {
+		return nil, false
+	}
+	out := make([]*agentpb.MeshTunnelPeerStat, 0, len(stats))
+	for _, p := range stats {
+		out = append(out, &agentpb.MeshTunnelPeerStat{
+			PublicKey:           p.PublicKey,
+			LatestHandshakeUnix: p.LatestHandshakeSec,
+			RxBytes:             p.RxBytes,
+			TxBytes:             p.TxBytes,
+			Endpoint:            p.Endpoint,
+		})
+	}
+	return out, true
 }
 
 // SysfsLinkExists answers "does network interface iface exist" from /sys/class/net, the

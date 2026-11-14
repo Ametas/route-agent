@@ -8,6 +8,7 @@ package mesh
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,33 @@ func Address(req *agentpb.MeshTunnelConfigPayload) string {
 	return strings.Join(addrs, ", ")
 }
 
+// reAwg31Value: a number or an a-b range — anything else is not written, so a typo in the strategy
+// cannot make `awg setconf` reject the whole mesh config.
+var reAwg31Value = regexp.MustCompile(`^\d{1,6}(-\d{1,6})?$`)
+
+// Awg31Directives is meshAwg31Directives (meshTunnel.service.ts, 2026-11-14): the AWG 3.1 fields of
+// the mesh strategy. The kernel module and amneziawg-tools accept them from 3.1 on, and an older
+// `awg setconf` rejects a config with an unknown key outright — the orchestrator sends them only to
+// a node whose telemetry shows 3.1. Empty — not written (module defaults).
+func Awg31Directives(req *agentpb.MeshTunnelConfigPayload) string {
+	var b strings.Builder
+	for _, d := range []struct{ name, value string }{
+		{"ContentPaddingAddition", req.GetContentPaddingAddition()},
+		{"RekeyAfterTime", req.GetRekeyAfterTime()},
+		{"RekeyTimeout", req.GetRekeyTimeout()},
+		{"RejectAfterTime", req.GetRejectAfterTime()},
+		{"KeepaliveTimeout", req.GetKeepaliveTimeout()},
+		{"MaxHandshakeAttempts", req.GetMaxHandshakeAttempts()},
+	} {
+		if v := strings.TrimSpace(d.value); reAwg31Value.MatchString(v) {
+			b.WriteString(d.name + " = " + v + "\n")
+		}
+	}
+	b.WriteString(awg.BoolDirective("RandomTrailers", req.GetRandomTrailers()))
+	b.WriteString(awg.BoolDirective("DisableCookies", req.GetDisableCookies()))
+	return b.String()
+}
+
 // RenderConfig builds awgmesh0.conf exactly as meshTunnel.service.ts:395-468 does and returns the
 // number of [Peer] blocks written. The MTU is a uint32 on the wire, so the TS "positive finite,
 // truncated" rule reduces to "non-zero".
@@ -107,6 +135,7 @@ func RenderConfig(req *agentpb.MeshTunnelConfigPayload) (string, int) {
 		I:   [5]string{req.GetI1(), req.GetI2(), req.GetI3(), req.GetI4(), req.GetI5()},
 		HPK: req.GetHeaderProtectionKey(),
 	}.Render(&b)
+	b.WriteString(Awg31Directives(req))
 	peers := 0
 	for _, p := range req.GetPeers() {
 		if p == nil {

@@ -41,6 +41,9 @@ type InterfaceStatus struct {
 	Status       string
 	ActivePeers  uint32
 	LivePeerKeys []string
+	// PeerStats — every peer of the dump (2026-11-14); nil when the dump was not read, so the
+	// telemetry leaves mesh_tunnel_peer_stats_reported false instead of claiming "no peers".
+	PeerStats []awg.PeerStat
 }
 
 var (
@@ -131,7 +134,7 @@ func (s *Status) Interface(ctx context.Context) InterfaceStatus {
 		return InterfaceStatus{Status: InterfaceUp, LivePeerKeys: []string{}}
 	}
 	keys := awg.LivePeers(res.Stdout, s.now().Unix())
-	return InterfaceStatus{Status: InterfaceUp, ActivePeers: uint32(len(keys)), LivePeerKeys: keys}
+	return InterfaceStatus{Status: InterfaceUp, ActivePeers: uint32(len(keys)), LivePeerKeys: keys, PeerStats: awg.PeerStats(res.Stdout)}
 }
 
 func (s *Status) linkExists(ctx context.Context, iface string) bool {

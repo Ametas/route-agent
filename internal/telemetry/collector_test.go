@@ -170,6 +170,12 @@ func TestFrameFields(t *testing.T) {
 		MeshAwgKernelStatus: "loaded", MeshAwgKernelVersion: "1.0.20250901",
 		MeshTunnelInterfaceStatus: "up", MeshTunnelActivePeers: 2, MeshTunnelLivePeerKeys: []string{"k1=", "k3="},
 		HostNetIface: "eth0", HostNetRxBytes: 98765432100, HostNetTxBytes: 12345678900,
+		MeshTunnelPeerStats: []*agentpb.MeshTunnelPeerStat{
+			{PublicKey: "k1=", LatestHandshakeUnix: now - 10, RxBytes: 1, TxBytes: 2, Endpoint: "2.2.2.2:1"},
+			{PublicKey: "k2=", LatestHandshakeUnix: now - 500, RxBytes: 1, TxBytes: 2, Endpoint: "2.2.2.3:1"},
+			{PublicKey: "k3=", LatestHandshakeUnix: now - 1, RxBytes: 1, TxBytes: 2, Endpoint: "2.2.2.4:1"},
+		},
+		MeshTunnelPeerStatsReported: true,
 	}
 	if !proto.Equal(f, want) {
 		t.Fatalf("\n got %v\nwant %v", f, want)

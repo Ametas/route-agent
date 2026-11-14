@@ -11,6 +11,7 @@ import { verifySecret, extractSecretFromMetadata } from '../middleware/auth.js';
 import { getMeshAwgInterfaceName } from '../utils/awg.js';
 import { invalidateMeshAwgKernelStatusCache } from '../utils/telemetry.js';
 import { ensureMeshUdpPortAllowed } from '../utils/firewall.js';
+import { awgBoolDirective } from './config.service.js';
 
 const logger = pino({ level: 'info' });
 
@@ -376,6 +377,44 @@ export async function uploadMeshAwgKernelSourceHandler(
  * установленных сессий остальных peer'ов, если интерфейс уже поднят; `start` только при первом
  * поднятии.
  */
+
+/**
+ * Поля AWG 3.1 стратегии меша (2026-11-14): добивка, таймеры протокола, флаги. Модуль ядра и
+ * amneziawg-tools понимают их с 3.1, а старый `awg setconf` отвергает конфиг с незнакомым ключом
+ * целиком — поэтому оркестратор шлёт их только узлу с 3.1 (по нашей телеметрии). Значение — число
+ * или диапазон `a-b`: всё прочее не пишется, чтобы опечатка в стратегии не уронила меш.
+ */
+const MESH_AWG31_VALUES: [string, keyof MeshAwg31Input][] = [
+  ['ContentPaddingAddition', 'contentPaddingAddition'],
+  ['RekeyAfterTime', 'rekeyAfterTime'],
+  ['RekeyTimeout', 'rekeyTimeout'],
+  ['RejectAfterTime', 'rejectAfterTime'],
+  ['KeepaliveTimeout', 'keepaliveTimeout'],
+  ['MaxHandshakeAttempts', 'maxHandshakeAttempts'],
+];
+
+export interface MeshAwg31Input {
+  contentPaddingAddition?: unknown;
+  rekeyAfterTime?: unknown;
+  rekeyTimeout?: unknown;
+  rejectAfterTime?: unknown;
+  keepaliveTimeout?: unknown;
+  maxHandshakeAttempts?: unknown;
+  randomTrailers?: unknown;
+  disableCookies?: unknown;
+}
+
+export function meshAwg31Directives(input: MeshAwg31Input): string {
+  let out = '';
+  for (const [directive, field] of MESH_AWG31_VALUES) {
+    const value = typeof input[field] === 'string' ? (input[field] as string).trim() : '';
+    if (/^\d{1,6}(-\d{1,6})?$/.test(value)) out += `${directive} = ${value}\n`;
+  }
+  out += awgBoolDirective('RandomTrailers', input.randomTrailers);
+  out += awgBoolDirective('DisableCookies', input.disableCookies);
+  return out;
+}
+
 export async function configureMeshTunnelHandler(
   call: ServerUnaryCall<any, any>,
   callback: sendUnaryData<any>
@@ -389,6 +428,8 @@ export async function configureMeshTunnelHandler(
   const {
     privateKey, addressV4, addressV6, listenPort, mtu, jc, jmin, jmax, peers,
     s1, s2, s3, s4, h1, h2, h3, h4, headerProtectionKey, i1, i2, i3, i4, i5,
+    contentPaddingAddition, rekeyAfterTime, rekeyTimeout, rejectAfterTime, keepaliveTimeout, maxHandshakeAttempts,
+    randomTrailers, disableCookies,
   } = call.request;
 
   try {
@@ -447,6 +488,9 @@ export async function configureMeshTunnelHandler(
     if (cleanI4) configContent += `I4 = ${cleanI4}\n`;
     if (cleanI5) configContent += `I5 = ${cleanI5}\n`;
     if (cleanHeaderProtectionKey) configContent += `HeaderProtectionKey = ${cleanHeaderProtectionKey}\n`;
+    configContent += meshAwg31Directives({
+      contentPaddingAddition, rekeyAfterTime, rekeyTimeout, rejectAfterTime, keepaliveTimeout, maxHandshakeAttempts, randomTrailers, disableCookies,
+    });
 
     let peerCount = 0;
     if (Array.isArray(peers)) {

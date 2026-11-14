@@ -205,8 +205,13 @@ type TelemetryResponse struct {
 	HostNetIface   string `protobuf:"bytes,18,opt,name=host_net_iface,json=hostNetIface,proto3" json:"host_net_iface,omitempty"`
 	HostNetRxBytes uint64 `protobuf:"varint,19,opt,name=host_net_rx_bytes,json=hostNetRxBytes,proto3" json:"host_net_rx_bytes,omitempty"`
 	HostNetTxBytes uint64 `protobuf:"varint,20,opt,name=host_net_tx_bytes,json=hostNetTxBytes,proto3" json:"host_net_tx_bytes,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Пиры меша по одному (2026-11-14): возраст рукопожатия и трафик для окна узла и фронта. Список
+	// ключей выше остаётся: по нему оркестратор ведёт трафик кольца, и старые оркестраторы читают его.
+	MeshTunnelPeerStats []*MeshTunnelPeerStat `protobuf:"bytes,21,rep,name=mesh_tunnel_peer_stats,json=meshTunnelPeerStats,proto3" json:"mesh_tunnel_peer_stats,omitempty"`
+	// true — агент знает поле 21 (пустой список тогда значит «пиров нет», а не «агент старый»).
+	MeshTunnelPeerStatsReported bool `protobuf:"varint,22,opt,name=mesh_tunnel_peer_stats_reported,json=meshTunnelPeerStatsReported,proto3" json:"mesh_tunnel_peer_stats_reported,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *TelemetryResponse) Reset() {
@@ -379,6 +384,97 @@ func (x *TelemetryResponse) GetHostNetTxBytes() uint64 {
 	return 0
 }
 
+func (x *TelemetryResponse) GetMeshTunnelPeerStats() []*MeshTunnelPeerStat {
+	if x != nil {
+		return x.MeshTunnelPeerStats
+	}
+	return nil
+}
+
+func (x *TelemetryResponse) GetMeshTunnelPeerStatsReported() bool {
+	if x != nil {
+		return x.MeshTunnelPeerStatsReported
+	}
+	return false
+}
+
+// Строка пира из `awg show <iface> dump`.
+type MeshTunnelPeerStat struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	PublicKey           string                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	LatestHandshakeUnix int64                  `protobuf:"varint,2,opt,name=latest_handshake_unix,json=latestHandshakeUnix,proto3" json:"latest_handshake_unix,omitempty"` // 0 — рукопожатия не было
+	RxBytes             uint64                 `protobuf:"varint,3,opt,name=rx_bytes,json=rxBytes,proto3" json:"rx_bytes,omitempty"`
+	TxBytes             uint64                 `protobuf:"varint,4,opt,name=tx_bytes,json=txBytes,proto3" json:"tx_bytes,omitempty"`
+	Endpoint            string                 `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"` // "(none)" из dump — пусто
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *MeshTunnelPeerStat) Reset() {
+	*x = MeshTunnelPeerStat{}
+	mi := &file_agent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MeshTunnelPeerStat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MeshTunnelPeerStat) ProtoMessage() {}
+
+func (x *MeshTunnelPeerStat) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MeshTunnelPeerStat.ProtoReflect.Descriptor instead.
+func (*MeshTunnelPeerStat) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MeshTunnelPeerStat) GetPublicKey() string {
+	if x != nil {
+		return x.PublicKey
+	}
+	return ""
+}
+
+func (x *MeshTunnelPeerStat) GetLatestHandshakeUnix() int64 {
+	if x != nil {
+		return x.LatestHandshakeUnix
+	}
+	return 0
+}
+
+func (x *MeshTunnelPeerStat) GetRxBytes() uint64 {
+	if x != nil {
+		return x.RxBytes
+	}
+	return 0
+}
+
+func (x *MeshTunnelPeerStat) GetTxBytes() uint64 {
+	if x != nil {
+		return x.TxBytes
+	}
+	return 0
+}
+
+func (x *MeshTunnelPeerStat) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
 type UpgradePayload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`                            // e.g. "1.13.14"
@@ -389,7 +485,7 @@ type UpgradePayload struct {
 
 func (x *UpgradePayload) Reset() {
 	*x = UpgradePayload{}
-	mi := &file_agent_proto_msgTypes[4]
+	mi := &file_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -401,7 +497,7 @@ func (x *UpgradePayload) String() string {
 func (*UpgradePayload) ProtoMessage() {}
 
 func (x *UpgradePayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[4]
+	mi := &file_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -414,7 +510,7 @@ func (x *UpgradePayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradePayload.ProtoReflect.Descriptor instead.
 func (*UpgradePayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{4}
+	return file_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *UpgradePayload) GetVersion() string {
@@ -441,7 +537,7 @@ type UpgradeResponse struct {
 
 func (x *UpgradeResponse) Reset() {
 	*x = UpgradeResponse{}
-	mi := &file_agent_proto_msgTypes[5]
+	mi := &file_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -453,7 +549,7 @@ func (x *UpgradeResponse) String() string {
 func (*UpgradeResponse) ProtoMessage() {}
 
 func (x *UpgradeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[5]
+	mi := &file_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -466,7 +562,7 @@ func (x *UpgradeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeResponse.ProtoReflect.Descriptor instead.
 func (*UpgradeResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{5}
+	return file_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *UpgradeResponse) GetSuccess() bool {
@@ -509,7 +605,7 @@ type OlcrtcInstanceConfigPayload struct {
 
 func (x *OlcrtcInstanceConfigPayload) Reset() {
 	*x = OlcrtcInstanceConfigPayload{}
-	mi := &file_agent_proto_msgTypes[6]
+	mi := &file_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -521,7 +617,7 @@ func (x *OlcrtcInstanceConfigPayload) String() string {
 func (*OlcrtcInstanceConfigPayload) ProtoMessage() {}
 
 func (x *OlcrtcInstanceConfigPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[6]
+	mi := &file_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -534,7 +630,7 @@ func (x *OlcrtcInstanceConfigPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OlcrtcInstanceConfigPayload.ProtoReflect.Descriptor instead.
 func (*OlcrtcInstanceConfigPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{6}
+	return file_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *OlcrtcInstanceConfigPayload) GetOrchestratorSecret() string {
@@ -638,7 +734,7 @@ type OlcrtcInstanceDeletePayload struct {
 
 func (x *OlcrtcInstanceDeletePayload) Reset() {
 	*x = OlcrtcInstanceDeletePayload{}
-	mi := &file_agent_proto_msgTypes[7]
+	mi := &file_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -650,7 +746,7 @@ func (x *OlcrtcInstanceDeletePayload) String() string {
 func (*OlcrtcInstanceDeletePayload) ProtoMessage() {}
 
 func (x *OlcrtcInstanceDeletePayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[7]
+	mi := &file_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -663,7 +759,7 @@ func (x *OlcrtcInstanceDeletePayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OlcrtcInstanceDeletePayload.ProtoReflect.Descriptor instead.
 func (*OlcrtcInstanceDeletePayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{7}
+	return file_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *OlcrtcInstanceDeletePayload) GetOrchestratorSecret() string {
@@ -690,7 +786,7 @@ type OlcrtcInstanceConfigResponse struct {
 
 func (x *OlcrtcInstanceConfigResponse) Reset() {
 	*x = OlcrtcInstanceConfigResponse{}
-	mi := &file_agent_proto_msgTypes[8]
+	mi := &file_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +798,7 @@ func (x *OlcrtcInstanceConfigResponse) String() string {
 func (*OlcrtcInstanceConfigResponse) ProtoMessage() {}
 
 func (x *OlcrtcInstanceConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[8]
+	mi := &file_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +811,7 @@ func (x *OlcrtcInstanceConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OlcrtcInstanceConfigResponse.ProtoReflect.Descriptor instead.
 func (*OlcrtcInstanceConfigResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{8}
+	return file_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *OlcrtcInstanceConfigResponse) GetSuccess() bool {
@@ -741,7 +837,7 @@ type OlcrtcEventsRequest struct {
 
 func (x *OlcrtcEventsRequest) Reset() {
 	*x = OlcrtcEventsRequest{}
-	mi := &file_agent_proto_msgTypes[9]
+	mi := &file_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -753,7 +849,7 @@ func (x *OlcrtcEventsRequest) String() string {
 func (*OlcrtcEventsRequest) ProtoMessage() {}
 
 func (x *OlcrtcEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[9]
+	mi := &file_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -766,7 +862,7 @@ func (x *OlcrtcEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OlcrtcEventsRequest.ProtoReflect.Descriptor instead.
 func (*OlcrtcEventsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{9}
+	return file_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *OlcrtcEventsRequest) GetOrchestratorSecret() string {
@@ -800,7 +896,7 @@ type OlcrtcEvent struct {
 
 func (x *OlcrtcEvent) Reset() {
 	*x = OlcrtcEvent{}
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +908,7 @@ func (x *OlcrtcEvent) String() string {
 func (*OlcrtcEvent) ProtoMessage() {}
 
 func (x *OlcrtcEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +921,7 @@ func (x *OlcrtcEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OlcrtcEvent.ProtoReflect.Descriptor instead.
 func (*OlcrtcEvent) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{10}
+	return file_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *OlcrtcEvent) GetUserShortUuid() string {
@@ -906,7 +1002,7 @@ type SelfUpdatePayload struct {
 
 func (x *SelfUpdatePayload) Reset() {
 	*x = SelfUpdatePayload{}
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +1014,7 @@ func (x *SelfUpdatePayload) String() string {
 func (*SelfUpdatePayload) ProtoMessage() {}
 
 func (x *SelfUpdatePayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1027,7 @@ func (x *SelfUpdatePayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfUpdatePayload.ProtoReflect.Descriptor instead.
 func (*SelfUpdatePayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{11}
+	return file_agent_proto_rawDescGZIP(), []int{12}
 }
 
 type SelfUpdateResponse struct {
@@ -944,7 +1040,7 @@ type SelfUpdateResponse struct {
 
 func (x *SelfUpdateResponse) Reset() {
 	*x = SelfUpdateResponse{}
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -956,7 +1052,7 @@ func (x *SelfUpdateResponse) String() string {
 func (*SelfUpdateResponse) ProtoMessage() {}
 
 func (x *SelfUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +1065,7 @@ func (x *SelfUpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfUpdateResponse.ProtoReflect.Descriptor instead.
 func (*SelfUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SelfUpdateResponse) GetSuccess() bool {
@@ -1010,7 +1106,7 @@ type BinaryChunkPayload struct {
 
 func (x *BinaryChunkPayload) Reset() {
 	*x = BinaryChunkPayload{}
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1022,7 +1118,7 @@ func (x *BinaryChunkPayload) String() string {
 func (*BinaryChunkPayload) ProtoMessage() {}
 
 func (x *BinaryChunkPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1035,7 +1131,7 @@ func (x *BinaryChunkPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BinaryChunkPayload.ProtoReflect.Descriptor instead.
 func (*BinaryChunkPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *BinaryChunkPayload) GetOrchestratorSecret() string {
@@ -1083,7 +1179,7 @@ type UploadBinaryResponse struct {
 
 func (x *UploadBinaryResponse) Reset() {
 	*x = UploadBinaryResponse{}
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1095,7 +1191,7 @@ func (x *UploadBinaryResponse) String() string {
 func (*UploadBinaryResponse) ProtoMessage() {}
 
 func (x *UploadBinaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1108,7 +1204,7 @@ func (x *UploadBinaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadBinaryResponse.ProtoReflect.Descriptor instead.
 func (*UploadBinaryResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UploadBinaryResponse) GetSuccess() bool {
@@ -1136,7 +1232,7 @@ type AwgPeer struct {
 
 func (x *AwgPeer) Reset() {
 	*x = AwgPeer{}
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1148,7 +1244,7 @@ func (x *AwgPeer) String() string {
 func (*AwgPeer) ProtoMessage() {}
 
 func (x *AwgPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1161,7 +1257,7 @@ func (x *AwgPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgPeer.ProtoReflect.Descriptor instead.
 func (*AwgPeer) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AwgPeer) GetPublicKey() string {
@@ -1225,7 +1321,7 @@ type AwgConfigPayload struct {
 
 func (x *AwgConfigPayload) Reset() {
 	*x = AwgConfigPayload{}
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1237,7 +1333,7 @@ func (x *AwgConfigPayload) String() string {
 func (*AwgConfigPayload) ProtoMessage() {}
 
 func (x *AwgConfigPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1250,7 +1346,7 @@ func (x *AwgConfigPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgConfigPayload.ProtoReflect.Descriptor instead.
 func (*AwgConfigPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AwgConfigPayload) GetEnabled() bool {
@@ -1452,7 +1548,7 @@ type AwgConfigResponse struct {
 
 func (x *AwgConfigResponse) Reset() {
 	*x = AwgConfigResponse{}
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1464,7 +1560,7 @@ func (x *AwgConfigResponse) String() string {
 func (*AwgConfigResponse) ProtoMessage() {}
 
 func (x *AwgConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1477,7 +1573,7 @@ func (x *AwgConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgConfigResponse.ProtoReflect.Descriptor instead.
 func (*AwgConfigResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AwgConfigResponse) GetSuccess() bool {
@@ -1506,7 +1602,7 @@ type MeshTunnelPeer struct {
 
 func (x *MeshTunnelPeer) Reset() {
 	*x = MeshTunnelPeer{}
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1518,7 +1614,7 @@ func (x *MeshTunnelPeer) String() string {
 func (*MeshTunnelPeer) ProtoMessage() {}
 
 func (x *MeshTunnelPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1531,7 +1627,7 @@ func (x *MeshTunnelPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MeshTunnelPeer.ProtoReflect.Descriptor instead.
 func (*MeshTunnelPeer) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MeshTunnelPeer) GetPublicKey() string {
@@ -1610,14 +1706,27 @@ type MeshTunnelConfigPayload struct {
 	// `awg syncconf`, поэтому через `systemctl reload` она НЕ применяется. Узел обязан считать её
 	// изменение поводом для полного перезапуска интерфейса, иначе на диске будет новое значение,
 	// а на интерфейсе — старое, и разойдутся они молча.
-	Mtu           uint32 `protobuf:"varint,25,opt,name=mtu,proto3" json:"mtu,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Mtu uint32 `protobuf:"varint,25,opt,name=mtu,proto3" json:"mtu,omitempty"`
+	// Поля AWG 3.1 из стратегии меша (2026-11-14): добивка пакетов, таймеры протокола, флаги. Модуль
+	// ядра и amneziawg-tools понимают их с версии 3.1, а старые awg setconf отвергают конфиг с
+	// незнакомым ключом целиком — поэтому оркестратор шлёт их только узлу, у которого телеметрия
+	// показывает 3.1 и у модуля, и у утилит. Пусто — поле не пишется (умолчание модуля).
+	// RandomTrailers обязан совпадать у обеих сторон — его оркестратор шлёт, только если 3.1 у всех.
+	ContentPaddingAddition string `protobuf:"bytes,26,opt,name=content_padding_addition,json=contentPaddingAddition,proto3" json:"content_padding_addition,omitempty"`
+	RekeyAfterTime         string `protobuf:"bytes,27,opt,name=rekey_after_time,json=rekeyAfterTime,proto3" json:"rekey_after_time,omitempty"`
+	RekeyTimeout           string `protobuf:"bytes,28,opt,name=rekey_timeout,json=rekeyTimeout,proto3" json:"rekey_timeout,omitempty"`
+	RejectAfterTime        string `protobuf:"bytes,29,opt,name=reject_after_time,json=rejectAfterTime,proto3" json:"reject_after_time,omitempty"`
+	KeepaliveTimeout       string `protobuf:"bytes,30,opt,name=keepalive_timeout,json=keepaliveTimeout,proto3" json:"keepalive_timeout,omitempty"`
+	MaxHandshakeAttempts   string `protobuf:"bytes,31,opt,name=max_handshake_attempts,json=maxHandshakeAttempts,proto3" json:"max_handshake_attempts,omitempty"`
+	RandomTrailers         string `protobuf:"bytes,32,opt,name=random_trailers,json=randomTrailers,proto3" json:"random_trailers,omitempty"` // "on" | "off" | "" — как у AwgConfigPayload
+	DisableCookies         string `protobuf:"bytes,33,opt,name=disable_cookies,json=disableCookies,proto3" json:"disable_cookies,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *MeshTunnelConfigPayload) Reset() {
 	*x = MeshTunnelConfigPayload{}
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1629,7 +1738,7 @@ func (x *MeshTunnelConfigPayload) String() string {
 func (*MeshTunnelConfigPayload) ProtoMessage() {}
 
 func (x *MeshTunnelConfigPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1642,7 +1751,7 @@ func (x *MeshTunnelConfigPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MeshTunnelConfigPayload.ProtoReflect.Descriptor instead.
 func (*MeshTunnelConfigPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *MeshTunnelConfigPayload) GetOrchestratorSecret() string {
@@ -1813,6 +1922,62 @@ func (x *MeshTunnelConfigPayload) GetMtu() uint32 {
 	return 0
 }
 
+func (x *MeshTunnelConfigPayload) GetContentPaddingAddition() string {
+	if x != nil {
+		return x.ContentPaddingAddition
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetRekeyAfterTime() string {
+	if x != nil {
+		return x.RekeyAfterTime
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetRekeyTimeout() string {
+	if x != nil {
+		return x.RekeyTimeout
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetRejectAfterTime() string {
+	if x != nil {
+		return x.RejectAfterTime
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetKeepaliveTimeout() string {
+	if x != nil {
+		return x.KeepaliveTimeout
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetMaxHandshakeAttempts() string {
+	if x != nil {
+		return x.MaxHandshakeAttempts
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetRandomTrailers() string {
+	if x != nil {
+		return x.RandomTrailers
+	}
+	return ""
+}
+
+func (x *MeshTunnelConfigPayload) GetDisableCookies() string {
+	if x != nil {
+		return x.DisableCookies
+	}
+	return ""
+}
+
 type MeshTunnelConfigResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -1823,7 +1988,7 @@ type MeshTunnelConfigResponse struct {
 
 func (x *MeshTunnelConfigResponse) Reset() {
 	*x = MeshTunnelConfigResponse{}
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1835,7 +2000,7 @@ func (x *MeshTunnelConfigResponse) String() string {
 func (*MeshTunnelConfigResponse) ProtoMessage() {}
 
 func (x *MeshTunnelConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1848,7 +2013,7 @@ func (x *MeshTunnelConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MeshTunnelConfigResponse.ProtoReflect.Descriptor instead.
 func (*MeshTunnelConfigResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *MeshTunnelConfigResponse) GetSuccess() bool {
@@ -1901,7 +2066,7 @@ type CaddyConfigPayload struct {
 
 func (x *CaddyConfigPayload) Reset() {
 	*x = CaddyConfigPayload{}
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1913,7 +2078,7 @@ func (x *CaddyConfigPayload) String() string {
 func (*CaddyConfigPayload) ProtoMessage() {}
 
 func (x *CaddyConfigPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1926,7 +2091,7 @@ func (x *CaddyConfigPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaddyConfigPayload.ProtoReflect.Descriptor instead.
 func (*CaddyConfigPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{21}
+	return file_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CaddyConfigPayload) GetCaddyfileContent() string {
@@ -1997,7 +2162,7 @@ type CaddyExtraCertificate struct {
 
 func (x *CaddyExtraCertificate) Reset() {
 	*x = CaddyExtraCertificate{}
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2009,7 +2174,7 @@ func (x *CaddyExtraCertificate) String() string {
 func (*CaddyExtraCertificate) ProtoMessage() {}
 
 func (x *CaddyExtraCertificate) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2022,7 +2187,7 @@ func (x *CaddyExtraCertificate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaddyExtraCertificate.ProtoReflect.Descriptor instead.
 func (*CaddyExtraCertificate) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{22}
+	return file_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CaddyExtraCertificate) GetDomain() string {
@@ -2056,7 +2221,7 @@ type CertificateRequest struct {
 
 func (x *CertificateRequest) Reset() {
 	*x = CertificateRequest{}
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2068,7 +2233,7 @@ func (x *CertificateRequest) String() string {
 func (*CertificateRequest) ProtoMessage() {}
 
 func (x *CertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2081,7 +2246,7 @@ func (x *CertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertificateRequest.ProtoReflect.Descriptor instead.
 func (*CertificateRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{23}
+	return file_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CertificateRequest) GetOrchestratorSecret() string {
@@ -2110,7 +2275,7 @@ type CertificateResponse struct {
 
 func (x *CertificateResponse) Reset() {
 	*x = CertificateResponse{}
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2122,7 +2287,7 @@ func (x *CertificateResponse) String() string {
 func (*CertificateResponse) ProtoMessage() {}
 
 func (x *CertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2135,7 +2300,7 @@ func (x *CertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertificateResponse.ProtoReflect.Descriptor instead.
 func (*CertificateResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{24}
+	return file_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CertificateResponse) GetSuccess() bool {
@@ -2176,7 +2341,7 @@ type CaddyConfigResponse struct {
 
 func (x *CaddyConfigResponse) Reset() {
 	*x = CaddyConfigResponse{}
-	mi := &file_agent_proto_msgTypes[25]
+	mi := &file_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2188,7 +2353,7 @@ func (x *CaddyConfigResponse) String() string {
 func (*CaddyConfigResponse) ProtoMessage() {}
 
 func (x *CaddyConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[25]
+	mi := &file_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2201,7 +2366,7 @@ func (x *CaddyConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaddyConfigResponse.ProtoReflect.Descriptor instead.
 func (*CaddyConfigResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{25}
+	return file_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CaddyConfigResponse) GetSuccess() bool {
@@ -2228,7 +2393,7 @@ type FirewallPayload struct {
 
 func (x *FirewallPayload) Reset() {
 	*x = FirewallPayload{}
-	mi := &file_agent_proto_msgTypes[26]
+	mi := &file_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2240,7 +2405,7 @@ func (x *FirewallPayload) String() string {
 func (*FirewallPayload) ProtoMessage() {}
 
 func (x *FirewallPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[26]
+	mi := &file_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2253,7 +2418,7 @@ func (x *FirewallPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FirewallPayload.ProtoReflect.Descriptor instead.
 func (*FirewallPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{26}
+	return file_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *FirewallPayload) GetOpenUdpPorts() []uint32 {
@@ -2280,7 +2445,7 @@ type FirewallResponse struct {
 
 func (x *FirewallResponse) Reset() {
 	*x = FirewallResponse{}
-	mi := &file_agent_proto_msgTypes[27]
+	mi := &file_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2292,7 +2457,7 @@ func (x *FirewallResponse) String() string {
 func (*FirewallResponse) ProtoMessage() {}
 
 func (x *FirewallResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[27]
+	mi := &file_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2305,7 +2470,7 @@ func (x *FirewallResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FirewallResponse.ProtoReflect.Descriptor instead.
 func (*FirewallResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{27}
+	return file_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *FirewallResponse) GetSuccess() bool {
@@ -2331,7 +2496,7 @@ type AgentInfoRequest struct {
 
 func (x *AgentInfoRequest) Reset() {
 	*x = AgentInfoRequest{}
-	mi := &file_agent_proto_msgTypes[28]
+	mi := &file_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2343,7 +2508,7 @@ func (x *AgentInfoRequest) String() string {
 func (*AgentInfoRequest) ProtoMessage() {}
 
 func (x *AgentInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[28]
+	mi := &file_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2356,7 +2521,7 @@ func (x *AgentInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentInfoRequest.ProtoReflect.Descriptor instead.
 func (*AgentInfoRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{28}
+	return file_agent_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AgentInfoRequest) GetOrchestratorSecret() string {
@@ -2377,7 +2542,7 @@ type AgentInfoResponse struct {
 
 func (x *AgentInfoResponse) Reset() {
 	*x = AgentInfoResponse{}
-	mi := &file_agent_proto_msgTypes[29]
+	mi := &file_agent_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2389,7 +2554,7 @@ func (x *AgentInfoResponse) String() string {
 func (*AgentInfoResponse) ProtoMessage() {}
 
 func (x *AgentInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[29]
+	mi := &file_agent_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2402,7 +2567,7 @@ func (x *AgentInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentInfoResponse.ProtoReflect.Descriptor instead.
 func (*AgentInfoResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{29}
+	return file_agent_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AgentInfoResponse) GetProtoContractHash() string {
@@ -2442,7 +2607,7 @@ type NetworkDiagnosticRequest struct {
 
 func (x *NetworkDiagnosticRequest) Reset() {
 	*x = NetworkDiagnosticRequest{}
-	mi := &file_agent_proto_msgTypes[30]
+	mi := &file_agent_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2454,7 +2619,7 @@ func (x *NetworkDiagnosticRequest) String() string {
 func (*NetworkDiagnosticRequest) ProtoMessage() {}
 
 func (x *NetworkDiagnosticRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[30]
+	mi := &file_agent_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2467,7 +2632,7 @@ func (x *NetworkDiagnosticRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkDiagnosticRequest.ProtoReflect.Descriptor instead.
 func (*NetworkDiagnosticRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{30}
+	return file_agent_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *NetworkDiagnosticRequest) GetOrchestratorSecret() string {
@@ -2505,7 +2670,7 @@ type NetworkDiagnosticProbe struct {
 
 func (x *NetworkDiagnosticProbe) Reset() {
 	*x = NetworkDiagnosticProbe{}
-	mi := &file_agent_proto_msgTypes[31]
+	mi := &file_agent_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2517,7 +2682,7 @@ func (x *NetworkDiagnosticProbe) String() string {
 func (*NetworkDiagnosticProbe) ProtoMessage() {}
 
 func (x *NetworkDiagnosticProbe) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[31]
+	mi := &file_agent_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2530,7 +2695,7 @@ func (x *NetworkDiagnosticProbe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkDiagnosticProbe.ProtoReflect.Descriptor instead.
 func (*NetworkDiagnosticProbe) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{31}
+	return file_agent_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *NetworkDiagnosticProbe) GetTarget() string {
@@ -2568,7 +2733,7 @@ type NetworkDiagnosticHop struct {
 
 func (x *NetworkDiagnosticHop) Reset() {
 	*x = NetworkDiagnosticHop{}
-	mi := &file_agent_proto_msgTypes[32]
+	mi := &file_agent_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2580,7 +2745,7 @@ func (x *NetworkDiagnosticHop) String() string {
 func (*NetworkDiagnosticHop) ProtoMessage() {}
 
 func (x *NetworkDiagnosticHop) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[32]
+	mi := &file_agent_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2593,7 +2758,7 @@ func (x *NetworkDiagnosticHop) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkDiagnosticHop.ProtoReflect.Descriptor instead.
 func (*NetworkDiagnosticHop) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{32}
+	return file_agent_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *NetworkDiagnosticHop) GetHopNumber() uint32 {
@@ -2643,7 +2808,7 @@ type NetworkDiagnosticTargetResult struct {
 
 func (x *NetworkDiagnosticTargetResult) Reset() {
 	*x = NetworkDiagnosticTargetResult{}
-	mi := &file_agent_proto_msgTypes[33]
+	mi := &file_agent_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2655,7 +2820,7 @@ func (x *NetworkDiagnosticTargetResult) String() string {
 func (*NetworkDiagnosticTargetResult) ProtoMessage() {}
 
 func (x *NetworkDiagnosticTargetResult) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[33]
+	mi := &file_agent_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2668,7 +2833,7 @@ func (x *NetworkDiagnosticTargetResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkDiagnosticTargetResult.ProtoReflect.Descriptor instead.
 func (*NetworkDiagnosticTargetResult) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{33}
+	return file_agent_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *NetworkDiagnosticTargetResult) GetTarget() string {
@@ -2752,7 +2917,7 @@ type NetworkDiagnosticResponse struct {
 
 func (x *NetworkDiagnosticResponse) Reset() {
 	*x = NetworkDiagnosticResponse{}
-	mi := &file_agent_proto_msgTypes[34]
+	mi := &file_agent_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2764,7 +2929,7 @@ func (x *NetworkDiagnosticResponse) String() string {
 func (*NetworkDiagnosticResponse) ProtoMessage() {}
 
 func (x *NetworkDiagnosticResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[34]
+	mi := &file_agent_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2777,7 +2942,7 @@ func (x *NetworkDiagnosticResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkDiagnosticResponse.ProtoReflect.Descriptor instead.
 func (*NetworkDiagnosticResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{34}
+	return file_agent_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *NetworkDiagnosticResponse) GetSuccess() bool {
@@ -2810,7 +2975,7 @@ type SingBoxUserTrafficRequest struct {
 
 func (x *SingBoxUserTrafficRequest) Reset() {
 	*x = SingBoxUserTrafficRequest{}
-	mi := &file_agent_proto_msgTypes[35]
+	mi := &file_agent_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2822,7 +2987,7 @@ func (x *SingBoxUserTrafficRequest) String() string {
 func (*SingBoxUserTrafficRequest) ProtoMessage() {}
 
 func (x *SingBoxUserTrafficRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[35]
+	mi := &file_agent_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2835,7 +3000,7 @@ func (x *SingBoxUserTrafficRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxUserTrafficRequest.ProtoReflect.Descriptor instead.
 func (*SingBoxUserTrafficRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{35}
+	return file_agent_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SingBoxUserTrafficRequest) GetOrchestratorSecret() string {
@@ -2856,7 +3021,7 @@ type SingBoxUserTrafficEntry struct {
 
 func (x *SingBoxUserTrafficEntry) Reset() {
 	*x = SingBoxUserTrafficEntry{}
-	mi := &file_agent_proto_msgTypes[36]
+	mi := &file_agent_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2868,7 +3033,7 @@ func (x *SingBoxUserTrafficEntry) String() string {
 func (*SingBoxUserTrafficEntry) ProtoMessage() {}
 
 func (x *SingBoxUserTrafficEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[36]
+	mi := &file_agent_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2881,7 +3046,7 @@ func (x *SingBoxUserTrafficEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxUserTrafficEntry.ProtoReflect.Descriptor instead.
 func (*SingBoxUserTrafficEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{36}
+	return file_agent_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SingBoxUserTrafficEntry) GetUserUuid() string {
@@ -2916,7 +3081,7 @@ type SingBoxUserTrafficResponse struct {
 
 func (x *SingBoxUserTrafficResponse) Reset() {
 	*x = SingBoxUserTrafficResponse{}
-	mi := &file_agent_proto_msgTypes[37]
+	mi := &file_agent_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2928,7 +3093,7 @@ func (x *SingBoxUserTrafficResponse) String() string {
 func (*SingBoxUserTrafficResponse) ProtoMessage() {}
 
 func (x *SingBoxUserTrafficResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[37]
+	mi := &file_agent_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2941,7 +3106,7 @@ func (x *SingBoxUserTrafficResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxUserTrafficResponse.ProtoReflect.Descriptor instead.
 func (*SingBoxUserTrafficResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{37}
+	return file_agent_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SingBoxUserTrafficResponse) GetSuccess() bool {
@@ -2974,7 +3139,7 @@ type SingBoxConnectionsRequest struct {
 
 func (x *SingBoxConnectionsRequest) Reset() {
 	*x = SingBoxConnectionsRequest{}
-	mi := &file_agent_proto_msgTypes[38]
+	mi := &file_agent_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2986,7 +3151,7 @@ func (x *SingBoxConnectionsRequest) String() string {
 func (*SingBoxConnectionsRequest) ProtoMessage() {}
 
 func (x *SingBoxConnectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[38]
+	mi := &file_agent_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2999,7 +3164,7 @@ func (x *SingBoxConnectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxConnectionsRequest.ProtoReflect.Descriptor instead.
 func (*SingBoxConnectionsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{38}
+	return file_agent_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SingBoxConnectionsRequest) GetOrchestratorSecret() string {
@@ -3039,7 +3204,7 @@ type SingBoxConnection struct {
 
 func (x *SingBoxConnection) Reset() {
 	*x = SingBoxConnection{}
-	mi := &file_agent_proto_msgTypes[39]
+	mi := &file_agent_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3051,7 +3216,7 @@ func (x *SingBoxConnection) String() string {
 func (*SingBoxConnection) ProtoMessage() {}
 
 func (x *SingBoxConnection) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[39]
+	mi := &file_agent_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3064,7 +3229,7 @@ func (x *SingBoxConnection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxConnection.ProtoReflect.Descriptor instead.
 func (*SingBoxConnection) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{39}
+	return file_agent_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SingBoxConnection) GetUser() string {
@@ -3155,7 +3320,7 @@ type SingBoxConnectionsResponse struct {
 
 func (x *SingBoxConnectionsResponse) Reset() {
 	*x = SingBoxConnectionsResponse{}
-	mi := &file_agent_proto_msgTypes[40]
+	mi := &file_agent_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3167,7 +3332,7 @@ func (x *SingBoxConnectionsResponse) String() string {
 func (*SingBoxConnectionsResponse) ProtoMessage() {}
 
 func (x *SingBoxConnectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[40]
+	mi := &file_agent_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3180,7 +3345,7 @@ func (x *SingBoxConnectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SingBoxConnectionsResponse.ProtoReflect.Descriptor instead.
 func (*SingBoxConnectionsResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{40}
+	return file_agent_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *SingBoxConnectionsResponse) GetSuccess() bool {
@@ -3220,7 +3385,7 @@ type TrafficThrottleEntry struct {
 
 func (x *TrafficThrottleEntry) Reset() {
 	*x = TrafficThrottleEntry{}
-	mi := &file_agent_proto_msgTypes[41]
+	mi := &file_agent_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3232,7 +3397,7 @@ func (x *TrafficThrottleEntry) String() string {
 func (*TrafficThrottleEntry) ProtoMessage() {}
 
 func (x *TrafficThrottleEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[41]
+	mi := &file_agent_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3245,7 +3410,7 @@ func (x *TrafficThrottleEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficThrottleEntry.ProtoReflect.Descriptor instead.
 func (*TrafficThrottleEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{41}
+	return file_agent_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *TrafficThrottleEntry) GetPrefix() string {
@@ -3284,7 +3449,7 @@ type TrafficThrottleRequest struct {
 
 func (x *TrafficThrottleRequest) Reset() {
 	*x = TrafficThrottleRequest{}
-	mi := &file_agent_proto_msgTypes[42]
+	mi := &file_agent_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3296,7 +3461,7 @@ func (x *TrafficThrottleRequest) String() string {
 func (*TrafficThrottleRequest) ProtoMessage() {}
 
 func (x *TrafficThrottleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[42]
+	mi := &file_agent_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3309,7 +3474,7 @@ func (x *TrafficThrottleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficThrottleRequest.ProtoReflect.Descriptor instead.
 func (*TrafficThrottleRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{42}
+	return file_agent_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *TrafficThrottleRequest) GetOrchestratorSecret() string {
@@ -3338,7 +3503,7 @@ type TrafficThrottleCounter struct {
 
 func (x *TrafficThrottleCounter) Reset() {
 	*x = TrafficThrottleCounter{}
-	mi := &file_agent_proto_msgTypes[43]
+	mi := &file_agent_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3350,7 +3515,7 @@ func (x *TrafficThrottleCounter) String() string {
 func (*TrafficThrottleCounter) ProtoMessage() {}
 
 func (x *TrafficThrottleCounter) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[43]
+	mi := &file_agent_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3363,7 +3528,7 @@ func (x *TrafficThrottleCounter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficThrottleCounter.ProtoReflect.Descriptor instead.
 func (*TrafficThrottleCounter) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{43}
+	return file_agent_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *TrafficThrottleCounter) GetPrefix() string {
@@ -3409,7 +3574,7 @@ type TrafficThrottleResponse struct {
 
 func (x *TrafficThrottleResponse) Reset() {
 	*x = TrafficThrottleResponse{}
-	mi := &file_agent_proto_msgTypes[44]
+	mi := &file_agent_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3421,7 +3586,7 @@ func (x *TrafficThrottleResponse) String() string {
 func (*TrafficThrottleResponse) ProtoMessage() {}
 
 func (x *TrafficThrottleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[44]
+	mi := &file_agent_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3434,7 +3599,7 @@ func (x *TrafficThrottleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficThrottleResponse.ProtoReflect.Descriptor instead.
 func (*TrafficThrottleResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{44}
+	return file_agent_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TrafficThrottleResponse) GetSuccess() bool {
@@ -3497,7 +3662,7 @@ type RearSingboxConfigPayload struct {
 
 func (x *RearSingboxConfigPayload) Reset() {
 	*x = RearSingboxConfigPayload{}
-	mi := &file_agent_proto_msgTypes[45]
+	mi := &file_agent_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3509,7 +3674,7 @@ func (x *RearSingboxConfigPayload) String() string {
 func (*RearSingboxConfigPayload) ProtoMessage() {}
 
 func (x *RearSingboxConfigPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[45]
+	mi := &file_agent_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3522,7 +3687,7 @@ func (x *RearSingboxConfigPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RearSingboxConfigPayload.ProtoReflect.Descriptor instead.
 func (*RearSingboxConfigPayload) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{45}
+	return file_agent_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RearSingboxConfigPayload) GetOrchestratorSecret() string {
@@ -3569,7 +3734,7 @@ type RearSingboxConfigResponse struct {
 
 func (x *RearSingboxConfigResponse) Reset() {
 	*x = RearSingboxConfigResponse{}
-	mi := &file_agent_proto_msgTypes[46]
+	mi := &file_agent_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3581,7 +3746,7 @@ func (x *RearSingboxConfigResponse) String() string {
 func (*RearSingboxConfigResponse) ProtoMessage() {}
 
 func (x *RearSingboxConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[46]
+	mi := &file_agent_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3594,7 +3759,7 @@ func (x *RearSingboxConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RearSingboxConfigResponse.ProtoReflect.Descriptor instead.
 func (*RearSingboxConfigResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{46}
+	return file_agent_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *RearSingboxConfigResponse) GetSuccess() bool {
@@ -3634,7 +3799,7 @@ type WarpKeyHealthRequest struct {
 
 func (x *WarpKeyHealthRequest) Reset() {
 	*x = WarpKeyHealthRequest{}
-	mi := &file_agent_proto_msgTypes[47]
+	mi := &file_agent_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3646,7 +3811,7 @@ func (x *WarpKeyHealthRequest) String() string {
 func (*WarpKeyHealthRequest) ProtoMessage() {}
 
 func (x *WarpKeyHealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[47]
+	mi := &file_agent_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3659,7 +3824,7 @@ func (x *WarpKeyHealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WarpKeyHealthRequest.ProtoReflect.Descriptor instead.
 func (*WarpKeyHealthRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{47}
+	return file_agent_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *WarpKeyHealthRequest) GetOrchestratorSecret() string {
@@ -3687,7 +3852,7 @@ type WarpKeyHealthEntry struct {
 
 func (x *WarpKeyHealthEntry) Reset() {
 	*x = WarpKeyHealthEntry{}
-	mi := &file_agent_proto_msgTypes[48]
+	mi := &file_agent_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3699,7 +3864,7 @@ func (x *WarpKeyHealthEntry) String() string {
 func (*WarpKeyHealthEntry) ProtoMessage() {}
 
 func (x *WarpKeyHealthEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[48]
+	mi := &file_agent_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3712,7 +3877,7 @@ func (x *WarpKeyHealthEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WarpKeyHealthEntry.ProtoReflect.Descriptor instead.
 func (*WarpKeyHealthEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{48}
+	return file_agent_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *WarpKeyHealthEntry) GetEndpointTag() string {
@@ -3759,7 +3924,7 @@ type WarpKeyHealthResponse struct {
 
 func (x *WarpKeyHealthResponse) Reset() {
 	*x = WarpKeyHealthResponse{}
-	mi := &file_agent_proto_msgTypes[49]
+	mi := &file_agent_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3771,7 +3936,7 @@ func (x *WarpKeyHealthResponse) String() string {
 func (*WarpKeyHealthResponse) ProtoMessage() {}
 
 func (x *WarpKeyHealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[49]
+	mi := &file_agent_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3784,7 +3949,7 @@ func (x *WarpKeyHealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WarpKeyHealthResponse.ProtoReflect.Descriptor instead.
 func (*WarpKeyHealthResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{49}
+	return file_agent_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *WarpKeyHealthResponse) GetSuccess() bool {
@@ -3824,7 +3989,7 @@ type NodeWarningsRequest struct {
 
 func (x *NodeWarningsRequest) Reset() {
 	*x = NodeWarningsRequest{}
-	mi := &file_agent_proto_msgTypes[50]
+	mi := &file_agent_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3836,7 +4001,7 @@ func (x *NodeWarningsRequest) String() string {
 func (*NodeWarningsRequest) ProtoMessage() {}
 
 func (x *NodeWarningsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[50]
+	mi := &file_agent_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3849,7 +4014,7 @@ func (x *NodeWarningsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeWarningsRequest.ProtoReflect.Descriptor instead.
 func (*NodeWarningsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{50}
+	return file_agent_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *NodeWarningsRequest) GetOrchestratorSecret() string {
@@ -3880,7 +4045,7 @@ type NodeWarning struct {
 
 func (x *NodeWarning) Reset() {
 	*x = NodeWarning{}
-	mi := &file_agent_proto_msgTypes[51]
+	mi := &file_agent_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3892,7 +4057,7 @@ func (x *NodeWarning) String() string {
 func (*NodeWarning) ProtoMessage() {}
 
 func (x *NodeWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[51]
+	mi := &file_agent_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3905,7 +4070,7 @@ func (x *NodeWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeWarning.ProtoReflect.Descriptor instead.
 func (*NodeWarning) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{51}
+	return file_agent_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *NodeWarning) GetKind() string {
@@ -3956,7 +4121,7 @@ type NodeWarningsResponse struct {
 
 func (x *NodeWarningsResponse) Reset() {
 	*x = NodeWarningsResponse{}
-	mi := &file_agent_proto_msgTypes[52]
+	mi := &file_agent_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3968,7 +4133,7 @@ func (x *NodeWarningsResponse) String() string {
 func (*NodeWarningsResponse) ProtoMessage() {}
 
 func (x *NodeWarningsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[52]
+	mi := &file_agent_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3981,7 +4146,7 @@ func (x *NodeWarningsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeWarningsResponse.ProtoReflect.Descriptor instead.
 func (*NodeWarningsResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{52}
+	return file_agent_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *NodeWarningsResponse) GetSuccess() bool {
@@ -4021,7 +4186,7 @@ type AwgObservationRequest struct {
 
 func (x *AwgObservationRequest) Reset() {
 	*x = AwgObservationRequest{}
-	mi := &file_agent_proto_msgTypes[53]
+	mi := &file_agent_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4033,7 +4198,7 @@ func (x *AwgObservationRequest) String() string {
 func (*AwgObservationRequest) ProtoMessage() {}
 
 func (x *AwgObservationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[53]
+	mi := &file_agent_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4046,7 +4211,7 @@ func (x *AwgObservationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgObservationRequest.ProtoReflect.Descriptor instead.
 func (*AwgObservationRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{53}
+	return file_agent_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *AwgObservationRequest) GetOrchestratorSecret() string {
@@ -4085,7 +4250,7 @@ type AwgPeerCounters struct {
 
 func (x *AwgPeerCounters) Reset() {
 	*x = AwgPeerCounters{}
-	mi := &file_agent_proto_msgTypes[54]
+	mi := &file_agent_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4097,7 +4262,7 @@ func (x *AwgPeerCounters) String() string {
 func (*AwgPeerCounters) ProtoMessage() {}
 
 func (x *AwgPeerCounters) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[54]
+	mi := &file_agent_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4110,7 +4275,7 @@ func (x *AwgPeerCounters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgPeerCounters.ProtoReflect.Descriptor instead.
 func (*AwgPeerCounters) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{54}
+	return file_agent_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *AwgPeerCounters) GetPublicKey() string {
@@ -4176,7 +4341,7 @@ type AwgFlow struct {
 
 func (x *AwgFlow) Reset() {
 	*x = AwgFlow{}
-	mi := &file_agent_proto_msgTypes[55]
+	mi := &file_agent_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4188,7 +4353,7 @@ func (x *AwgFlow) String() string {
 func (*AwgFlow) ProtoMessage() {}
 
 func (x *AwgFlow) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[55]
+	mi := &file_agent_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4201,7 +4366,7 @@ func (x *AwgFlow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgFlow.ProtoReflect.Descriptor instead.
 func (*AwgFlow) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{55}
+	return file_agent_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *AwgFlow) GetPublicKey() string {
@@ -4254,7 +4419,7 @@ type AwgObservationResponse struct {
 
 func (x *AwgObservationResponse) Reset() {
 	*x = AwgObservationResponse{}
-	mi := &file_agent_proto_msgTypes[56]
+	mi := &file_agent_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4266,7 +4431,7 @@ func (x *AwgObservationResponse) String() string {
 func (*AwgObservationResponse) ProtoMessage() {}
 
 func (x *AwgObservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[56]
+	mi := &file_agent_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4279,7 +4444,7 @@ func (x *AwgObservationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwgObservationResponse.ProtoReflect.Descriptor instead.
 func (*AwgObservationResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{56}
+	return file_agent_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *AwgObservationResponse) GetSuccess() bool {
@@ -4330,7 +4495,7 @@ const file_agent_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"C\n" +
 	"\x10TelemetryRequest\x12/\n" +
-	"\x13orchestrator_secret\x18\x01 \x01(\tR\x12orchestratorSecret\"\xe3\x06\n" +
+	"\x13orchestrator_secret\x18\x01 \x01(\tR\x12orchestratorSecret\"\xf9\a\n" +
 	"\x11TelemetryResponse\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tmem_usage\x18\x02 \x01(\x01R\bmemUsage\x12-\n" +
@@ -4355,7 +4520,16 @@ const file_agent_proto_rawDesc = "" +
 	"\x1amesh_tunnel_live_peer_keys\x18\x11 \x03(\tR\x16meshTunnelLivePeerKeys\x12$\n" +
 	"\x0ehost_net_iface\x18\x12 \x01(\tR\fhostNetIface\x12)\n" +
 	"\x11host_net_rx_bytes\x18\x13 \x01(\x04R\x0ehostNetRxBytes\x12)\n" +
-	"\x11host_net_tx_bytes\x18\x14 \x01(\x04R\x0ehostNetTxBytes\"M\n" +
+	"\x11host_net_tx_bytes\x18\x14 \x01(\x04R\x0ehostNetTxBytes\x12N\n" +
+	"\x16mesh_tunnel_peer_stats\x18\x15 \x03(\v2\x19.agent.MeshTunnelPeerStatR\x13meshTunnelPeerStats\x12D\n" +
+	"\x1fmesh_tunnel_peer_stats_reported\x18\x16 \x01(\bR\x1bmeshTunnelPeerStatsReported\"\xb9\x01\n" +
+	"\x12MeshTunnelPeerStat\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x01 \x01(\tR\tpublicKey\x122\n" +
+	"\x15latest_handshake_unix\x18\x02 \x01(\x03R\x13latestHandshakeUnix\x12\x19\n" +
+	"\brx_bytes\x18\x03 \x01(\x04R\arxBytes\x12\x19\n" +
+	"\btx_bytes\x18\x04 \x01(\x04R\atxBytes\x12\x1a\n" +
+	"\bendpoint\x18\x05 \x01(\tR\bendpoint\"M\n" +
 	"\x0eUpgradePayload\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12!\n" +
 	"\fdownload_url\x18\x02 \x01(\tR\vdownloadUrl\"E\n" +
@@ -4458,7 +4632,7 @@ const file_agent_proto_rawDesc = "" +
 	"\vallowed_ips\x18\x02 \x01(\tR\n" +
 	"allowedIps\x12\x1a\n" +
 	"\bendpoint\x18\x03 \x01(\tR\bendpoint\x121\n" +
-	"\x14persistent_keepalive\x18\x04 \x01(\rR\x13persistentKeepalive\"\xc5\x04\n" +
+	"\x14persistent_keepalive\x18\x04 \x01(\rR\x13persistentKeepalive\"\xaf\a\n" +
 	"\x17MeshTunnelConfigPayload\x12/\n" +
 	"\x13orchestrator_secret\x18\x01 \x01(\tR\x12orchestratorSecret\x12\x1f\n" +
 	"\vprivate_key\x18\x03 \x01(\tR\n" +
@@ -4488,7 +4662,15 @@ const file_agent_proto_rawDesc = "" +
 	"\x02i3\x18\x16 \x01(\tR\x02i3\x12\x0e\n" +
 	"\x02i4\x18\x17 \x01(\tR\x02i4\x12\x0e\n" +
 	"\x02i5\x18\x18 \x01(\tR\x02i5\x12\x10\n" +
-	"\x03mtu\x18\x19 \x01(\rR\x03mtu\"N\n" +
+	"\x03mtu\x18\x19 \x01(\rR\x03mtu\x128\n" +
+	"\x18content_padding_addition\x18\x1a \x01(\tR\x16contentPaddingAddition\x12(\n" +
+	"\x10rekey_after_time\x18\x1b \x01(\tR\x0erekeyAfterTime\x12#\n" +
+	"\rrekey_timeout\x18\x1c \x01(\tR\frekeyTimeout\x12*\n" +
+	"\x11reject_after_time\x18\x1d \x01(\tR\x0frejectAfterTime\x12+\n" +
+	"\x11keepalive_timeout\x18\x1e \x01(\tR\x10keepaliveTimeout\x124\n" +
+	"\x16max_handshake_attempts\x18\x1f \x01(\tR\x14maxHandshakeAttempts\x12'\n" +
+	"\x0frandom_trailers\x18  \x01(\tR\x0erandomTrailers\x12'\n" +
+	"\x0fdisable_cookies\x18! \x01(\tR\x0edisableCookies\"N\n" +
 	"\x18MeshTunnelConfigResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x88\x03\n" +
@@ -4714,148 +4896,150 @@ func file_agent_proto_rawDescGZIP() []byte {
 	return file_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
 var file_agent_proto_goTypes = []any{
 	(*ConfigPayload)(nil),                 // 0: agent.ConfigPayload
 	(*ConfigResponse)(nil),                // 1: agent.ConfigResponse
 	(*TelemetryRequest)(nil),              // 2: agent.TelemetryRequest
 	(*TelemetryResponse)(nil),             // 3: agent.TelemetryResponse
-	(*UpgradePayload)(nil),                // 4: agent.UpgradePayload
-	(*UpgradeResponse)(nil),               // 5: agent.UpgradeResponse
-	(*OlcrtcInstanceConfigPayload)(nil),   // 6: agent.OlcrtcInstanceConfigPayload
-	(*OlcrtcInstanceDeletePayload)(nil),   // 7: agent.OlcrtcInstanceDeletePayload
-	(*OlcrtcInstanceConfigResponse)(nil),  // 8: agent.OlcrtcInstanceConfigResponse
-	(*OlcrtcEventsRequest)(nil),           // 9: agent.OlcrtcEventsRequest
-	(*OlcrtcEvent)(nil),                   // 10: agent.OlcrtcEvent
-	(*SelfUpdatePayload)(nil),             // 11: agent.SelfUpdatePayload
-	(*SelfUpdateResponse)(nil),            // 12: agent.SelfUpdateResponse
-	(*BinaryChunkPayload)(nil),            // 13: agent.BinaryChunkPayload
-	(*UploadBinaryResponse)(nil),          // 14: agent.UploadBinaryResponse
-	(*AwgPeer)(nil),                       // 15: agent.AwgPeer
-	(*AwgConfigPayload)(nil),              // 16: agent.AwgConfigPayload
-	(*AwgConfigResponse)(nil),             // 17: agent.AwgConfigResponse
-	(*MeshTunnelPeer)(nil),                // 18: agent.MeshTunnelPeer
-	(*MeshTunnelConfigPayload)(nil),       // 19: agent.MeshTunnelConfigPayload
-	(*MeshTunnelConfigResponse)(nil),      // 20: agent.MeshTunnelConfigResponse
-	(*CaddyConfigPayload)(nil),            // 21: agent.CaddyConfigPayload
-	(*CaddyExtraCertificate)(nil),         // 22: agent.CaddyExtraCertificate
-	(*CertificateRequest)(nil),            // 23: agent.CertificateRequest
-	(*CertificateResponse)(nil),           // 24: agent.CertificateResponse
-	(*CaddyConfigResponse)(nil),           // 25: agent.CaddyConfigResponse
-	(*FirewallPayload)(nil),               // 26: agent.FirewallPayload
-	(*FirewallResponse)(nil),              // 27: agent.FirewallResponse
-	(*AgentInfoRequest)(nil),              // 28: agent.AgentInfoRequest
-	(*AgentInfoResponse)(nil),             // 29: agent.AgentInfoResponse
-	(*NetworkDiagnosticRequest)(nil),      // 30: agent.NetworkDiagnosticRequest
-	(*NetworkDiagnosticProbe)(nil),        // 31: agent.NetworkDiagnosticProbe
-	(*NetworkDiagnosticHop)(nil),          // 32: agent.NetworkDiagnosticHop
-	(*NetworkDiagnosticTargetResult)(nil), // 33: agent.NetworkDiagnosticTargetResult
-	(*NetworkDiagnosticResponse)(nil),     // 34: agent.NetworkDiagnosticResponse
-	(*SingBoxUserTrafficRequest)(nil),     // 35: agent.SingBoxUserTrafficRequest
-	(*SingBoxUserTrafficEntry)(nil),       // 36: agent.SingBoxUserTrafficEntry
-	(*SingBoxUserTrafficResponse)(nil),    // 37: agent.SingBoxUserTrafficResponse
-	(*SingBoxConnectionsRequest)(nil),     // 38: agent.SingBoxConnectionsRequest
-	(*SingBoxConnection)(nil),             // 39: agent.SingBoxConnection
-	(*SingBoxConnectionsResponse)(nil),    // 40: agent.SingBoxConnectionsResponse
-	(*TrafficThrottleEntry)(nil),          // 41: agent.TrafficThrottleEntry
-	(*TrafficThrottleRequest)(nil),        // 42: agent.TrafficThrottleRequest
-	(*TrafficThrottleCounter)(nil),        // 43: agent.TrafficThrottleCounter
-	(*TrafficThrottleResponse)(nil),       // 44: agent.TrafficThrottleResponse
-	(*RearSingboxConfigPayload)(nil),      // 45: agent.RearSingboxConfigPayload
-	(*RearSingboxConfigResponse)(nil),     // 46: agent.RearSingboxConfigResponse
-	(*WarpKeyHealthRequest)(nil),          // 47: agent.WarpKeyHealthRequest
-	(*WarpKeyHealthEntry)(nil),            // 48: agent.WarpKeyHealthEntry
-	(*WarpKeyHealthResponse)(nil),         // 49: agent.WarpKeyHealthResponse
-	(*NodeWarningsRequest)(nil),           // 50: agent.NodeWarningsRequest
-	(*NodeWarning)(nil),                   // 51: agent.NodeWarning
-	(*NodeWarningsResponse)(nil),          // 52: agent.NodeWarningsResponse
-	(*AwgObservationRequest)(nil),         // 53: agent.AwgObservationRequest
-	(*AwgPeerCounters)(nil),               // 54: agent.AwgPeerCounters
-	(*AwgFlow)(nil),                       // 55: agent.AwgFlow
-	(*AwgObservationResponse)(nil),        // 56: agent.AwgObservationResponse
+	(*MeshTunnelPeerStat)(nil),            // 4: agent.MeshTunnelPeerStat
+	(*UpgradePayload)(nil),                // 5: agent.UpgradePayload
+	(*UpgradeResponse)(nil),               // 6: agent.UpgradeResponse
+	(*OlcrtcInstanceConfigPayload)(nil),   // 7: agent.OlcrtcInstanceConfigPayload
+	(*OlcrtcInstanceDeletePayload)(nil),   // 8: agent.OlcrtcInstanceDeletePayload
+	(*OlcrtcInstanceConfigResponse)(nil),  // 9: agent.OlcrtcInstanceConfigResponse
+	(*OlcrtcEventsRequest)(nil),           // 10: agent.OlcrtcEventsRequest
+	(*OlcrtcEvent)(nil),                   // 11: agent.OlcrtcEvent
+	(*SelfUpdatePayload)(nil),             // 12: agent.SelfUpdatePayload
+	(*SelfUpdateResponse)(nil),            // 13: agent.SelfUpdateResponse
+	(*BinaryChunkPayload)(nil),            // 14: agent.BinaryChunkPayload
+	(*UploadBinaryResponse)(nil),          // 15: agent.UploadBinaryResponse
+	(*AwgPeer)(nil),                       // 16: agent.AwgPeer
+	(*AwgConfigPayload)(nil),              // 17: agent.AwgConfigPayload
+	(*AwgConfigResponse)(nil),             // 18: agent.AwgConfigResponse
+	(*MeshTunnelPeer)(nil),                // 19: agent.MeshTunnelPeer
+	(*MeshTunnelConfigPayload)(nil),       // 20: agent.MeshTunnelConfigPayload
+	(*MeshTunnelConfigResponse)(nil),      // 21: agent.MeshTunnelConfigResponse
+	(*CaddyConfigPayload)(nil),            // 22: agent.CaddyConfigPayload
+	(*CaddyExtraCertificate)(nil),         // 23: agent.CaddyExtraCertificate
+	(*CertificateRequest)(nil),            // 24: agent.CertificateRequest
+	(*CertificateResponse)(nil),           // 25: agent.CertificateResponse
+	(*CaddyConfigResponse)(nil),           // 26: agent.CaddyConfigResponse
+	(*FirewallPayload)(nil),               // 27: agent.FirewallPayload
+	(*FirewallResponse)(nil),              // 28: agent.FirewallResponse
+	(*AgentInfoRequest)(nil),              // 29: agent.AgentInfoRequest
+	(*AgentInfoResponse)(nil),             // 30: agent.AgentInfoResponse
+	(*NetworkDiagnosticRequest)(nil),      // 31: agent.NetworkDiagnosticRequest
+	(*NetworkDiagnosticProbe)(nil),        // 32: agent.NetworkDiagnosticProbe
+	(*NetworkDiagnosticHop)(nil),          // 33: agent.NetworkDiagnosticHop
+	(*NetworkDiagnosticTargetResult)(nil), // 34: agent.NetworkDiagnosticTargetResult
+	(*NetworkDiagnosticResponse)(nil),     // 35: agent.NetworkDiagnosticResponse
+	(*SingBoxUserTrafficRequest)(nil),     // 36: agent.SingBoxUserTrafficRequest
+	(*SingBoxUserTrafficEntry)(nil),       // 37: agent.SingBoxUserTrafficEntry
+	(*SingBoxUserTrafficResponse)(nil),    // 38: agent.SingBoxUserTrafficResponse
+	(*SingBoxConnectionsRequest)(nil),     // 39: agent.SingBoxConnectionsRequest
+	(*SingBoxConnection)(nil),             // 40: agent.SingBoxConnection
+	(*SingBoxConnectionsResponse)(nil),    // 41: agent.SingBoxConnectionsResponse
+	(*TrafficThrottleEntry)(nil),          // 42: agent.TrafficThrottleEntry
+	(*TrafficThrottleRequest)(nil),        // 43: agent.TrafficThrottleRequest
+	(*TrafficThrottleCounter)(nil),        // 44: agent.TrafficThrottleCounter
+	(*TrafficThrottleResponse)(nil),       // 45: agent.TrafficThrottleResponse
+	(*RearSingboxConfigPayload)(nil),      // 46: agent.RearSingboxConfigPayload
+	(*RearSingboxConfigResponse)(nil),     // 47: agent.RearSingboxConfigResponse
+	(*WarpKeyHealthRequest)(nil),          // 48: agent.WarpKeyHealthRequest
+	(*WarpKeyHealthEntry)(nil),            // 49: agent.WarpKeyHealthEntry
+	(*WarpKeyHealthResponse)(nil),         // 50: agent.WarpKeyHealthResponse
+	(*NodeWarningsRequest)(nil),           // 51: agent.NodeWarningsRequest
+	(*NodeWarning)(nil),                   // 52: agent.NodeWarning
+	(*NodeWarningsResponse)(nil),          // 53: agent.NodeWarningsResponse
+	(*AwgObservationRequest)(nil),         // 54: agent.AwgObservationRequest
+	(*AwgPeerCounters)(nil),               // 55: agent.AwgPeerCounters
+	(*AwgFlow)(nil),                       // 56: agent.AwgFlow
+	(*AwgObservationResponse)(nil),        // 57: agent.AwgObservationResponse
 }
 var file_agent_proto_depIdxs = []int32{
-	15, // 0: agent.AwgConfigPayload.peers:type_name -> agent.AwgPeer
-	18, // 1: agent.MeshTunnelConfigPayload.peers:type_name -> agent.MeshTunnelPeer
-	22, // 2: agent.CaddyConfigPayload.extra_certificates:type_name -> agent.CaddyExtraCertificate
-	31, // 3: agent.NetworkDiagnosticRequest.probes:type_name -> agent.NetworkDiagnosticProbe
-	32, // 4: agent.NetworkDiagnosticTargetResult.lossy_hops:type_name -> agent.NetworkDiagnosticHop
-	33, // 5: agent.NetworkDiagnosticResponse.results:type_name -> agent.NetworkDiagnosticTargetResult
-	36, // 6: agent.SingBoxUserTrafficResponse.entries:type_name -> agent.SingBoxUserTrafficEntry
-	39, // 7: agent.SingBoxConnectionsResponse.connections:type_name -> agent.SingBoxConnection
-	41, // 8: agent.TrafficThrottleRequest.entries:type_name -> agent.TrafficThrottleEntry
-	43, // 9: agent.TrafficThrottleResponse.counters:type_name -> agent.TrafficThrottleCounter
-	48, // 10: agent.WarpKeyHealthResponse.entries:type_name -> agent.WarpKeyHealthEntry
-	51, // 11: agent.NodeWarningsResponse.warnings:type_name -> agent.NodeWarning
-	54, // 12: agent.AwgObservationResponse.peers:type_name -> agent.AwgPeerCounters
-	55, // 13: agent.AwgObservationResponse.flows:type_name -> agent.AwgFlow
-	0,  // 14: agent.EgressAgentService.ApplyConfig:input_type -> agent.ConfigPayload
-	2,  // 15: agent.EgressAgentService.StreamTelemetry:input_type -> agent.TelemetryRequest
-	2,  // 16: agent.EgressAgentService.GetTelemetry:input_type -> agent.TelemetryRequest
-	4,  // 17: agent.EgressAgentService.UpgradeSingbox:input_type -> agent.UpgradePayload
-	6,  // 18: agent.EgressAgentService.SyncOlcrtcInstance:input_type -> agent.OlcrtcInstanceConfigPayload
-	7,  // 19: agent.EgressAgentService.DeleteOlcrtcInstance:input_type -> agent.OlcrtcInstanceDeletePayload
-	9,  // 20: agent.EgressAgentService.StreamOlcrtcEvents:input_type -> agent.OlcrtcEventsRequest
-	11, // 21: agent.EgressAgentService.SelfUpdate:input_type -> agent.SelfUpdatePayload
-	13, // 22: agent.EgressAgentService.UploadSingboxBinary:input_type -> agent.BinaryChunkPayload
-	13, // 23: agent.EgressAgentService.UploadAwgToolsBinary:input_type -> agent.BinaryChunkPayload
-	13, // 24: agent.EgressAgentService.UploadAwgGoBinary:input_type -> agent.BinaryChunkPayload
-	13, // 25: agent.EgressAgentService.UploadCaddyBinary:input_type -> agent.BinaryChunkPayload
-	13, // 26: agent.EgressAgentService.UploadMihomoBinary:input_type -> agent.BinaryChunkPayload
-	13, // 27: agent.EgressAgentService.UploadRearRuleSet:input_type -> agent.BinaryChunkPayload
-	53, // 28: agent.EgressAgentService.GetAwgObservation:input_type -> agent.AwgObservationRequest
-	16, // 29: agent.EgressAgentService.ConfigureAwg:input_type -> agent.AwgConfigPayload
-	21, // 30: agent.EgressAgentService.ConfigureCaddy:input_type -> agent.CaddyConfigPayload
-	13, // 31: agent.EgressAgentService.UploadOlcrtcAgentSrvBinary:input_type -> agent.BinaryChunkPayload
-	13, // 32: agent.EgressAgentService.UploadMeshAwgKernelSource:input_type -> agent.BinaryChunkPayload
-	19, // 33: agent.EgressAgentService.ConfigureMeshTunnel:input_type -> agent.MeshTunnelConfigPayload
-	26, // 34: agent.EgressAgentService.ManageFirewall:input_type -> agent.FirewallPayload
-	28, // 35: agent.EgressAgentService.GetAgentInfo:input_type -> agent.AgentInfoRequest
-	30, // 36: agent.EgressAgentService.RunNetworkDiagnostic:input_type -> agent.NetworkDiagnosticRequest
-	23, // 37: agent.EgressAgentService.GetManagedCertificate:input_type -> agent.CertificateRequest
-	35, // 38: agent.EgressAgentService.GetSingBoxUserTraffic:input_type -> agent.SingBoxUserTrafficRequest
-	38, // 39: agent.EgressAgentService.GetSingBoxConnections:input_type -> agent.SingBoxConnectionsRequest
-	38, // 40: agent.EgressAgentService.GetRearConnections:input_type -> agent.SingBoxConnectionsRequest
-	42, // 41: agent.EgressAgentService.ApplyTrafficThrottle:input_type -> agent.TrafficThrottleRequest
-	45, // 42: agent.EgressAgentService.ConfigureRearSingbox:input_type -> agent.RearSingboxConfigPayload
-	47, // 43: agent.EgressAgentService.GetWarpKeyHealth:input_type -> agent.WarpKeyHealthRequest
-	50, // 44: agent.EgressAgentService.PullNodeWarnings:input_type -> agent.NodeWarningsRequest
-	1,  // 45: agent.EgressAgentService.ApplyConfig:output_type -> agent.ConfigResponse
-	3,  // 46: agent.EgressAgentService.StreamTelemetry:output_type -> agent.TelemetryResponse
-	3,  // 47: agent.EgressAgentService.GetTelemetry:output_type -> agent.TelemetryResponse
-	5,  // 48: agent.EgressAgentService.UpgradeSingbox:output_type -> agent.UpgradeResponse
-	8,  // 49: agent.EgressAgentService.SyncOlcrtcInstance:output_type -> agent.OlcrtcInstanceConfigResponse
-	8,  // 50: agent.EgressAgentService.DeleteOlcrtcInstance:output_type -> agent.OlcrtcInstanceConfigResponse
-	10, // 51: agent.EgressAgentService.StreamOlcrtcEvents:output_type -> agent.OlcrtcEvent
-	12, // 52: agent.EgressAgentService.SelfUpdate:output_type -> agent.SelfUpdateResponse
-	14, // 53: agent.EgressAgentService.UploadSingboxBinary:output_type -> agent.UploadBinaryResponse
-	14, // 54: agent.EgressAgentService.UploadAwgToolsBinary:output_type -> agent.UploadBinaryResponse
-	14, // 55: agent.EgressAgentService.UploadAwgGoBinary:output_type -> agent.UploadBinaryResponse
-	14, // 56: agent.EgressAgentService.UploadCaddyBinary:output_type -> agent.UploadBinaryResponse
-	14, // 57: agent.EgressAgentService.UploadMihomoBinary:output_type -> agent.UploadBinaryResponse
-	14, // 58: agent.EgressAgentService.UploadRearRuleSet:output_type -> agent.UploadBinaryResponse
-	56, // 59: agent.EgressAgentService.GetAwgObservation:output_type -> agent.AwgObservationResponse
-	17, // 60: agent.EgressAgentService.ConfigureAwg:output_type -> agent.AwgConfigResponse
-	25, // 61: agent.EgressAgentService.ConfigureCaddy:output_type -> agent.CaddyConfigResponse
-	14, // 62: agent.EgressAgentService.UploadOlcrtcAgentSrvBinary:output_type -> agent.UploadBinaryResponse
-	14, // 63: agent.EgressAgentService.UploadMeshAwgKernelSource:output_type -> agent.UploadBinaryResponse
-	20, // 64: agent.EgressAgentService.ConfigureMeshTunnel:output_type -> agent.MeshTunnelConfigResponse
-	27, // 65: agent.EgressAgentService.ManageFirewall:output_type -> agent.FirewallResponse
-	29, // 66: agent.EgressAgentService.GetAgentInfo:output_type -> agent.AgentInfoResponse
-	34, // 67: agent.EgressAgentService.RunNetworkDiagnostic:output_type -> agent.NetworkDiagnosticResponse
-	24, // 68: agent.EgressAgentService.GetManagedCertificate:output_type -> agent.CertificateResponse
-	37, // 69: agent.EgressAgentService.GetSingBoxUserTraffic:output_type -> agent.SingBoxUserTrafficResponse
-	40, // 70: agent.EgressAgentService.GetSingBoxConnections:output_type -> agent.SingBoxConnectionsResponse
-	40, // 71: agent.EgressAgentService.GetRearConnections:output_type -> agent.SingBoxConnectionsResponse
-	44, // 72: agent.EgressAgentService.ApplyTrafficThrottle:output_type -> agent.TrafficThrottleResponse
-	46, // 73: agent.EgressAgentService.ConfigureRearSingbox:output_type -> agent.RearSingboxConfigResponse
-	49, // 74: agent.EgressAgentService.GetWarpKeyHealth:output_type -> agent.WarpKeyHealthResponse
-	52, // 75: agent.EgressAgentService.PullNodeWarnings:output_type -> agent.NodeWarningsResponse
-	45, // [45:76] is the sub-list for method output_type
-	14, // [14:45] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	4,  // 0: agent.TelemetryResponse.mesh_tunnel_peer_stats:type_name -> agent.MeshTunnelPeerStat
+	16, // 1: agent.AwgConfigPayload.peers:type_name -> agent.AwgPeer
+	19, // 2: agent.MeshTunnelConfigPayload.peers:type_name -> agent.MeshTunnelPeer
+	23, // 3: agent.CaddyConfigPayload.extra_certificates:type_name -> agent.CaddyExtraCertificate
+	32, // 4: agent.NetworkDiagnosticRequest.probes:type_name -> agent.NetworkDiagnosticProbe
+	33, // 5: agent.NetworkDiagnosticTargetResult.lossy_hops:type_name -> agent.NetworkDiagnosticHop
+	34, // 6: agent.NetworkDiagnosticResponse.results:type_name -> agent.NetworkDiagnosticTargetResult
+	37, // 7: agent.SingBoxUserTrafficResponse.entries:type_name -> agent.SingBoxUserTrafficEntry
+	40, // 8: agent.SingBoxConnectionsResponse.connections:type_name -> agent.SingBoxConnection
+	42, // 9: agent.TrafficThrottleRequest.entries:type_name -> agent.TrafficThrottleEntry
+	44, // 10: agent.TrafficThrottleResponse.counters:type_name -> agent.TrafficThrottleCounter
+	49, // 11: agent.WarpKeyHealthResponse.entries:type_name -> agent.WarpKeyHealthEntry
+	52, // 12: agent.NodeWarningsResponse.warnings:type_name -> agent.NodeWarning
+	55, // 13: agent.AwgObservationResponse.peers:type_name -> agent.AwgPeerCounters
+	56, // 14: agent.AwgObservationResponse.flows:type_name -> agent.AwgFlow
+	0,  // 15: agent.EgressAgentService.ApplyConfig:input_type -> agent.ConfigPayload
+	2,  // 16: agent.EgressAgentService.StreamTelemetry:input_type -> agent.TelemetryRequest
+	2,  // 17: agent.EgressAgentService.GetTelemetry:input_type -> agent.TelemetryRequest
+	5,  // 18: agent.EgressAgentService.UpgradeSingbox:input_type -> agent.UpgradePayload
+	7,  // 19: agent.EgressAgentService.SyncOlcrtcInstance:input_type -> agent.OlcrtcInstanceConfigPayload
+	8,  // 20: agent.EgressAgentService.DeleteOlcrtcInstance:input_type -> agent.OlcrtcInstanceDeletePayload
+	10, // 21: agent.EgressAgentService.StreamOlcrtcEvents:input_type -> agent.OlcrtcEventsRequest
+	12, // 22: agent.EgressAgentService.SelfUpdate:input_type -> agent.SelfUpdatePayload
+	14, // 23: agent.EgressAgentService.UploadSingboxBinary:input_type -> agent.BinaryChunkPayload
+	14, // 24: agent.EgressAgentService.UploadAwgToolsBinary:input_type -> agent.BinaryChunkPayload
+	14, // 25: agent.EgressAgentService.UploadAwgGoBinary:input_type -> agent.BinaryChunkPayload
+	14, // 26: agent.EgressAgentService.UploadCaddyBinary:input_type -> agent.BinaryChunkPayload
+	14, // 27: agent.EgressAgentService.UploadMihomoBinary:input_type -> agent.BinaryChunkPayload
+	14, // 28: agent.EgressAgentService.UploadRearRuleSet:input_type -> agent.BinaryChunkPayload
+	54, // 29: agent.EgressAgentService.GetAwgObservation:input_type -> agent.AwgObservationRequest
+	17, // 30: agent.EgressAgentService.ConfigureAwg:input_type -> agent.AwgConfigPayload
+	22, // 31: agent.EgressAgentService.ConfigureCaddy:input_type -> agent.CaddyConfigPayload
+	14, // 32: agent.EgressAgentService.UploadOlcrtcAgentSrvBinary:input_type -> agent.BinaryChunkPayload
+	14, // 33: agent.EgressAgentService.UploadMeshAwgKernelSource:input_type -> agent.BinaryChunkPayload
+	20, // 34: agent.EgressAgentService.ConfigureMeshTunnel:input_type -> agent.MeshTunnelConfigPayload
+	27, // 35: agent.EgressAgentService.ManageFirewall:input_type -> agent.FirewallPayload
+	29, // 36: agent.EgressAgentService.GetAgentInfo:input_type -> agent.AgentInfoRequest
+	31, // 37: agent.EgressAgentService.RunNetworkDiagnostic:input_type -> agent.NetworkDiagnosticRequest
+	24, // 38: agent.EgressAgentService.GetManagedCertificate:input_type -> agent.CertificateRequest
+	36, // 39: agent.EgressAgentService.GetSingBoxUserTraffic:input_type -> agent.SingBoxUserTrafficRequest
+	39, // 40: agent.EgressAgentService.GetSingBoxConnections:input_type -> agent.SingBoxConnectionsRequest
+	39, // 41: agent.EgressAgentService.GetRearConnections:input_type -> agent.SingBoxConnectionsRequest
+	43, // 42: agent.EgressAgentService.ApplyTrafficThrottle:input_type -> agent.TrafficThrottleRequest
+	46, // 43: agent.EgressAgentService.ConfigureRearSingbox:input_type -> agent.RearSingboxConfigPayload
+	48, // 44: agent.EgressAgentService.GetWarpKeyHealth:input_type -> agent.WarpKeyHealthRequest
+	51, // 45: agent.EgressAgentService.PullNodeWarnings:input_type -> agent.NodeWarningsRequest
+	1,  // 46: agent.EgressAgentService.ApplyConfig:output_type -> agent.ConfigResponse
+	3,  // 47: agent.EgressAgentService.StreamTelemetry:output_type -> agent.TelemetryResponse
+	3,  // 48: agent.EgressAgentService.GetTelemetry:output_type -> agent.TelemetryResponse
+	6,  // 49: agent.EgressAgentService.UpgradeSingbox:output_type -> agent.UpgradeResponse
+	9,  // 50: agent.EgressAgentService.SyncOlcrtcInstance:output_type -> agent.OlcrtcInstanceConfigResponse
+	9,  // 51: agent.EgressAgentService.DeleteOlcrtcInstance:output_type -> agent.OlcrtcInstanceConfigResponse
+	11, // 52: agent.EgressAgentService.StreamOlcrtcEvents:output_type -> agent.OlcrtcEvent
+	13, // 53: agent.EgressAgentService.SelfUpdate:output_type -> agent.SelfUpdateResponse
+	15, // 54: agent.EgressAgentService.UploadSingboxBinary:output_type -> agent.UploadBinaryResponse
+	15, // 55: agent.EgressAgentService.UploadAwgToolsBinary:output_type -> agent.UploadBinaryResponse
+	15, // 56: agent.EgressAgentService.UploadAwgGoBinary:output_type -> agent.UploadBinaryResponse
+	15, // 57: agent.EgressAgentService.UploadCaddyBinary:output_type -> agent.UploadBinaryResponse
+	15, // 58: agent.EgressAgentService.UploadMihomoBinary:output_type -> agent.UploadBinaryResponse
+	15, // 59: agent.EgressAgentService.UploadRearRuleSet:output_type -> agent.UploadBinaryResponse
+	57, // 60: agent.EgressAgentService.GetAwgObservation:output_type -> agent.AwgObservationResponse
+	18, // 61: agent.EgressAgentService.ConfigureAwg:output_type -> agent.AwgConfigResponse
+	26, // 62: agent.EgressAgentService.ConfigureCaddy:output_type -> agent.CaddyConfigResponse
+	15, // 63: agent.EgressAgentService.UploadOlcrtcAgentSrvBinary:output_type -> agent.UploadBinaryResponse
+	15, // 64: agent.EgressAgentService.UploadMeshAwgKernelSource:output_type -> agent.UploadBinaryResponse
+	21, // 65: agent.EgressAgentService.ConfigureMeshTunnel:output_type -> agent.MeshTunnelConfigResponse
+	28, // 66: agent.EgressAgentService.ManageFirewall:output_type -> agent.FirewallResponse
+	30, // 67: agent.EgressAgentService.GetAgentInfo:output_type -> agent.AgentInfoResponse
+	35, // 68: agent.EgressAgentService.RunNetworkDiagnostic:output_type -> agent.NetworkDiagnosticResponse
+	25, // 69: agent.EgressAgentService.GetManagedCertificate:output_type -> agent.CertificateResponse
+	38, // 70: agent.EgressAgentService.GetSingBoxUserTraffic:output_type -> agent.SingBoxUserTrafficResponse
+	41, // 71: agent.EgressAgentService.GetSingBoxConnections:output_type -> agent.SingBoxConnectionsResponse
+	41, // 72: agent.EgressAgentService.GetRearConnections:output_type -> agent.SingBoxConnectionsResponse
+	45, // 73: agent.EgressAgentService.ApplyTrafficThrottle:output_type -> agent.TrafficThrottleResponse
+	47, // 74: agent.EgressAgentService.ConfigureRearSingbox:output_type -> agent.RearSingboxConfigResponse
+	50, // 75: agent.EgressAgentService.GetWarpKeyHealth:output_type -> agent.WarpKeyHealthResponse
+	53, // 76: agent.EgressAgentService.PullNodeWarnings:output_type -> agent.NodeWarningsResponse
+	46, // [46:77] is the sub-list for method output_type
+	15, // [15:46] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -4869,7 +5053,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   57,
+			NumMessages:   58,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
