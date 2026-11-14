@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { parseMeshPeerDump } from '../src/utils/telemetry.js';
+import { meshPeerTelemetryFields, parseMeshPeerDump } from '../src/utils/telemetry.js';
 
 /**
  * Ключи живых пиров меша (2026-09-26). Оркестратор ведёт трафик кольца от фронта к egress-узлу
@@ -20,16 +20,36 @@ const DUMP = [
 ].join('\n');
 
 test('живыми считаются пиры с рукопожатием не старше 180 секунд', () => {
-  assert.deepStrictEqual(parseMeshPeerDump(DUMP, NOW), { activePeers: 2, livePeerKeys: ['live1=', 'edge='] });
+  const parsed = parseMeshPeerDump(DUMP, NOW);
+  assert.deepStrictEqual({ activePeers: parsed.activePeers, livePeerKeys: parsed.livePeerKeys }, { activePeers: 2, livePeerKeys: ['live1=', 'edge='] });
 });
 
 test('интерфейс без пиров — ни одного живого', () => {
-  assert.deepStrictEqual(parseMeshPeerDump('PRIVKEY=\tPUBKEY=\t51821\toff\n', NOW), { activePeers: 0, livePeerKeys: [] });
+  assert.deepStrictEqual(parseMeshPeerDump('PRIVKEY=\tPUBKEY=\t51821\toff\n', NOW), { activePeers: 0, livePeerKeys: [], peerStats: [] });
 });
 
 test('обрезанная строка пропускается, а не роняет разбор', () => {
-  assert.deepStrictEqual(parseMeshPeerDump(`iface\nbroken=\t(none)\n${DUMP.split('\n')[1]}`, NOW), {
+  const parsed = parseMeshPeerDump(`iface\nbroken=\t(none)\n${DUMP.split('\n')[1]}`, NOW);
+  assert.deepStrictEqual({ activePeers: parsed.activePeers, livePeerKeys: parsed.livePeerKeys }, {
     activePeers: 1,
     livePeerKeys: ['live1='],
   });
+  assert.equal(parsed.peerStats.length, 1);
+});
+
+test('пиры по одному: рукопожатие, трафик и адрес; (none) — пусто', () => {
+  const { peerStats } = parseMeshPeerDump(DUMP, NOW);
+  assert.deepStrictEqual(peerStats[0], { publicKey: 'live1=', latestHandshakeUnix: NOW - 27, rxBytes: 118000, txBytes: 164000, endpoint: '146.19.128.73:51821' });
+  assert.deepStrictEqual(peerStats[1], { publicKey: 'never=', latestHandshakeUnix: 0, rxBytes: 0, txBytes: 114000, endpoint: '195.209.218.173:51821' });
+  assert.equal(peerStats.length, 4);
+  assert.equal(parseMeshPeerDump(`iface\nnoaddr=\t(none)\t(none)\t100.100.0.9/32\t0\t0\t0\toff`, NOW).peerStats[0].endpoint, '');
+});
+
+test('телеметрия: «пиры переданы» — только когда dump прочитан', () => {
+  assert.deepStrictEqual(meshPeerTelemetryFields({ status: 'up', activePeers: 0, livePeerKeys: [], peerStats: [] }), {
+    meshTunnelLivePeerKeys: [],
+    meshTunnelPeerStats: [],
+    meshTunnelPeerStatsReported: true,
+  });
+  assert.equal(meshPeerTelemetryFields({ status: 'up', activePeers: 0, livePeerKeys: [] }).meshTunnelPeerStatsReported, false);
 });
