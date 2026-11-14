@@ -15,6 +15,7 @@ import {
   getAwgStatus,
   getMeshAwgKernelStatusCached,
   getMeshTunnelInterfaceStatus,
+  meshPeerTelemetryFields,
   CpuStats
 } from '../utils/telemetry.js';
 
@@ -121,7 +122,7 @@ export async function streamTelemetryHandler(
           meshAwgKernelVersion: meshKernel.version,
           meshTunnelInterfaceStatus: meshIface.status,
           meshTunnelActivePeers: meshIface.activePeers,
-          meshTunnelLivePeerKeys: meshIface.livePeerKeys,
+          ...meshPeerTelemetryFields(meshIface),
           ...hostNetworkFields(hostNet)
         });
       } catch {
@@ -205,7 +206,7 @@ export async function getTelemetryHandler(
       meshAwgKernelVersion: meshKernel.version,
       meshTunnelInterfaceStatus: meshIface.status,
       meshTunnelActivePeers: meshIface.activePeers,
-      meshTunnelLivePeerKeys: meshIface.livePeerKeys,
+      ...meshPeerTelemetryFields(meshIface),
       ...hostNetworkFields(hostNet)
     });
   } catch (err: any) {

@@ -282,6 +282,20 @@ message TelemetryResponse {
   string host_net_iface = 18;
   uint64 host_net_rx_bytes = 19;
   uint64 host_net_tx_bytes = 20;
+  // Пиры меша по одному (2026-11-14): возраст рукопожатия и трафик для окна узла и фронта. Список
+  // ключей выше остаётся: по нему оркестратор ведёт трафик кольца, и старые оркестраторы читают его.
+  repeated MeshTunnelPeerStat mesh_tunnel_peer_stats = 21;
+  // true — агент знает поле 21 (пустой список тогда значит «пиров нет», а не «агент старый»).
+  bool mesh_tunnel_peer_stats_reported = 22;
+}
+
+// Строка пира из `awg show <iface> dump`.
+message MeshTunnelPeerStat {
+  string public_key = 1;
+  int64 latest_handshake_unix = 2; // 0 — рукопожатия не было
+  uint64 rx_bytes = 3;
+  uint64 tx_bytes = 4;
+  string endpoint = 5;             // "(none)" из dump — пусто
 }
 
 message UpgradePayload {
@@ -488,6 +502,20 @@ message MeshTunnelConfigPayload {
   // изменение поводом для полного перезапуска интерфейса, иначе на диске будет новое значение,
   // а на интерфейсе — старое, и разойдутся они молча.
   uint32 mtu = 25;
+
+  // Поля AWG 3.1 из стратегии меша (2026-11-14): добивка пакетов, таймеры протокола, флаги. Модуль
+  // ядра и amneziawg-tools понимают их с версии 3.1, а старые awg setconf отвергают конфиг с
+  // незнакомым ключом целиком — поэтому оркестратор шлёт их только узлу, у которого телеметрия
+  // показывает 3.1 и у модуля, и у утилит. Пусто — поле не пишется (умолчание модуля).
+  // RandomTrailers обязан совпадать у обеих сторон — его оркестратор шлёт, только если 3.1 у всех.
+  string content_padding_addition = 26;
+  string rekey_after_time = 27;
+  string rekey_timeout = 28;
+  string reject_after_time = 29;
+  string keepalive_timeout = 30;
+  string max_handshake_attempts = 31;
+  string random_trailers = 32;     // "on" | "off" | "" — как у AwgConfigPayload
+  string disable_cookies = 33;
 }
 
 message MeshTunnelConfigResponse {

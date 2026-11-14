@@ -409,24 +409,68 @@ export interface MeshTunnelInterfaceStatus {
    * трафик по публичному адресу.
    */
   livePeerKeys: string[];
+  /**
+   * Пиры по одному (2026-11-14): рукопожатие, трафик, адрес — для окна узла и фронта на сайте.
+   * Нет — dump не прочитан (оркестратор тогда не путает «пиров нет» с «агент не знает поля»).
+   */
+  peerStats?: MeshPeerStat[];
+}
+
+/** Строка пира из `awg show <iface> dump` — поле `MeshTunnelPeerStat` телеметрии. */
+export interface MeshPeerStat {
+  publicKey: string;
+  /** Unix-секунды, 0 — рукопожатия не было. */
+  latestHandshakeUnix: number;
+  rxBytes: number;
+  txBytes: number;
+  /** `(none)` из dump — пусто. */
+  endpoint: string;
 }
 
 /**
  * Разбор `awg show <iface> dump`. Первая строка — сам интерфейс, дальше по строке на пира:
  * ключ, psk, endpoint, allowed-ips, время последнего рукопожатия (unix, 0 — не было), …
  */
-export function parseMeshPeerDump(stdout: string, nowSec: number): { activePeers: number; livePeerKeys: string[] } {
+export function parseMeshPeerDump(stdout: string, nowSec: number): { activePeers: number; livePeerKeys: string[]; peerStats: MeshPeerStat[] } {
   const lines = stdout.trim().split('\n');
   const livePeerKeys: string[] = [];
+  const peerStats: MeshPeerStat[] = [];
+  const count = (raw: string | undefined): number => {
+    const n = parseInt(raw ?? '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
   for (let i = 1; i < lines.length; i++) {
     const parts = lines[i].trim().split(/\s+/);
     if (parts.length < 5) continue;
-    const latestHandshake = parseInt(parts[4], 10);
-    if (!isNaN(latestHandshake) && latestHandshake > 0 && nowSec - latestHandshake <= MESH_HANDSHAKE_FRESH_SEC) {
+    const latestHandshake = count(parts[4]);
+    if (latestHandshake > 0 && nowSec - latestHandshake <= MESH_HANDSHAKE_FRESH_SEC) {
       livePeerKeys.push(parts[0]);
     }
+    peerStats.push({
+      publicKey: parts[0],
+      latestHandshakeUnix: latestHandshake,
+      rxBytes: count(parts[5]),
+      txBytes: count(parts[6]),
+      endpoint: parts[2] && parts[2] !== '(none)' ? parts[2] : '',
+    });
   }
-  return { activePeers: livePeerKeys.length, livePeerKeys };
+  return { activePeers: livePeerKeys.length, livePeerKeys, peerStats };
+}
+
+/**
+ * Поля телеметрии о пирах меша — одни у стрима и у разового запроса. `meshTunnelPeerStatsReported`
+ * ставится, только когда dump прочитан: пустой список тогда значит «пиров нет».
+ */
+export function meshPeerTelemetryFields(iface: MeshTunnelInterfaceStatus): {
+  meshTunnelLivePeerKeys: string[];
+  meshTunnelPeerStats: MeshPeerStat[];
+  meshTunnelPeerStatsReported: boolean;
+} {
+  return {
+    meshTunnelLivePeerKeys: iface.livePeerKeys,
+    meshTunnelPeerStats: iface.peerStats ?? [],
+    meshTunnelPeerStatsReported: iface.peerStats !== undefined,
+  };
 }
 
 /**
