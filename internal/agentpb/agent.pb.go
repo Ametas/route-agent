@@ -210,8 +210,13 @@ type TelemetryResponse struct {
 	MeshTunnelPeerStats []*MeshTunnelPeerStat `protobuf:"bytes,21,rep,name=mesh_tunnel_peer_stats,json=meshTunnelPeerStats,proto3" json:"mesh_tunnel_peer_stats,omitempty"`
 	// true — агент знает поле 21 (пустой список тогда значит «пиров нет», а не «агент старый»).
 	MeshTunnelPeerStatsReported bool `protobuf:"varint,22,opt,name=mesh_tunnel_peer_stats_reported,json=meshTunnelPeerStatsReported,proto3" json:"mesh_tunnel_peer_stats_reported,omitempty"`
-	unknownFields               protoimpl.UnknownFields
-	sizeCache                   protoimpl.SizeCache
+	// Глобальные IPv6 машины (2026-11-21): адреса интерфейсов из 2000::/3. Фронт ходит к оркестратору
+	// через Cloudflare и по IPv6 — по этим адресам оркестратор его узнаёт и верит его заголовку адреса абонента.
+	HostGlobalIpv6 []string `protobuf:"bytes,23,rep,name=host_global_ipv6,json=hostGlobalIpv6,proto3" json:"host_global_ipv6,omitempty"`
+	// true — агент знает поле 23 (пустой список тогда значит «IPv6 нет», а не «агент старый»).
+	HostGlobalIpv6Reported bool `protobuf:"varint,24,opt,name=host_global_ipv6_reported,json=hostGlobalIpv6Reported,proto3" json:"host_global_ipv6_reported,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TelemetryResponse) Reset() {
@@ -394,6 +399,20 @@ func (x *TelemetryResponse) GetMeshTunnelPeerStats() []*MeshTunnelPeerStat {
 func (x *TelemetryResponse) GetMeshTunnelPeerStatsReported() bool {
 	if x != nil {
 		return x.MeshTunnelPeerStatsReported
+	}
+	return false
+}
+
+func (x *TelemetryResponse) GetHostGlobalIpv6() []string {
+	if x != nil {
+		return x.HostGlobalIpv6
+	}
+	return nil
+}
+
+func (x *TelemetryResponse) GetHostGlobalIpv6Reported() bool {
+	if x != nil {
+		return x.HostGlobalIpv6Reported
 	}
 	return false
 }
@@ -4495,7 +4514,7 @@ const file_agent_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"C\n" +
 	"\x10TelemetryRequest\x12/\n" +
-	"\x13orchestrator_secret\x18\x01 \x01(\tR\x12orchestratorSecret\"\xf9\a\n" +
+	"\x13orchestrator_secret\x18\x01 \x01(\tR\x12orchestratorSecret\"\xde\b\n" +
 	"\x11TelemetryResponse\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tmem_usage\x18\x02 \x01(\x01R\bmemUsage\x12-\n" +
@@ -4522,7 +4541,9 @@ const file_agent_proto_rawDesc = "" +
 	"\x11host_net_rx_bytes\x18\x13 \x01(\x04R\x0ehostNetRxBytes\x12)\n" +
 	"\x11host_net_tx_bytes\x18\x14 \x01(\x04R\x0ehostNetTxBytes\x12N\n" +
 	"\x16mesh_tunnel_peer_stats\x18\x15 \x03(\v2\x19.agent.MeshTunnelPeerStatR\x13meshTunnelPeerStats\x12D\n" +
-	"\x1fmesh_tunnel_peer_stats_reported\x18\x16 \x01(\bR\x1bmeshTunnelPeerStatsReported\"\xb9\x01\n" +
+	"\x1fmesh_tunnel_peer_stats_reported\x18\x16 \x01(\bR\x1bmeshTunnelPeerStatsReported\x12(\n" +
+	"\x10host_global_ipv6\x18\x17 \x03(\tR\x0ehostGlobalIpv6\x129\n" +
+	"\x19host_global_ipv6_reported\x18\x18 \x01(\bR\x16hostGlobalIpv6Reported\"\xb9\x01\n" +
 	"\x12MeshTunnelPeerStat\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x01 \x01(\tR\tpublicKey\x122\n" +

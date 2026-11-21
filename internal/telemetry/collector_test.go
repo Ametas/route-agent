@@ -176,6 +176,8 @@ func TestFrameFields(t *testing.T) {
 			{PublicKey: "k3=", LatestHandshakeUnix: now - 1, RxBytes: 1, TxBytes: 2, Endpoint: "2.2.2.4:1"},
 		},
 		MeshTunnelPeerStatsReported: true,
+		HostGlobalIpv6:              []string{"2a12:5940:e3d1::2"},
+		HostGlobalIpv6Reported:      true,
 	}
 	if !proto.Equal(f, want) {
 		t.Fatalf("\n got %v\nwant %v", f, want)

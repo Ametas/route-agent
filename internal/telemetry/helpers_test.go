@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,6 +130,9 @@ func newRig(t *testing.T) *rig {
 	col := &Collector{
 		Runner: fake, FS: fs, Cfg: cfg, Log: discard, AwgHealth: fakeHealth{"nominal"}, Mesh: ms,
 		SingboxVersion: sb.Version, Now: clk.now,
+		InterfaceAddrs: func() ([]net.Addr, error) {
+			return []net.Addr{ipNet("203.0.113.7/24"), ipNet("2a12:5940:e3d1::2/64"), ipNet("fd00:100::2/64")}, nil
+		},
 	}
 	return &rig{ans: ans, fake: fake, fs: fs, cfg: cfg, clk: clk, col: col}
 }

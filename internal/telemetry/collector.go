@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -61,6 +62,8 @@ type Collector struct {
 	SingboxVersion func(ctx context.Context) string
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// InterfaceAddrs lists the host's addresses for host_global_ipv6; nil means net.InterfaceAddrs.
+	InterfaceAddrs func() ([]net.Addr, error)
 
 	webrtc     source[string]
 	peers      source[uint32]
@@ -183,6 +186,7 @@ func (c *Collector) Frame(ctx context.Context, prev CPUStats, budget time.Durati
 			f.HostNetIface, f.HostNetRxBytes, f.HostNetTxBytes = hn.Iface, hn.RxBytes, hn.TxBytes
 		}
 	})
+	run(func() { f.HostGlobalIpv6, f.HostGlobalIpv6Reported = HostGlobalIPv6(c.InterfaceAddrs) })
 	run(func() { f.WebrtcStatus = c.webrtc.get(ctx, budget, WebRTCUnavailable, c.WebRTCStatus) })
 	run(func() { f.SingboxVersion = c.singbox.get(ctx, now, budget, unknown, c.singboxVersion) })
 	run(func() {
