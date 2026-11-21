@@ -40,8 +40,8 @@ import (
 const Source = "canonical-json"
 
 // Expected is the hash of the current proto/agent.proto as computed by the orchestrator
-// (spec A §7.4, verified 2026-11-14). Tests assert Hash() equals it.
-const Expected = "83e5de4b90273573a467a295c07f71e80196840c91841dffe9de94185a8e840a"
+// (spec A §7.4, verified 2026-11-21). Tests assert Hash() equals it.
+const Expected = "f19e5e9541239fc6cb17fdeddc53a50dffcb287f27a3e14163606655153ea0b0"
 
 var (
 	once   sync.Once

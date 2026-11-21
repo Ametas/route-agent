@@ -2,7 +2,7 @@ import { ServerWritableStream, ServerUnaryCall, sendUnaryData } from '@grpc/grpc
 import { spawn } from 'child_process';
 import pino from 'pino';
 import { authenticateCall } from '../middleware/auth.js';
-import { getHostNetwork, hostNetworkFields } from '../utils/hostNetwork.js';
+import { getHostNetwork, hostIpv6Fields, hostNetworkFields } from '../utils/hostNetwork.js';
 import {
   getCpuUsage,
   getMemoryUsage,
@@ -123,7 +123,8 @@ export async function streamTelemetryHandler(
           meshTunnelInterfaceStatus: meshIface.status,
           meshTunnelActivePeers: meshIface.activePeers,
           ...meshPeerTelemetryFields(meshIface),
-          ...hostNetworkFields(hostNet)
+          ...hostNetworkFields(hostNet),
+          ...hostIpv6Fields()
         });
       } catch {
         cleanup();
@@ -207,7 +208,8 @@ export async function getTelemetryHandler(
       meshTunnelInterfaceStatus: meshIface.status,
       meshTunnelActivePeers: meshIface.activePeers,
       ...meshPeerTelemetryFields(meshIface),
-      ...hostNetworkFields(hostNet)
+      ...hostNetworkFields(hostNet),
+      ...hostIpv6Fields()
     });
   } catch (err: any) {
     const msg = err instanceof Error ? err.message : String(err);

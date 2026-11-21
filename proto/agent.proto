@@ -287,6 +287,11 @@ message TelemetryResponse {
   repeated MeshTunnelPeerStat mesh_tunnel_peer_stats = 21;
   // true — агент знает поле 21 (пустой список тогда значит «пиров нет», а не «агент старый»).
   bool mesh_tunnel_peer_stats_reported = 22;
+  // Глобальные IPv6 машины (2026-11-21): адреса интерфейсов из 2000::/3. Фронт ходит к оркестратору
+  // через Cloudflare и по IPv6 — по этим адресам оркестратор его узнаёт и верит его заголовку адреса абонента.
+  repeated string host_global_ipv6 = 23;
+  // true — агент знает поле 23 (пустой список тогда значит «IPv6 нет», а не «агент старый»).
+  bool host_global_ipv6_reported = 24;
 }
 
 // Строка пира из `awg show <iface> dump`.
